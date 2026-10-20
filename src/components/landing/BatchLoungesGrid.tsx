@@ -43,12 +43,12 @@ export const BatchLoungesGrid: React.FC<BatchLoungesGridProps> = ({
 
       if (!matchesSearch) return false;
 
-      // Era filter for SZMC 35 Batches (1992 - 2026)
-      if (activeEra === 'recent') return b.batchYear >= 29; // 2020 - 2026
-      if (activeEra === '2010s') return b.batchYear >= 19 && b.batchYear <= 28; // 2010 - 2019
-      if (activeEra === '2000s') return b.batchYear >= 9 && b.batchYear <= 18; // 2000 - 2009
-      if (activeEra === '90s') return b.batchYear >= 1 && b.batchYear <= 8; // 1992 - 1999
-      if (activeEra === 'pioneers') return b.batchYear <= 5; // SZMC-01 to SZMC-05
+      // Era filter for SZMC 35 Batches (Session 1991-92 to 2025-26)
+      if (activeEra === 'recent') return b.batchYear >= 29; // 2019 - 2026
+      if (activeEra === '2010s') return b.batchYear >= 19 && b.batchYear <= 28; // 2009 - 2018
+      if (activeEra === '2000s') return b.batchYear >= 9 && b.batchYear <= 18; // 1999 - 2008
+      if (activeEra === '90s') return b.batchYear >= 1 && b.batchYear <= 8; // 1991 - 1998
+      if (activeEra === 'pioneers') return b.batchYear <= 5; // SZMC-01 to SZMC-05 (Session 1991-92 onwards)
 
       return true;
     });

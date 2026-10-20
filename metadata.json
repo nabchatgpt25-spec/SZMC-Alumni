@@ -1,6 +1,6 @@
 {
   "name": "SZMC Alumni",
-  "description": "Shaheed Ziaur Rahman Medical College (SZMC Bogura) Alumni Network portal for 35 MBBS batches (1992–present) with doctor directory, blood network, and batch lounges.",
+  "description": "Shaheed Ziaur Rahman Medical College (SZMC Bogura) Alumni Network portal for 35 MBBS batches (1991–present) with doctor directory, blood network, and batch lounges.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"

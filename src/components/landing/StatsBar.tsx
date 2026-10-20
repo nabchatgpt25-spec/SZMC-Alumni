@@ -644,16 +644,16 @@ export const StatsBar: React.FC = () => {
             {activeStat === 'batches' && (
               <div className="text-xs text-slate-300 flex flex-wrap gap-2">
                 <span className="px-2.5 py-1 rounded-md bg-blue-950/70 border border-blue-800/40">
-                  🏛️ Pioneer Era (1949–1969): Batches 01–20
+                  🏛️ Pioneer Batches (1991–2000): Batches 01–10
                 </span>
                 <span className="px-2.5 py-1 rounded-md bg-blue-950/70 border border-blue-800/40">
-                  🌟 Golden Era (1970–1999): Batches 21–50
+                  🌟 Expansion Era (2001–2010): Batches 11–20
                 </span>
                 <span className="px-2.5 py-1 rounded-md bg-blue-950/70 border border-blue-800/40">
-                  🚀 Millennium (2000–2017): Batches 51–67
+                  🚀 Silver Jubilee Era (2011–2020): Batches 21–30
                 </span>
                 <span className="px-2.5 py-1 rounded-md bg-blue-950/70 border border-blue-800/40 text-amber-300">
-                  🎓 Recent Cohorts (2018–2026): Batches 68–76
+                  🎓 Modern Sessions (2021–2026): Batches 31–35
                 </span>
               </div>
             )}
@@ -777,7 +777,7 @@ export const StatsBar: React.FC = () => {
           <div className="flex items-center gap-2">
             <div className="h-px w-6 bg-amber-400/60 hidden sm:block" />
             <p className="font-serif italic text-xs sm:text-sm text-amber-200/90 tracking-wide">
-              "Once an SZMCian, Always an SZMCian — Healing Humanity with Pride."
+              "Once a SZMCian, Always a SZMCian — Healing Humanity with Pride."
             </p>
           </div>
 

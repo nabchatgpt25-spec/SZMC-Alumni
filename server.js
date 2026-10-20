@@ -351,8 +351,8 @@ async function queryPaginatedAlumniProfiles(params) {
         const profiles = data.map((r) => ({
           id: Number(r.id),
           fullName: r.full_name || "SZMC Alumnus",
-          avatarUrl: r.avatar_url || "/ndc-logo.png",
-          batchYear: Number(r.batch_year) || 68,
+          avatarUrl: r.avatar_url || "/szmc-logo.png",
+          batchYear: Number(r.batch_year) >= 1 && Number(r.batch_year) <= 35 ? Number(r.batch_year) : 1,
           session: r.session || null,
           collegeRoll: r.college_roll || null,
           academicStream: r.academic_stream || "Science",
@@ -428,9 +428,8 @@ async function queryPaginatedAlumniProfiles(params) {
 async function createOrRegisterAlumniProfile(input) {
   const cleanEmail = (input.email || "").trim().toLowerCase() || null;
   const cleanPhone = (input.phone || "").trim() || null;
-  const batchNum = input.batchYear > 1900 ? input.batchYear - 1950 : Number(input.batchYear) || 68;
-  const hscYear = 1950 + batchNum;
-  const session = input.session || `${hscYear - 2}-${String(hscYear).slice(-2)}`;
+  const batchNum = input.batchYear > 1900 ? Math.min(35, Math.max(1, input.batchYear - 1991)) : Math.min(35, Math.max(1, Number(input.batchYear) || 1));
+  const session = input.session || `${1991 + batchNum}-${String(1992 + batchNum).slice(-2)}`;
   const streamVal = input.academicStream === "Humanities" || input.academicStream === "Business Studies" ? input.academicStream : "Science";
   const groupVal = streamVal === "Science" ? null : input.academicGroup ? input.academicGroup.trim().toUpperCase() : null;
   let effectiveAuthUid = null;

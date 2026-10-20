@@ -42,11 +42,16 @@ export const BatchesView: React.FC<BatchesViewProps> = ({ onSelectBatch, onViewP
     fetchBatchesFromDb()
       .then((dbBatches) => {
         if (isMounted && dbBatches && dbBatches.length > 0) {
+          const szmcDbBatches = dbBatches.filter(
+            (b) => b && b.batchYear >= 1 && b.batchYear <= 35
+          );
           setBatchesList((prev) => {
             const map = new Map<number, BatchSummary>();
-            dbBatches.forEach((b) => map.set(b.batchYear, b));
+            szmcDbBatches.forEach((b) => map.set(b.batchYear, b));
             prev.forEach((b) => {
-              if (!map.has(b.batchYear)) map.set(b.batchYear, b);
+              if (b.batchYear >= 1 && b.batchYear <= 35 && !map.has(b.batchYear)) {
+                map.set(b.batchYear, b);
+              }
             });
             return Array.from(map.values()).sort((a, b) => a.batchYear - b.batchYear);
           });
@@ -143,7 +148,7 @@ export const BatchesView: React.FC<BatchesViewProps> = ({ onSelectBatch, onViewP
     return list;
   }, [activeBatch, activeBatchMetrics, selectedSpecialty, memberSearch]);
 
-  // Resolve direct quick-jump target batch when user types a batch number (1-35) or 4-digit admission year (1992-2026)
+  // Resolve direct quick-jump target batch when user types a batch number (1-35) or 4-digit admission year (1991-2026)
   const quickJumpBatch = useMemo(() => {
     const q = searchTerm.trim().toLowerCase().replace(/^batch\s*/i, '').replace(/^szmc\s*/i, '').replace(/^szmc-/i, '');
     if (!q) return null;
@@ -152,8 +157,8 @@ export const BatchesView: React.FC<BatchesViewProps> = ({ onSelectBatch, onViewP
       if (num >= 1 && num <= 35) {
         return batchesList.find((b) => b.batchYear === num) || null;
       }
-      if (num >= 1992 && num <= 2026) {
-        const targetBatchNum = num - 1991;
+      if (num >= 1991 && num <= 2026) {
+        const targetBatchNum = num - 1990;
         return batchesList.find((b) => b.batchYear === targetBatchNum) || null;
       }
     }
@@ -165,6 +170,9 @@ export const BatchesView: React.FC<BatchesViewProps> = ({ onSelectBatch, onViewP
     const q = searchTerm.toLowerCase().trim();
 
     const list = batchesList.filter((b) => {
+      // SZMC has strictly 35 MBBS batches (SZMC-01 to SZMC-35, Session 1991-92 onwards)
+      if (b.batchYear < 1 || b.batchYear > 35) return false;
+
       if (!q) {
         if (rangeFilter === '1-10' && (b.batchYear < 1 || b.batchYear > 10)) return false;
         if (rangeFilter === '11-20' && (b.batchYear < 11 || b.batchYear > 20)) return false;
@@ -175,8 +183,8 @@ export const BatchesView: React.FC<BatchesViewProps> = ({ onSelectBatch, onViewP
 
       const batchNumStr = b.batchYear.toString();
       const batchPadded = b.batchYear < 10 ? `0${b.batchYear}` : `${b.batchYear}`;
-      const startYear = String(1991 + b.batchYear);
-      const sessionEndYear = String(1992 + b.batchYear);
+      const startYear = String(1990 + b.batchYear);
+      const sessionEndYear = String(1991 + b.batchYear);
 
       const cleanQ = q.replace(/^batch\s*/i, '').replace(/^szmc\s*/i, '').replace(/^szmc-/i, '');
 
@@ -220,14 +228,14 @@ export const BatchesView: React.FC<BatchesViewProps> = ({ onSelectBatch, onViewP
               SZMC Bogura • 35 MBBS Batches
             </span>
             <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">
-              MBBS Sessions 1992 – 2026
+              MBBS Sessions 1991 – 2026
             </span>
           </div>
           <h1 className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-slate-50 tracking-tight">
             Generational MBBS Batch Directory (SZMC-01 to SZMC-35)
           </h1>
           <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1 max-w-2xl">
-            Explore all 35 medical batches of Shaheed Ziaur Rahman Medical College (SZMC Bogura) — from Pioneer Batch 01 (Session 1992-93) to the 35th Batch (Session 2026-27). Reconnect with classmates, consultants, and medical interns.
+            Explore all 35 medical batches of Shaheed Ziaur Rahman Medical College (SZMC Bogura) — from Pioneer Batch 01 (Session 1991-92) to the 35th Batch (Session 2025-26). Reconnect with classmates, consultants, and medical interns.
           </p>
         </div>
 
@@ -238,8 +246,8 @@ export const BatchesView: React.FC<BatchesViewProps> = ({ onSelectBatch, onViewP
             <div className="text-[10px] uppercase font-bold text-slate-400">MBBS Batches</div>
           </div>
           <div className="px-3 py-1 text-center border-r border-slate-200 dark:border-slate-800">
-            <div className="text-lg font-black text-emerald-600 dark:text-emerald-400">1992</div>
-            <div className="text-[10px] uppercase font-bold text-slate-400">Founding Year</div>
+            <div className="text-lg font-black text-emerald-600 dark:text-emerald-400">1991-92</div>
+            <div className="text-[10px] uppercase font-bold text-slate-400">1st Session</div>
           </div>
           <div className="px-3 py-1 text-center">
             <div className="text-lg font-black text-slate-900 dark:text-slate-100">Silimpur</div>
@@ -341,7 +349,7 @@ export const BatchesView: React.FC<BatchesViewProps> = ({ onSelectBatch, onViewP
                     )}
                   </div>
                   <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                    Shaheed Ziaur Rahman Medical College • MBBS Session {activeBatch.session} (Admitted {1991 + activeBatch.batchYear})
+                    Shaheed Ziaur Rahman Medical College • MBBS Session {activeBatch.session} (Admitted {1990 + activeBatch.batchYear})
                   </p>
                 </div>
               </div>
@@ -575,15 +583,6 @@ export const BatchesView: React.FC<BatchesViewProps> = ({ onSelectBatch, onViewP
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <span
-                    className={`w-8 h-8 rounded-xl font-black text-xs flex items-center justify-center ${
-                      isSelected
-                        ? 'bg-white/20 text-white'
-                        : 'bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400'
-                    }`}
-                  >
-                    {batch.batchYear < 10 ? `0${batch.batchYear}` : batch.batchYear}
-                  </span>
-                  <span
                     className={`text-[10px] font-bold ${
                       isSelected ? 'text-blue-100' : 'text-slate-400'
                     }`}
@@ -605,13 +604,12 @@ export const BatchesView: React.FC<BatchesViewProps> = ({ onSelectBatch, onViewP
               </div>
 
               <div
-                className={`mt-3 pt-2 border-t text-[10px] font-bold flex items-center justify-between ${
+                className={`mt-3 pt-2 border-t text-[10px] font-bold flex items-center justify-end ${
                   isSelected
                     ? 'border-white/20 text-white'
                     : 'border-slate-100 dark:border-slate-800 text-blue-600 dark:text-blue-400'
                 }`}
               >
-                <span>MBBS {1991 + batch.batchYear}</span>
                 <ChevronRight className="w-3.5 h-3.5" />
               </div>
             </motion.div>

@@ -115,23 +115,47 @@ export async function fetchBatchesFromDb(): Promise<BatchSummary[]> {
   }
 
   try {
+    // Proactively clean up any legacy batches outside SZMC's 35 MBBS batches (e.g. 1949 to 2035 or > 35)
+    try {
+      await supabase
+        .from('batches')
+        .delete()
+        .or('batch_year.lt.1,batch_year.gt.35');
+    } catch {
+      // Ignore if RLS blocks delete
+    }
+
     const { data, error } = await supabase
       .from('batches')
       .select('*')
-      .order('batch_year', { ascending: false });
+      .gte('batch_year', 1)
+      .lte('batch_year', 35)
+      .order('batch_year', { ascending: true });
 
     if (error || !data || data.length === 0) {
       return BATCH_LIST;
     }
 
-    return data.map((b) => ({
-      batchYear: b.batch_year,
-      hscYear: b.hsc_year || (b.batch_year > 1900 ? b.batch_year : 1950 + b.batch_year),
-      session: b.session || `${b.batch_year - 2}-${String(b.batch_year).slice(-2)}`,
-      total: Number(b.registered_count ?? 0),
-      representative: b.representative_name || undefined,
-      specialNote: b.special_note || undefined,
-    }));
+    // Map strictly only valid SZMC batches 1 to 35
+    const validRows = data.filter((b) => Number(b.batch_year) >= 1 && Number(b.batch_year) <= 35);
+    if (validRows.length === 0) {
+      return BATCH_LIST;
+    }
+
+    const dbBatchMap = new Map<number, any>();
+    validRows.forEach((b) => dbBatchMap.set(Number(b.batch_year), b));
+
+    // Combine canonical 35 SZMC batches with database updates
+    return BATCH_LIST.map((canonical) => {
+      const dbRow = dbBatchMap.get(canonical.batchYear);
+      if (!dbRow) return canonical;
+      return {
+        ...canonical,
+        total: Number(dbRow.registered_count ?? canonical.total ?? 0),
+        representative: dbRow.representative_name || canonical.representative,
+        specialNote: dbRow.special_note || canonical.specialNote,
+      };
+    });
   } catch (err) {
     console.warn('Supabase fetchBatches error:', err);
     return BATCH_LIST;

@@ -342,7 +342,7 @@ function AlumniAppContent() {
 
               {/* Outstanding Emotional Motto */}
               <blockquote className="font-serif italic text-base sm:text-lg md:text-xl font-bold tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-blue-700 via-blue-600 to-indigo-800 dark:from-blue-200 dark:via-blue-300 dark:to-indigo-200 drop-shadow-xs">
-                &ldquo;Once an SZMCian, Always an SZMCian.&rdquo;
+                &ldquo;Once a SZMCian, Always a SZMCian.&rdquo;
               </blockquote>
 
               <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400 tracking-wider uppercase mt-1">

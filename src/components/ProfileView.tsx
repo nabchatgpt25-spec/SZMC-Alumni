@@ -1426,7 +1426,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                               ? 'On Post-Donation Cooldown'
                               : 'Temporarily Unavailable'
                           }`
-                        : 'Optionally register as an SZMC blood donor to receive matching emergency alerts while keeping your personal phone and address private.'}
+                        : 'Optionally register as a SZMC blood donor to receive matching emergency alerts while keeping your personal phone and address private.'}
                     </p>
                   </div>
                 </div>

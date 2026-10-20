@@ -231,9 +231,9 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
     setTimeout(() => setToastMessage(null), 3000);
   };
 
-  // Extract unique filters
+  // Extract unique filters (SZMC Batches 01 to 35)
   const batches = useMemo(() => {
-    return BATCH_LIST.map((b) => b.batchYear);
+    return BATCH_LIST.filter((b) => b.batchYear >= 1 && b.batchYear <= 35).map((b) => b.batchYear);
   }, []);
 
   const specialties = useMemo(() => {

@@ -109,7 +109,7 @@ export const PhotoChangeModal: React.FC<PhotoChangeModalProps> = ({
   const title = isAvatar ? 'Change Profile Picture' : 'Change Cover Photo';
   const description = isAvatar
     ? 'Upload a photo, choose an avatar, or paste an image link.'
-    : 'Upload a banner, choose an SZMC campus preset, or paste an image link.';
+    : 'Upload a banner, choose a SZMC campus preset, or paste an image link.';
 
   const handleFileProcess = async (file: File) => {
     setFileError(null);

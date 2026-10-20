@@ -84,21 +84,21 @@ export const ALUMNI_PROFILES: AlumniProfile[] = loadStoredAlumniProfiles();
 
 export const INITIAL_POSTS: PostItem[] = [];
 
-// Shaheed Ziaur Rahman Medical College (SZMC Bogura) MBBS Batches (Est. 1992, Batches 1 to 35)
+// Shaheed Ziaur Rahman Medical College (SZMC Bogura) MBBS Batches (Est. 1992, Batches 1 to 35, Session 1991-92 onwards)
 const SPECIAL_BATCH_NOTES: Record<number, { note: string; representative?: string }> = {
-  1: { note: 'Pioneer MBBS Batch (SZMC-01)', representative: 'Dr. Tariqul Islam (SZMC-01)' },
-  5: { note: '5th Batch (SZMC-05)', representative: 'Dr. M. A. Hashem (SZMC-05)' },
-  10: { note: '10th Milestone Batch (SZMC-10)', representative: 'Dr. Tanvir Rahman (SZMC-10)' },
-  15: { note: '15th Batch (SZMC-15)', representative: 'Dr. Nazmul Huda (SZMC-15)' },
-  20: { note: '20th Batch (SZMC-20)', representative: 'Dr. Kazi Rezwan (SZMC-20)' },
-  25: { note: 'Silver Jubilee Batch (SZMC-25)', representative: 'Dr. Sadia Afrin (SZMC-25)' },
-  30: { note: '30th Batch (SZMC-30)', representative: 'Dr. Asif Mahmud (SZMC-30)' },
-  35: { note: 'Current MBBS Session (SZMC-35)', representative: 'Dr. Shahriar Kabir (SZMC-35)' },
+  1: { note: 'Pioneer MBBS Batch (SZMC-01, Session 1991-92)', representative: 'Dr. Tariqul Islam (SZMC-01)' },
+  5: { note: '5th Batch (SZMC-05, Session 1995-96)', representative: 'Dr. M. A. Hashem (SZMC-05)' },
+  10: { note: '10th Milestone Batch (SZMC-10, Session 2000-01)', representative: 'Dr. Tanvir Rahman (SZMC-10)' },
+  15: { note: '15th Batch (SZMC-15, Session 2005-06)', representative: 'Dr. Nazmul Huda (SZMC-15)' },
+  20: { note: '20th Batch (SZMC-20, Session 2010-11)', representative: 'Dr. Kazi Rezwan (SZMC-20)' },
+  25: { note: 'Silver Jubilee Batch (SZMC-25, Session 2015-16)', representative: 'Dr. Sadia Afrin (SZMC-25)' },
+  30: { note: '30th Batch (SZMC-30, Session 2020-21)', representative: 'Dr. Asif Mahmud (SZMC-30)' },
+  35: { note: 'Current MBBS Session (SZMC-35, Session 2025-26)', representative: 'Dr. Shahriar Kabir (SZMC-35)' },
 };
 
 export const BATCH_LIST: BatchSummary[] = Array.from({ length: 35 }, (_, idx) => {
   const batchNum = idx + 1;
-  const startYear = 1991 + batchNum; // 1992 for batch 1, 2026 for batch 35
+  const startYear = 1990 + batchNum; // 1991 for batch 1 (Session 1991-92), 2025 for batch 35 (Session 2025-26)
   const sessionEndYear = startYear + 1;
   const sessionEndShort = String(sessionEndYear).slice(-2);
   const special = SPECIAL_BATCH_NOTES[batchNum];

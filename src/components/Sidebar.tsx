@@ -349,12 +349,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </div>
 
             <p className="font-serif italic text-xs font-semibold leading-relaxed text-slate-800 dark:text-amber-100 tracking-wide">
-              &ldquo;Once a Notre Damian, Always a Notre Damian.&rdquo;
+              &ldquo;Once a SZMCian, Always a SZMCian.&rdquo;
             </p>
 
             <div className="mt-2 pt-1.5 border-t border-amber-300/30 dark:border-amber-400/15 flex items-center justify-between text-[9px] text-slate-500 dark:text-slate-400 font-medium">
-              <span className="italic">Diligite Lumen Sapientiae</span>
-              <span className="text-amber-700 dark:text-amber-300 font-bold">Est. 1949</span>
+              <span className="italic">Service to Humanity • Silimpur</span>
+              <span className="text-amber-700 dark:text-amber-300 font-bold">Est. 1992</span>
             </div>
           </div>
         </div>

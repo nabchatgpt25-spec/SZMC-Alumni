@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Sparkles,
   BookOpen,
@@ -21,13 +21,13 @@ import {
   MessageSquare
 } from 'lucide-react';
 import { NDCLogo } from './NDCLogo';
-import { BATCH_LIST, ALUMNI_PROFILES } from '../data/mockData';
+import { BATCH_LIST, ALUMNI_PROFILES, loadStoredAlumniProfiles } from '../data/mockData';
 import { AlumniProfile, BatchSummary } from '../types';
 
 import { HeroSection } from './landing/HeroSection';
 import { QuadFeedPreview } from './landing/QuadFeedPreview';
 import { BatchLoungesGrid } from './landing/BatchLoungesGrid';
-import { FeaturedAlumniSection } from './landing/FeaturedAlumniSection';
+import { FeaturedAlumniSection, FAMOUS_SZMC_ALUMNI } from './landing/FeaturedAlumniSection';
 import { GalleryPreviewSection } from './landing/GalleryPreviewSection';
 import { FAQSection } from './landing/FAQSection';
 import { QuickProfileModal } from './landing/QuickProfileModal';
@@ -64,10 +64,23 @@ export const LandingPage: React.FC<LandingPageProps> = ({
     setPreviewBatch(batch);
   };
 
-  // Get batch members from mockData for the selected batch
-  const batchMembers = previewBatch
-    ? ALUMNI_PROFILES.filter((a) => a.batchYear === previewBatch.batchYear)
-    : [];
+  // Get batch members from stored profiles and famous alumni for the selected batch
+  const batchMembers = useMemo(() => {
+    if (!previewBatch) return [];
+    const stored = loadStoredAlumniProfiles();
+    const combined = [...stored, ...FAMOUS_SZMC_ALUMNI, ...ALUMNI_PROFILES];
+    const map = new Map<number, AlumniProfile>();
+    combined.forEach((a) => {
+      if (
+        a &&
+        (a.batchYear === previewBatch.batchYear ||
+          a.batchYear - 1991 === previewBatch.batchYear)
+      ) {
+        if (!map.has(a.id)) map.set(a.id, a);
+      }
+    });
+    return Array.from(map.values());
+  }, [previewBatch]);
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-sans selection:bg-blue-600 selection:text-white transition-colors duration-200 relative w-full max-w-full overflow-x-hidden">
@@ -370,7 +383,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               </p>
               <div className="mt-3.5 p-3 rounded-xl bg-gradient-to-r from-blue-500/10 via-blue-400/5 to-transparent border-l-2 border-blue-500/60 dark:border-blue-400/70">
                 <p className="font-serif italic text-xs sm:text-sm font-bold tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-blue-700 via-blue-600 to-indigo-800 dark:from-blue-200 dark:via-blue-300 dark:to-indigo-200">
-                  &ldquo;Once an SZMCian, Always an SZMCian.&rdquo;
+                  &ldquo;Once a SZMCian, Always a SZMCian.&rdquo;
                 </p>
                 <p className="text-[10px] text-blue-800/80 dark:text-blue-300/80 font-medium mt-0.5">
                   Est. 1992 • 35 MBBS Batches • Silimpur, Bogura
