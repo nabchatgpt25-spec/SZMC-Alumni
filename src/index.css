@@ -1,0 +1,931 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --theme-color-primary: #1d4ed8;
+  --theme-color-accent: #d97706;
+  --theme-color-bg: #f8fafc;
+  --theme-color-surface: #ffffff;
+  --theme-color-border: #e2e8f0;
+  transition: background-color 0.25s ease, color 0.25s ease;
+}
+
+html {
+  scroll-behavior: smooth;
+  overflow-x: hidden;
+  max-width: 100%;
+  width: 100%;
+  -webkit-text-size-adjust: 100%;
+  overscroll-behavior-x: none;
+}
+
+body {
+  overflow-x: hidden;
+  max-width: 100%;
+  width: 100%;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  min-height: 100vh;
+  min-height: -webkit-fill-available;
+  overscroll-behavior-x: none;
+}
+
+#root {
+  overflow-x: hidden;
+  max-width: 100%;
+  width: 100%;
+  min-height: 100vh;
+}
+
+/* Ensure images, videos, audio, tables and embeds never cause horizontal overflow */
+img, video, iframe, canvas, svg {
+  max-width: 100%;
+}
+
+/* Responsive typography wrapping to prevent long unbroken strings from causing overflow */
+p, h1, h2, h3, h4, h5, h6, span, a, blockquote {
+  overflow-wrap: break-word;
+}
+
+/* Safe area padding utilities for mobile devices */
+.pb-safe {
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+}
+
+.pt-safe {
+  padding-top: max(0.5rem, env(safe-area-inset-top));
+}
+
+/* ==========================================================================
+   CINEMATIC INSTITUTIONAL MOTION & 3D DEPTH SYSTEM
+   ========================================================================== */
+
+.tilt-3d-surface {
+  transform-style: preserve-3d;
+  will-change: transform;
+  transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.28s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.25s ease;
+}
+
+.card-spotlight-overlay {
+  background: radial-gradient(
+    360px circle at var(--card-mouse-x, 50%) var(--card-mouse-y, 50%),
+    rgba(37, 99, 235, 0.09),
+    rgba(217, 119, 6, 0.04) 45%,
+    transparent 80%
+  );
+}
+
+.dark .card-spotlight-overlay {
+  background: radial-gradient(
+    360px circle at var(--card-mouse-x, 50%) var(--card-mouse-y, 50%),
+    rgba(96, 165, 250, 0.13),
+    rgba(251, 191, 36, 0.05) 45%,
+    transparent 80%
+  );
+}
+
+@keyframes float3dSlow {
+  0%, 100% {
+    transform: translate3d(0, 0px, 0) rotate(0deg);
+  }
+  50% {
+    transform: translate3d(0, -8px, 0) rotate(0.6deg);
+  }
+}
+
+@keyframes float3dDelayed {
+  0%, 100% {
+    transform: translate3d(0, 0px, 0) rotate(0deg);
+  }
+  50% {
+    transform: translate3d(0, 7px, 0) rotate(-0.6deg);
+  }
+}
+
+@keyframes subtleGradientShift {
+  0%, 100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+.float-3d-slow {
+  animation: float3dSlow 7s ease-in-out infinite;
+}
+
+.float-3d-delayed {
+  animation: float3dDelayed 8.5s ease-in-out infinite;
+}
+
+.animated-institutional-gradient {
+  background-size: 200% 200%;
+  animation: subtleGradientShift 10s ease infinite;
+}
+
+/* ==========================================================================
+   AURORA BOREALIS COLOR WAVE SYSTEM
+   ========================================================================== */
+
+@keyframes auroraWave {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+@keyframes auroraPulse {
+  0%, 100% {
+    opacity: 0.45;
+    transform: scale(1) translateY(0);
+  }
+  50% {
+    opacity: 0.75;
+    transform: scale(1.06) translateY(-4px);
+  }
+}
+
+.aurora-text-gradient {
+  background: linear-gradient(
+    135deg,
+    #1d4ed8 0%,
+    #0284c7 20%,
+    #0d9488 40%,
+    #10b981 60%,
+    #f59e0b 80%,
+    #2563eb 100%
+  );
+  background-size: 300% 300%;
+  animation: auroraWave 8s ease infinite;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.dark .aurora-text-gradient {
+  background: linear-gradient(
+    135deg,
+    #60a5fa 0%,
+    #38bdf8 20%,
+    #2dd4bf 40%,
+    #34d399 60%,
+    #fbbf24 80%,
+    #818cf8 100%
+  );
+  background-size: 300% 300%;
+  animation: auroraWave 8s ease infinite;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.aurora-ambient-glow {
+  background: radial-gradient(
+    ellipse 85% 60% at 50% 50%,
+    rgba(6, 182, 212, 0.28),
+    rgba(16, 185, 129, 0.2),
+    rgba(59, 130, 246, 0.22),
+    transparent 72%
+  );
+  filter: blur(42px);
+  animation: auroraPulse 6s ease-in-out infinite;
+}
+
+.dark .aurora-ambient-glow {
+  background: radial-gradient(
+    ellipse 85% 60% at 50% 50%,
+    rgba(56, 189, 248, 0.32),
+    rgba(52, 211, 153, 0.26),
+    rgba(129, 140, 248, 0.28),
+    transparent 70%
+  );
+  filter: blur(48px);
+  animation: auroraPulse 6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .float-3d-slow,
+  .float-3d-delayed,
+  .animated-institutional-gradient {
+    animation: none !important;
+  }
+}
+
+/* Ensure cross-browser text-gradient clipping */
+.bg-clip-text {
+  -webkit-background-clip: text !important;
+  background-clip: text !important;
+}
+
+.text-transparent {
+  -webkit-text-fill-color: transparent;
+}
+
+/* ==========================================================================
+   PREMIUM GLASSMORPHISM & MICRO-INTERACTIONS
+   ========================================================================== */
+
+.glass-panel {
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.85);
+}
+.dark .glass-panel {
+  background: rgba(15, 23, 42, 0.65);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.glass-card {
+  background: rgba(255, 255, 255, 0.75);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.3s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.25s ease;
+}
+.dark .glass-card {
+  background: rgba(15, 23, 42, 0.55);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+.glass-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 16px 30px -8px rgba(30, 64, 175, 0.12);
+  border-color: rgba(59, 130, 246, 0.45);
+}
+.dark .glass-card:hover {
+  box-shadow: 0 16px 30px -8px rgba(0, 0, 0, 0.4);
+  border-color: rgba(96, 165, 250, 0.35);
+}
+
+/* ==========================================================================
+   LIQUID GLASS PROFILE ARCHITECTURE (Bluish Refractive Glass Surfaces)
+   ========================================================================== */
+
+.liquid-glass-profile-shell {
+  background: linear-gradient(
+    135deg,
+    rgba(239, 246, 255, 0.70) 0%,
+    rgba(219, 234, 254, 0.45) 45%,
+    rgba(224, 231, 255, 0.60) 100%
+  );
+  backdrop-filter: blur(28px) saturate(200%);
+  -webkit-backdrop-filter: blur(28px) saturate(200%);
+  border: 1px solid rgba(147, 197, 253, 0.65);
+  box-shadow:
+    0 24px 64px -12px rgba(30, 58, 138, 0.16),
+    0 8px 24px -6px rgba(15, 23, 42, 0.06),
+    0 0 45px -10px rgba(59, 130, 246, 0.15),
+    inset 0 1.5px 1px 0 rgba(255, 255, 255, 0.92),
+    inset 0 -1px 1.5px 0 rgba(147, 197, 253, 0.4),
+    inset 1px 0 1px 0 rgba(255, 255, 255, 0.65);
+}
+
+.dark .liquid-glass-profile-shell {
+  background: linear-gradient(
+    135deg,
+    rgba(15, 23, 42, 0.78) 0%,
+    rgba(23, 37, 84, 0.62) 48%,
+    rgba(15, 23, 42, 0.80) 100%
+  );
+  backdrop-filter: blur(28px) saturate(200%);
+  -webkit-backdrop-filter: blur(28px) saturate(200%);
+  border: 1px solid rgba(96, 165, 250, 0.28);
+  box-shadow:
+    0 28px 72px -12px rgba(0, 0, 0, 0.70),
+    0 8px 28px -6px rgba(30, 64, 175, 0.32),
+    0 0 50px -10px rgba(59, 130, 246, 0.20),
+    inset 0 1.5px 1px 0 rgba(255, 255, 255, 0.28),
+    inset 0 -1px 1.5px 0 rgba(56, 189, 248, 0.25),
+    inset 1px 0 1px 0 rgba(255, 255, 255, 0.15);
+}
+
+.liquid-glass-card {
+  background: linear-gradient(
+    145deg,
+    rgba(255, 255, 255, 0.68) 0%,
+    rgba(239, 246, 255, 0.52) 55%,
+    rgba(240, 249, 255, 0.62) 100%
+  );
+  backdrop-filter: blur(24px) saturate(195%);
+  -webkit-backdrop-filter: blur(24px) saturate(195%);
+  border: 1px solid rgba(191, 219, 254, 0.75);
+  box-shadow:
+    0 16px 42px -10px rgba(30, 58, 138, 0.14),
+    0 4px 12px -2px rgba(15, 23, 42, 0.04),
+    0 0 30px -8px rgba(59, 130, 246, 0.12),
+    inset 0 1.5px 0.5px 0 rgba(255, 255, 255, 0.95),
+    inset 0 -1px 1px 0 rgba(147, 197, 253, 0.35);
+  transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.28s ease, border-color 0.25s ease;
+}
+
+.dark .liquid-glass-card {
+  background: linear-gradient(
+    145deg,
+    rgba(15, 23, 42, 0.72) 0%,
+    rgba(23, 37, 84, 0.58) 55%,
+    rgba(15, 23, 42, 0.75) 100%
+  );
+  backdrop-filter: blur(24px) saturate(195%);
+  -webkit-backdrop-filter: blur(24px) saturate(195%);
+  border: 1px solid rgba(96, 165, 250, 0.24);
+  box-shadow:
+    0 22px 52px -10px rgba(0, 0, 0, 0.62),
+    0 0 35px -8px rgba(30, 64, 175, 0.25),
+    inset 0 1.5px 0.5px 0 rgba(255, 255, 255, 0.28),
+    inset 0 -1px 1px 0 rgba(96, 165, 250, 0.22);
+}
+
+.liquid-glass-subcard {
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.62) 0%,
+    rgba(239, 246, 255, 0.48) 100%
+  );
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  border: 1px solid rgba(191, 219, 254, 0.65);
+  box-shadow:
+    0 6px 18px -4px rgba(30, 58, 138, 0.08),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.9);
+}
+
+.dark .liquid-glass-subcard {
+  background: linear-gradient(
+    135deg,
+    rgba(15, 23, 42, 0.68) 0%,
+    rgba(30, 58, 138, 0.38) 100%
+  );
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  border: 1px solid rgba(96, 165, 250, 0.20);
+  box-shadow:
+    0 8px 22px -4px rgba(0, 0, 0, 0.48),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.22);
+}
+
+/* Button hover & click interactions */
+.btn-interactive {
+  transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.18s ease, background-color 0.18s ease;
+}
+.btn-interactive:hover {
+  transform: translateY(-1.5px) scale(1.02);
+}
+.btn-interactive:active {
+  transform: translateY(0.5px) scale(0.98);
+}
+
+/* Navigation link hover underline animation */
+.nav-link-animated {
+  position: relative;
+  transition: color 0.25s ease;
+}
+.nav-link-animated::after {
+  content: '';
+  position: absolute;
+  bottom: -2px;
+  left: 0;
+  width: 0%;
+  height: 2px;
+  background-color: #2563eb;
+  border-radius: 9999px;
+  transition: width 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.dark .nav-link-animated::after {
+  background-color: #60a5fa;
+}
+.nav-link-animated:hover::after {
+  width: 100%;
+}
+
+/* Avatar hover lift & scale */
+.avatar-interactive {
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.25s ease;
+}
+.avatar-interactive:hover {
+  transform: translateY(-2px) scale(1.08);
+  box-shadow: 0 8px 18px -4px rgba(37, 99, 235, 0.3);
+}
+
+/* Image subtle zoom / parallax */
+.img-zoom-container {
+  overflow: hidden;
+}
+.img-zoom-container img {
+  transition: transform 0.65s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.img-zoom-container:hover img {
+  transform: scale(1.06);
+}
+
+body {
+  font-family: 'Hind Siliguri', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+  transition: background-color 0.25s ease, color 0.25s ease;
+}
+
+/* ==========================================================================
+   THEME STYLES ENGINE
+   ========================================================================== */
+
+/* 1. SZMC Medical Blue & Gold (Default Light) */
+html[data-theme="ndc-blue"] body {
+  background-color: #f8fafc;
+}
+html[data-theme="ndc-blue"] .bg-blue-600,
+html[data-theme="ndc-blue"] .bg-blue-500 {
+  background-color: #1d4ed8 !important;
+}
+html[data-theme="ndc-blue"] .hover\:bg-blue-700:hover,
+html[data-theme="ndc-blue"] .hover\:bg-blue-600:hover {
+  background-color: #1e40af !important;
+}
+html[data-theme="ndc-blue"] .text-blue-600,
+html[data-theme="ndc-blue"] .text-blue-500 {
+  color: #1d4ed8 !important;
+}
+html[data-theme="ndc-blue"] .border-blue-500,
+html[data-theme="ndc-blue"] .border-blue-600 {
+  border-color: #1d4ed8 !important;
+}
+html[data-theme="ndc-blue"] .bg-blue-50 {
+  background-color: #eff6ff !important;
+}
+html[data-theme="ndc-blue"] .text-blue-700 {
+  color: #1e40af !important;
+}
+
+/* 2. Midnight Obsidian (Deep Starry Night) */
+html[data-theme="midnight"] body {
+  background-color: #0b1120;
+}
+html[data-theme="midnight"].dark .bg-slate-900 {
+  background-color: #0f172a !important;
+}
+html[data-theme="midnight"].dark .bg-slate-950 {
+  background-color: #080d19 !important;
+}
+
+/* 3. Cyber Neon 2077 (Synthwave Ultraviolet & Electric Glow) */
+html[data-theme="cyber-neon"] body {
+  background-color: #080410 !important;
+}
+html[data-theme="cyber-neon"].dark .bg-slate-900 {
+  background-color: #120921 !important;
+  border-color: rgba(168, 85, 247, 0.25) !important;
+}
+html[data-theme="cyber-neon"].dark .bg-slate-800 {
+  background-color: #1c0e35 !important;
+}
+html[data-theme="cyber-neon"].dark .bg-slate-950 {
+  background-color: #080410 !important;
+}
+html[data-theme="cyber-neon"] .bg-blue-600,
+html[data-theme="cyber-neon"] .bg-blue-500 {
+  background-color: #9333ea !important;
+  box-shadow: 0 4px 18px rgba(168, 85, 247, 0.35) !important;
+}
+html[data-theme="cyber-neon"] .hover\:bg-blue-700:hover,
+html[data-theme="cyber-neon"] .hover\:bg-blue-600:hover {
+  background-color: #7e22ce !important;
+}
+html[data-theme="cyber-neon"] .text-blue-600,
+html[data-theme="cyber-neon"] .text-blue-500,
+html[data-theme="cyber-neon"] .dark .text-blue-400 {
+  color: #c084fc !important;
+}
+html[data-theme="cyber-neon"] .border-blue-500 {
+  border-color: #a855f7 !important;
+}
+html[data-theme="cyber-neon"] .bg-blue-50,
+html[data-theme="cyber-neon"] .dark .bg-blue-950\/40,
+html[data-theme="cyber-neon"] .dark .bg-blue-950\/50 {
+  background-color: rgba(147, 51, 234, 0.2) !important;
+}
+
+/* 4. Royal Gold & Navy (Aristocratic Prestige) */
+html[data-theme="royal-prestige"] body {
+  background-color: #050a14 !important;
+}
+html[data-theme="royal-prestige"].dark .bg-slate-900 {
+  background-color: #0b1528 !important;
+  border-color: rgba(217, 119, 6, 0.25) !important;
+}
+html[data-theme="royal-prestige"].dark .bg-slate-800 {
+  background-color: #12213d !important;
+}
+html[data-theme="royal-prestige"].dark .bg-slate-950 {
+  background-color: #050a14 !important;
+}
+html[data-theme="royal-prestige"] .bg-blue-600,
+html[data-theme="royal-prestige"] .bg-blue-500 {
+  background-color: #d97706 !important;
+  box-shadow: 0 4px 18px rgba(217, 119, 6, 0.35) !important;
+}
+html[data-theme="royal-prestige"] .hover\:bg-blue-700:hover,
+html[data-theme="royal-prestige"] .hover\:bg-blue-600:hover {
+  background-color: #b45309 !important;
+}
+html[data-theme="royal-prestige"] .text-blue-600,
+html[data-theme="royal-prestige"] .text-blue-500,
+html[data-theme="royal-prestige"] .dark .text-blue-400 {
+  color: #fbbf24 !important;
+}
+html[data-theme="royal-prestige"] .border-blue-500 {
+  border-color: #d97706 !important;
+}
+html[data-theme="royal-prestige"] .bg-blue-50,
+html[data-theme="royal-prestige"] .dark .bg-blue-950\/40,
+html[data-theme="royal-prestige"] .dark .bg-blue-950\/50 {
+  background-color: rgba(217, 119, 6, 0.2) !important;
+}
+
+/* 5. Crimson Pulse (Executive Ruby & Velvet Burgundy) */
+html[data-theme="crimson-pulse"] body {
+  background-color: #0d0307 !important;
+}
+html[data-theme="crimson-pulse"].dark .bg-slate-900 {
+  background-color: #1a080f !important;
+  border-color: rgba(225, 29, 72, 0.25) !important;
+}
+html[data-theme="crimson-pulse"].dark .bg-slate-800 {
+  background-color: #2b0d19 !important;
+}
+html[data-theme="crimson-pulse"].dark .bg-slate-950 {
+  background-color: #0d0307 !important;
+}
+html[data-theme="crimson-pulse"] .bg-blue-600,
+html[data-theme="crimson-pulse"] .bg-blue-500 {
+  background-color: #e11d48 !important;
+  box-shadow: 0 4px 18px rgba(225, 29, 72, 0.35) !important;
+}
+html[data-theme="crimson-pulse"] .hover\:bg-blue-700:hover,
+html[data-theme="crimson-pulse"] .hover\:bg-blue-600:hover {
+  background-color: #be123c !important;
+}
+html[data-theme="crimson-pulse"] .text-blue-600,
+html[data-theme="crimson-pulse"] .text-blue-500,
+html[data-theme="crimson-pulse"] .dark .text-blue-400 {
+  color: #fb7185 !important;
+}
+html[data-theme="crimson-pulse"] .border-blue-500 {
+  border-color: #e11d48 !important;
+}
+html[data-theme="crimson-pulse"] .bg-blue-50,
+html[data-theme="crimson-pulse"] .dark .bg-blue-950\/40,
+html[data-theme="crimson-pulse"] .dark .bg-blue-950\/50 {
+  background-color: rgba(225, 29, 72, 0.2) !important;
+}
+
+/* 6. Oceanic Scrub (Coastal Teal Seafoam) */
+html[data-theme="ocean-teal"] body {
+  background-color: #f0fdfa !important;
+}
+html[data-theme="ocean-teal"] .bg-blue-600,
+html[data-theme="ocean-teal"] .bg-blue-500 {
+  background-color: #0d9488 !important;
+}
+html[data-theme="ocean-teal"] .hover\:bg-blue-700:hover,
+html[data-theme="ocean-teal"] .hover\:bg-blue-600:hover {
+  background-color: #0f766e !important;
+}
+html[data-theme="ocean-teal"] .text-blue-600,
+html[data-theme="ocean-teal"] .text-blue-500 {
+  color: #0d9488 !important;
+}
+html[data-theme="ocean-teal"] .border-blue-500 {
+  border-color: #0d9488 !important;
+}
+html[data-theme="ocean-teal"] .bg-blue-50 {
+  background-color: #ccfbf1 !important;
+}
+html[data-theme="ocean-teal"] .text-blue-700 {
+  color: #0f766e !important;
+}
+
+/* 7. Nordic Glacier (Arctic Blue Crisp) */
+html[data-theme="nordic-glacier"] body {
+  background-color: #f0f9ff !important;
+}
+html[data-theme="nordic-glacier"] .bg-blue-600,
+html[data-theme="nordic-glacier"] .bg-blue-500 {
+  background-color: #0284c7 !important;
+}
+html[data-theme="nordic-glacier"] .hover\:bg-blue-700:hover,
+html[data-theme="nordic-glacier"] .hover\:bg-blue-600:hover {
+  background-color: #0369a1 !important;
+}
+html[data-theme="nordic-glacier"] .text-blue-600,
+html[data-theme="nordic-glacier"] .text-blue-500 {
+  color: #0284c7 !important;
+}
+html[data-theme="nordic-glacier"] .border-blue-500 {
+  border-color: #0284c7 !important;
+}
+html[data-theme="nordic-glacier"] .bg-blue-50 {
+  background-color: #e0f2fe !important;
+}
+html[data-theme="nordic-glacier"] .text-blue-700 {
+  color: #0369a1 !important;
+}
+
+/* 8. Library Sepia (Warm Scholarly Gazette & Golden Amber) */
+html[data-theme="vintage-parchment"] body {
+  background-color: #faf6ee !important;
+}
+html[data-theme="vintage-parchment"] .bg-blue-600,
+html[data-theme="vintage-parchment"] .bg-blue-500 {
+  background-color: #b45309 !important;
+}
+html[data-theme="vintage-parchment"] .hover\:bg-blue-700:hover,
+html[data-theme="vintage-parchment"] .hover\:bg-blue-600:hover {
+  background-color: #92400e !important;
+}
+html[data-theme="vintage-parchment"] .text-blue-600,
+html[data-theme="vintage-parchment"] .text-blue-500 {
+  color: #b45309 !important;
+}
+html[data-theme="vintage-parchment"] .border-blue-500 {
+  border-color: #b45309 !important;
+}
+html[data-theme="vintage-parchment"] .bg-blue-50 {
+  background-color: #fef3c7 !important;
+}
+html[data-theme="vintage-parchment"] .text-blue-700 {
+  color: #92400e !important;
+}
+
+/* Leaflet Custom Marker & Popup Refinements */
+.leaflet-popup-content-wrapper {
+  padding: 0 !important;
+  border-radius: 1rem !important;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.15), 0 8px 10px -6px rgba(0, 0, 0, 0.1) !important;
+  border: 1px solid rgba(226, 232, 240, 0.8) !important;
+}
+
+.leaflet-popup-content {
+  margin: 12px !important;
+  line-height: 1.4 !important;
+}
+
+.leaflet-popup-tip-container {
+  margin-top: -1px;
+}
+
+.leaflet-container {
+  font-family: inherit !important;
+}
+
+.alumni-custom-marker, .alumni-cluster-marker {
+  background: transparent !important;
+  border: none !important;
+}
+
+@keyframes marquee {
+  0% {
+    transform: translateX(0%);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+.animate-marquee {
+  display: flex;
+  width: max-content;
+  animation: marquee 30s linear infinite;
+}
+
+.animate-marquee:hover {
+  animation-play-state: paused;
+}
+
+/* ==========================================================================
+   SMOOTH LIQUID TRANSPARENT GLASS SYSTEM
+   ========================================================================== */
+@keyframes liquidFlow1 {
+  0%, 100% {
+    transform: translate3d(0, 0, 0) scale(1) rotate(0deg);
+  }
+  33% {
+    transform: translate3d(50px, -60px, 0) scale(1.12) rotate(18deg);
+  }
+  66% {
+    transform: translate3d(-40px, 50px, 0) scale(0.92) rotate(-14deg);
+  }
+}
+
+@keyframes liquidFlow2 {
+  0%, 100% {
+    transform: translate3d(0, 0, 0) scale(1) rotate(0deg);
+  }
+  33% {
+    transform: translate3d(-60px, 40px, 0) scale(1.08) rotate(-15deg);
+  }
+  66% {
+    transform: translate3d(45px, -50px, 0) scale(0.95) rotate(20deg);
+  }
+}
+
+@keyframes liquidFlow3 {
+  0%, 100% {
+    transform: translate3d(0, 0, 0) scale(1) rotate(0deg);
+  }
+  33% {
+    transform: translate3d(40px, 50px, 0) scale(1.06) rotate(12deg);
+  }
+  66% {
+    transform: translate3d(-50px, -40px, 0) scale(0.96) rotate(-16deg);
+  }
+}
+
+.animate-liquid-blob-1 {
+  animation: liquidFlow1 22s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  will-change: transform;
+}
+
+.animate-liquid-blob-2 {
+  animation: liquidFlow2 26s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  will-change: transform;
+}
+
+.animate-liquid-blob-3 {
+  animation: liquidFlow3 30s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  will-change: transform;
+}
+
+.liquid-glass-panel {
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  box-shadow: 0 10px 30px 0 rgba(30, 41, 59, 0.05);
+}
+
+.dark .liquid-glass-panel {
+  background: rgba(15, 23, 42, 0.65);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 10px 30px 0 rgba(0, 0, 0, 0.35);
+}
+
+/* ==========================================================================
+   SUBTLE CAMPUS BACKGROUND CAROUSEL CONTAINER (BEHIND CONTENT)
+   ========================================================================== */
+
+.subtle-campus-bg-container {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+  user-select: none;
+}
+
+.subtle-campus-bg-slide {
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center;
+  transition: opacity 1.2s cubic-bezier(0.16, 1, 0.3, 1), transform 5.5s cubic-bezier(0.25, 1, 0.5, 1);
+  will-change: opacity, transform;
+}
+
+.subtle-campus-bg-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.82) 0%,
+    rgba(255, 255, 255, 0.64) 45%,
+    rgba(248, 250, 252, 0.92) 100%
+  );
+  backdrop-filter: blur(1.5px);
+  -webkit-backdrop-filter: blur(1.5px);
+}
+
+.dark .subtle-campus-bg-overlay {
+  background: linear-gradient(
+    to bottom,
+    rgba(2, 6, 23, 0.85) 0%,
+    rgba(15, 23, 42, 0.7) 45%,
+    rgba(2, 6, 23, 0.94) 100%
+  );
+  backdrop-filter: blur(1.5px);
+  -webkit-backdrop-filter: blur(1.5px);
+}
+
+/* ==========================================================================
+   CINEMATIC KEN BURNS ZOOM-AND-PAN CAROUSEL ANIMATIONS
+   ========================================================================== */
+
+@keyframes kenBurnsZoomIn {
+  0% {
+    transform: scale(1) translate(0%, 0%);
+  }
+  100% {
+    transform: scale(1.10) translate(-1.2%, -0.8%);
+  }
+}
+
+@keyframes kenBurnsPanRight {
+  0% {
+    transform: scale(1.06) translate(-2%, 0.5%);
+  }
+  100% {
+    transform: scale(1.12) translate(1.5%, -0.5%);
+  }
+}
+
+@keyframes kenBurnsPanLeft {
+  0% {
+    transform: scale(1.12) translate(1.5%, 0%);
+  }
+  100% {
+    transform: scale(1.06) translate(-1.5%, -0.8%);
+  }
+}
+
+@keyframes kenBurnsZoomOut {
+  0% {
+    transform: scale(1.14) translate(1%, 0.8%);
+  }
+  100% {
+    transform: scale(1.03) translate(-0.5%, -0.5%);
+  }
+}
+
+@keyframes kenBurnsPanUp {
+  0% {
+    transform: scale(1.05) translate(0%, 1.8%);
+  }
+  100% {
+    transform: scale(1.11) translate(0.8%, -1.2%);
+  }
+}
+
+.ken-burns-anim-0 {
+  animation: kenBurnsZoomIn 6.5s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+  will-change: transform;
+}
+
+.ken-burns-anim-1 {
+  animation: kenBurnsPanRight 6.5s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+  will-change: transform;
+}
+
+.ken-burns-anim-2 {
+  animation: kenBurnsPanLeft 6.5s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+  will-change: transform;
+}
+
+.ken-burns-anim-3 {
+  animation: kenBurnsZoomOut 6.5s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+  will-change: transform;
+}
+
+.ken-burns-anim-4 {
+  animation: kenBurnsPanUp 6.5s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+  will-change: transform;
+}
+
+/* Leaflet map popup mobile viewport containment */
+.leaflet-popup-content-wrapper {
+  max-width: calc(100vw - 32px) !important;
+  box-sizing: border-box !important;
+  border-radius: 1.25rem !important;
+}
+
+.leaflet-popup-content {
+  max-width: calc(100vw - 56px) !important;
+  margin: 10px 12px !important;
+  box-sizing: border-box !important;
+}
+
+.ndc-leaflet-popup {
+  max-width: calc(100vw - 32px) !important;
+}
+
+
+
+
