@@ -81,7 +81,7 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
           transition={{ duration: 0.5, delay: 0.15 }}
           className="text-slate-600 dark:text-slate-300 text-xs sm:text-sm lg:text-[15px] max-w-2xl mx-auto leading-relaxed mb-6 sm:mb-8 font-normal"
         >
-          Where SZMC doctors, consultants, researchers, and medical students from Batch 01 (1992) to Batch 35 (2026) connect, collaborate in patient care, seek post-graduate guidance, and mobilize emergency blood donations.
+          Where SZMC doctors, consultants, researchers, and medical students from Batch 01 (Session 1991-92) to Batch 35 (Session 2025-26) connect, collaborate in patient care, seek post-graduate guidance, and mobilize emergency blood donations.
         </motion.p>
 
         {/* Action Buttons: Sign In to Batch & Join Batch */}
@@ -96,17 +96,17 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
             onClick={onOpenLogin}
             className="px-6 sm:px-8 py-3.5 rounded-2xl bg-[#1d4ed8] hover:bg-[#1e40af] active:scale-95 text-white font-bold text-sm sm:text-base shadow-lg shadow-blue-600/30 flex items-center gap-2 transition-all cursor-pointer group"
           >
-            <span className="text-blue-200 font-mono tracking-tighter text-sm group-hover:-translate-x-0.5 transition-transform">&rarr;]</span>
-            <span>Sign In to Batch</span>
-            <span className="text-blue-200 font-mono tracking-tighter text-sm group-hover:translate-x-0.5 transition-transform">&rarr;</span>
+            <span>Alumni Login</span>
+            <ArrowRight className="w-4 h-4 text-blue-200 group-hover:translate-x-0.5 transition-transform" />
           </button>
 
           <button
             type="button"
             onClick={onOpenRegister}
-            className="px-6 sm:px-8 py-3.5 rounded-2xl bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 active:scale-95 text-slate-800 dark:text-slate-100 font-bold text-sm sm:text-base border border-slate-200 dark:border-slate-700 shadow-sm transition-all cursor-pointer"
+            className="px-6 sm:px-8 py-3.5 rounded-2xl bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 active:scale-95 text-slate-800 dark:text-slate-100 font-bold text-sm sm:text-base border border-slate-200 dark:border-slate-700 shadow-sm transition-all cursor-pointer flex items-center gap-2 group"
           >
-            Join Your Batch
+            <span>Join the SZMC Alumni Family</span>
+            <ArrowRight className="w-4 h-4 text-slate-500 dark:text-slate-400 group-hover:translate-x-0.5 transition-transform" />
           </button>
         </motion.div>
 
@@ -126,7 +126,7 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
             <div className="bg-slate-50/90 dark:bg-slate-800/60 p-3 sm:p-4 rounded-2xl border border-slate-100 dark:border-slate-800 text-center">
               <div className="text-2xl sm:text-3xl font-black text-[#2563eb] dark:text-[#60a5fa]">35</div>
               <div className="text-xs font-bold text-slate-800 dark:text-slate-200 mt-1">MBBS Batches</div>
-              <div className="text-[10px] text-slate-400 mt-0.5">1992 — 2026</div>
+              <div className="text-[10px] text-slate-400 mt-0.5">1991 — 2026</div>
             </div>
 
             {/* Verified Doctors */}

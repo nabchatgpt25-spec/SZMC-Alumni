@@ -25,7 +25,6 @@ import { BATCH_LIST, ALUMNI_PROFILES, loadStoredAlumniProfiles } from '../data/m
 import { AlumniProfile, BatchSummary } from '../types';
 
 import { HeroSection } from './landing/HeroSection';
-import { QuadFeedPreview } from './landing/QuadFeedPreview';
 import { BatchLoungesGrid } from './landing/BatchLoungesGrid';
 import { FeaturedAlumniSection, FAMOUS_SZMC_ALUMNI } from './landing/FeaturedAlumniSection';
 import { GalleryPreviewSection } from './landing/GalleryPreviewSection';
@@ -87,71 +86,6 @@ export const LandingPage: React.FC<LandingPageProps> = ({
       {/* Global Cursor-Following Institutional Spotlight */}
       <CursorSpotlight />
 
-      {/* Top Institutional Contact & Portal Bar (Dhaka University Alumni Style) */}
-      <div className="bg-[#0b1b36] text-slate-300 text-[11px] sm:text-xs py-1.5 px-3 sm:px-6 border-b border-white/10 hidden md:block select-none">
-        <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
-          {/* Left contact coordinates */}
-          <div className="flex items-center gap-4 text-slate-300/90 font-medium">
-            <a
-              href="mailto:alumni@szmc.edu.bd"
-              className="flex items-center gap-1.5 hover:text-white transition-colors"
-            >
-              <Mail className="w-3.5 h-3.5 text-red-400" />
-              <span>alumni@szmc.edu.bd</span>
-            </a>
-            <span className="text-white/20">•</span>
-            <a
-              href="tel:+8805169001"
-              className="flex items-center gap-1.5 hover:text-white transition-colors"
-            >
-              <Phone className="w-3.5 h-3.5 text-red-400" />
-              <span>+880 51 69001</span>
-            </a>
-            <span className="text-white/20">•</span>
-            <button
-              type="button"
-              onClick={() => onNavigate('contact')}
-              className="hover:text-white transition-colors cursor-pointer"
-            >
-              Contact Secretariat
-            </button>
-          </div>
-
-          {/* Right social & Red Portal CTA */}
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2 text-slate-400">
-              <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Follow us</span>
-              <a
-                href="https://facebook.com"
-                target="_blank"
-                rel="noreferrer"
-                className="w-5 h-5 rounded-full bg-white/10 hover:bg-blue-600 text-white flex items-center justify-center transition-colors text-[10px] font-bold"
-                title="Facebook"
-              >
-                f
-              </a>
-              <a
-                href="https://youtube.com"
-                target="_blank"
-                rel="noreferrer"
-                className="w-5 h-5 rounded-full bg-white/10 hover:bg-red-600 text-white flex items-center justify-center transition-colors text-[10px] font-bold"
-                title="YouTube"
-              >
-                ▶
-              </a>
-            </div>
-
-            <button
-              type="button"
-              onClick={onOpenLogin}
-              className="px-3.5 py-1 rounded bg-[#c81e1e] hover:bg-[#b01818] active:scale-95 text-white font-bold text-[11px] tracking-wide flex items-center gap-1.5 transition-all cursor-pointer shadow-sm uppercase"
-            >
-              <span>DOCTORS&apos; PORTAL</span>
-              <ArrowRight className="w-3 h-3" />
-            </button>
-          </div>
-        </div>
-      </div>
 
       {/* Main Institutional Brand Header */}
       <header className="sticky top-0 z-40 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 shadow-xs">
@@ -231,24 +165,6 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
               <span>Verification</span>
             </button>
-
-            {/* Sign In & Join Buttons */}
-            <button
-              type="button"
-              onClick={onOpenLogin}
-              className="btn-interactive px-2.5 py-1.5 sm:px-4 sm:py-2 rounded-lg text-xs sm:text-sm font-bold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer shrink-0"
-            >
-              Sign In
-            </button>
-
-            <button
-              type="button"
-              onClick={onOpenRegister}
-              className="px-3 py-1.5 sm:px-5 sm:py-2 rounded-lg text-xs sm:text-sm font-bold bg-[#c81e1e] hover:bg-[#b01818] text-white shadow-md shadow-red-950/20 transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 shrink-0"
-            >
-              <span className="hidden sm:inline">Become a Member</span>
-              <span className="sm:hidden">Join</span>
-            </button>
           </div>
         </div>
       </header>
@@ -262,19 +178,10 @@ export const LandingPage: React.FC<LandingPageProps> = ({
           onOpenRegister={onOpenRegister}
           onSelectAlumnus={(alumnus) => setPreviewAlumnus(alumnus)}
           onScrollToBatches={() => scrollToSection('batches-section')}
-          onScrollToFeed={() => scrollToSection('feed-preview-section')}
           onOpenVerificationModal={() => setIsVerificationModalOpen(true)}
         />
 
-        {/* 4. Live Social Feed Preview: "The Quad Buzz" */}
-        <div id="feed-preview-section">
-          <QuadFeedPreview
-            onOpenLogin={onOpenLogin}
-            onOpenRegister={onOpenRegister}
-          />
-        </div>
-
-        {/* 4.5. Compact Emergency Blood Network Section: "Blood Needed Now" */}
+        {/* 4. Compact Emergency Blood Network Section: "Blood Needed Now" */}
         <BloodNeededNowSection
           variant="landing"
           onNavigateToBloodNetwork={() => onNavigate('emergency')}
@@ -303,162 +210,33 @@ export const LandingPage: React.FC<LandingPageProps> = ({
         <FAQSection onOpenRegister={onOpenRegister} />
       </main>
 
-      {/* 11. Clean Apple-Style Footer */}
-      <footer className="border-t border-slate-200/80 dark:border-slate-800 bg-[#fbfbfd] dark:bg-[#0c1017] text-slate-500 dark:text-slate-400 text-xs py-8 sm:py-12 transition-colors">
+      {/* 11. Clean Institutional Footer */}
+      <footer className="border-t border-slate-200/80 dark:border-slate-800 bg-[#fbfbfd] dark:bg-[#0c1017] text-slate-500 dark:text-slate-400 text-xs py-6 sm:py-8 transition-colors">
         <div className="max-w-7xl mx-auto px-4 sm:px-6">
-          {/* Top Section: Brand Info (Left) + Explore & Community (Right) */}
-          <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-8 pb-8 sm:pb-10">
-            {/* Left: Brand Identity & Location */}
-            <div className="max-w-md">
-              <div className="flex items-center gap-3 mb-2">
-                <div className="w-8 h-8 rounded-lg bg-white dark:bg-slate-800 p-0.5 border border-slate-200/80 dark:border-slate-700/80 flex items-center justify-center overflow-hidden shrink-0 shadow-xs">
-                  <NDCLogo className="w-full h-full" />
+          {/* Top Section */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-5">
+            {/* Left: Brand Identity */}
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-lg bg-white dark:bg-slate-800 p-0.5 border border-slate-200/80 dark:border-slate-700/80 flex items-center justify-center overflow-hidden shrink-0 shadow-xs">
+                <NDCLogo className="w-full h-full" />
+              </div>
+              <div>
+                <div className="font-bold text-sm tracking-tight text-slate-900 dark:text-white">
+                  SZMC ALUMNI NETWORK
                 </div>
-                <div>
-                  <div className="font-bold text-sm tracking-tight text-slate-900 dark:text-white">
-                    SZMC ALUMNI NETWORK
-                  </div>
-                  <div className="text-[11px] text-slate-400 dark:text-slate-400">
-                    Connect • Reunite • Heal Together
-                  </div>
+                <div className="text-[11px] text-slate-400 dark:text-slate-400">
+                  Connect • Reunite • Heal Together • Silimpur, Bogura
                 </div>
               </div>
-
-              <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed mt-3">
-                The private social &amp; professional network for Shaheed Ziaur Rahman Medical College (SZMC Bogura).
-              </p>
-              <div className="mt-3.5 p-3 rounded-xl bg-gradient-to-r from-blue-500/10 via-blue-400/5 to-transparent border-l-2 border-blue-500/60 dark:border-blue-400/70">
-                <p className="font-serif italic text-xs sm:text-sm font-bold tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-blue-700 via-blue-600 to-indigo-800 dark:from-blue-200 dark:via-blue-300 dark:to-indigo-200">
-                  &ldquo;Once a SZMCian, Always a SZMCian.&rdquo;
-                </p>
-                <p className="text-[10px] text-blue-800/80 dark:text-blue-300/80 font-medium mt-0.5">
-                  Est. 1992 • 35 MBBS Batches • Silimpur, Bogura
-                </p>
-              </div>
-              <p className="text-[11px] text-slate-400 dark:text-slate-400 mt-1">
-                Silimpur, Bogura-5800, Rajshahi Division, Bangladesh
-              </p>
             </div>
 
-            {/* Right: Explore & Community Columns */}
-            <div className="grid grid-cols-2 gap-8 sm:gap-14 lg:gap-16">
-              <div>
-                <h4 className="text-[11px] font-bold uppercase tracking-wider text-slate-900 dark:text-white mb-3">
-                  Explore
-                </h4>
-                <ul className="space-y-2 text-xs">
-                  <li>
-                    <button
-                      type="button"
-                      onClick={() => scrollToSection('feed-preview-section')}
-                      className="hover:text-slate-900 dark:hover:text-white transition-colors cursor-pointer"
-                    >
-                      The Quad Feed
-                    </button>
-                  </li>
-                  <li>
-                    <button
-                      type="button"
-                      onClick={() => scrollToSection('batches-section')}
-                      className="hover:text-slate-900 dark:hover:text-white transition-colors cursor-pointer"
-                    >
-                      Batch Lounges (01–76)
-                    </button>
-                  </li>
-                  <li>
-                    <button
-                      type="button"
-                      onClick={() => scrollToSection('featured-alumni-section')}
-                      className="hover:text-slate-900 dark:hover:text-white transition-colors cursor-pointer"
-                    >
-                      Mentors & Leaders
-                    </button>
-                  </li>
-                  <li>
-                    <button
-                      type="button"
-                      onClick={() => onNavigate('map')}
-                      className="hover:text-slate-900 dark:hover:text-white transition-colors cursor-pointer"
-                    >
-                      Global Chapters Map
-                    </button>
-                  </li>
-                  <li>
-                    <button
-                      type="button"
-                      onClick={() => onNavigate('gallery')}
-                      className="hover:text-slate-900 dark:hover:text-white transition-colors cursor-pointer"
-                    >
-                      Nostalgia Gallery
-                    </button>
-                  </li>
-                </ul>
-              </div>
-
-              <div>
-                <h4 className="text-[11px] font-bold uppercase tracking-wider text-slate-900 dark:text-white mb-3">
-                  Community
-                </h4>
-                <ul className="space-y-2 text-xs">
-                  <li>
-                    <button
-                      type="button"
-                      onClick={() => setIsVerificationModalOpen(true)}
-                      className="hover:text-slate-900 dark:hover:text-white transition-colors cursor-pointer"
-                    >
-                      How We Verify Real Students
-                    </button>
-                  </li>
-                  <li>
-                    <button
-                      type="button"
-                      onClick={() => setIsVerificationModalOpen(true)}
-                      className="hover:text-slate-900 dark:hover:text-white transition-colors cursor-pointer"
-                    >
-                      2-Brother Vouch Protocol
-                    </button>
-                  </li>
-                  <li>
-                    <button
-                      type="button"
-                      onClick={() => onNavigate('directory')}
-                      className="hover:text-slate-900 dark:hover:text-white transition-colors cursor-pointer"
-                    >
-                      Alumni Directory
-                    </button>
-                  </li>
-                  <li>
-                    <button
-                      type="button"
-                      onClick={onOpenRegister}
-                      className="hover:text-slate-900 dark:hover:text-white transition-colors cursor-pointer"
-                    >
-                      Join Batch Circle
-                    </button>
-                  </li>
-                  <li>
-                    <button
-                      type="button"
-                      onClick={() => onNavigate('contact')}
-                      className="hover:text-slate-900 dark:hover:text-white transition-colors cursor-pointer"
-                    >
-                      Secretariat Helpdesk
-                    </button>
-                  </li>
-                </ul>
-              </div>
-            </div>
-          </div>
-
-          {/* Divider */}
-          <div className="border-t border-slate-200/80 dark:border-slate-800/80 pt-6">
             {/* Social & Contact Links */}
-            <div className="flex flex-wrap items-center gap-x-5 gap-y-2 mb-4 text-xs">
+            <div className="flex flex-wrap items-center gap-x-4 sm:gap-x-5 gap-y-1.5 text-xs font-medium">
               <a
                 href="https://www.facebook.com/nurulanambashir"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="hover:text-slate-900 dark:hover:text-white transition-colors cursor-pointer"
+                className="hover:text-blue-600 dark:hover:text-blue-400 transition-colors cursor-pointer"
               >
                 Facebook
               </a>
@@ -467,7 +245,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                 href="https://wa.me/8801764436846"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="hover:text-slate-900 dark:hover:text-white transition-colors cursor-pointer"
+                className="hover:text-blue-600 dark:hover:text-blue-400 transition-colors cursor-pointer"
               >
                 WhatsApp
               </a>
@@ -475,28 +253,37 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               <button
                 type="button"
                 onClick={() => onNavigate('contact')}
-                className="hover:text-slate-900 dark:hover:text-white transition-colors cursor-pointer"
+                className="hover:text-blue-600 dark:hover:text-blue-400 transition-colors cursor-pointer"
               >
                 Contact
               </button>
             </div>
+          </div>
 
-            {/* Copyright & Motto */}
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-[11px] text-slate-400 dark:text-slate-400">
+          {/* Divider & Bottom Section */}
+          <div className="border-t border-slate-200/80 dark:border-slate-800/80 pt-4">
+            {/* Motto Spotlight */}
+            <div className="text-center pb-3">
+              <span className="font-serif italic font-bold text-xs sm:text-sm text-blue-600 dark:text-blue-400 tracking-wide">
+                &ldquo;Once a SZMCian, Always a SZMCian&rdquo;
+              </span>
+            </div>
+
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-2.5 text-[11px] text-slate-400 dark:text-slate-400 text-center sm:text-left pt-2 border-t border-slate-100 dark:border-slate-800/50">
               <div>
-                © {new Date().getFullYear()} Shaheed Ziaur Rahman Medical College Alumni Network (SZMC). All rights reserved.
+                © {new Date().getFullYear()} SZMC Alumni Network. All rights reserved.
               </div>
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <div className="flex flex-wrap items-center justify-center sm:justify-end gap-x-2 sm:gap-x-3 gap-y-1">
                 <a
                   href="http://nurulanambashir.gt.tc/?i=1"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="font-semibold text-blue-600 dark:text-blue-400 hover:underline transition-colors cursor-pointer"
                 >
-                  Designed &amp; Developed by Bashir
+                  Design and Developed by Bashir-34
                 </a>
                 <span className="text-slate-300 dark:text-slate-700 hidden sm:inline">•</span>
-                <span className="font-medium text-slate-400 dark:text-slate-400">
+                <span className="hidden sm:inline font-medium text-slate-400 dark:text-slate-400">
                   Silimpur, Bogura-5800, Bangladesh • Estd. 1992
                 </span>
               </div>

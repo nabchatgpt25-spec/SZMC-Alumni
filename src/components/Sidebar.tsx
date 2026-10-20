@@ -369,7 +369,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               rel="noopener noreferrer"
               className="text-blue-600 dark:text-blue-400 hover:underline font-semibold"
             >
-              Designed &amp; Developed by Bashir
+              Design and Developed by Bashir-34
             </a>
           </div>
         </div>

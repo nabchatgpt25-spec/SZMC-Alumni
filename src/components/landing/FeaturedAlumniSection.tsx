@@ -517,11 +517,8 @@ export const FeaturedAlumniSection: React.FC<FeaturedAlumniSectionProps> = ({
               <span>DISTINGUISHED DOCTORS • SZMC LEADERS</span>
             </div>
             <h2 className="text-xl sm:text-3xl lg:text-4xl font-black text-slate-900 dark:text-white tracking-tight">
-              Prominent Doctors & Faculty from 35 Batches
+              Meet the proud members of the SZMC family.
             </h2>
-            <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 mt-0.5 max-w-2xl">
-              From Pioneer Batch 01 (1992) consultants to professors, NHS clinical leads, surgeons, and young post-graduate doctors—celebrating SZMCians who heal and lead worldwide.
-            </p>
           </div>
 
           {/* Filter Pills with mobile horizontal scroll */}

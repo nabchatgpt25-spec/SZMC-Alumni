@@ -144,7 +144,7 @@ export async function getOrCreateSupabaseProfile(
         (authUser.user_metadata as any)?.picture ||
         '/szmc-logo.png',
       batch_year: normalizedBatch,
-      session: extraData?.session || `Session ${1991 + normalizedBatch}-${String(1992 + normalizedBatch).slice(-2)}`,
+      session: extraData?.session || `Session ${1990 + normalizedBatch}-${String(1991 + normalizedBatch).slice(-2)}`,
       academic_stream: streamGroup.academicStream,
       academic_group: streamGroup.academicGroup,
       section: extraData?.section || 'MBBS',

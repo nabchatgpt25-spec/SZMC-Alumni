@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import type { Session } from '@supabase/supabase-js';
-import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { supabase, isSupabaseConfigured, ALUMNI_PUBLIC_COLUMNS } from '../lib/supabase';
 import {
   getOrCreateSupabaseProfile,
   mapSupabaseRowToAlumniProfile,
@@ -53,6 +53,42 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 // In-memory token reference (never persisted to localStorage per security guidelines)
 let inMemorySupabaseToken: string | null = null;
 
+const DIRECT_AUTH_STORAGE_KEY = 'szmc_direct_authenticated_user';
+
+function saveDirectAuthUser(profile: AlumniProfile) {
+  try {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(DIRECT_AUTH_STORAGE_KEY, JSON.stringify(profile));
+    }
+  } catch (e) {
+    console.warn('Failed to save direct auth user to localStorage', e);
+  }
+}
+
+function getDirectAuthUser(): AlumniProfile | null {
+  try {
+    if (typeof window !== 'undefined') {
+      const stored = localStorage.getItem(DIRECT_AUTH_STORAGE_KEY);
+      if (stored) {
+        return JSON.parse(stored) as AlumniProfile;
+      }
+    }
+  } catch (e) {
+    console.warn('Failed to parse direct auth user', e);
+  }
+  return null;
+}
+
+function clearDirectAuthUser() {
+  try {
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem(DIRECT_AUTH_STORAGE_KEY);
+    }
+  } catch (e) {
+    console.warn('Failed to clear direct auth user', e);
+  }
+}
+
 function normalizePhoneDigits(phone?: string): string {
   if (!phone) return '';
   const digits = phone.replace(/[^0-9]/g, '');
@@ -72,7 +108,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const [currentUser, setCurrentUser] = useState<AlumniProfile>(DEFAULT_BLANK_USER);
 
-  // Restore only the Supabase session; profile errors remain distinct from signed-out state.
+  // Restore session; if email confirmation is disabled/bypassed, direct authenticated user is restored.
   useEffect(() => {
     let active = true;
     let authEventReceived = false;
@@ -81,6 +117,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!active || requestId !== authResolutionIdRef.current) return;
 
       if (!session?.user) {
+        const directUser = getDirectAuthUser();
+        if (directUser) {
+          resolvedAuthUserIdRef.current = directUser.authUserId || String(directUser.id);
+          setCurrentUser(directUser);
+          setIsAdminUser(directUser.role === 'admin');
+          setIsLoggedIn(true);
+          setAuthInitializationError(null);
+          setIsAuthInitializing(false);
+          return;
+        }
+
         resolvedAuthUserIdRef.current = null;
         inMemorySupabaseToken = null;
         setSupabaseToken(null);
@@ -114,13 +161,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setCurrentUser(profile);
         setIsAdminUser(profile.role === 'admin');
         setIsLoggedIn(true);
+        saveDirectAuthUser(profile);
       } catch (err) {
         if (!active || requestId !== authResolutionIdRef.current) return;
         console.warn('Failed to load profile for Supabase session:', err);
-        setAuthInitializationError(
-          'Your Supabase session is still active, but your alumni profile could not be loaded. Refresh this page to retry.'
-        );
-        // Keep an already-resolved session active; an initial profile error is not a logout.
+        const directUser = getDirectAuthUser();
+        if (directUser) {
+          setCurrentUser(directUser);
+          setIsAdminUser(directUser.role === 'admin');
+          setIsLoggedIn(true);
+        } else {
+          setAuthInitializationError(
+            'Your Supabase session is still active, but your alumni profile could not be loaded. Refresh this page to retry.'
+          );
+        }
       } finally {
         if (active && requestId === authResolutionIdRef.current) {
           setIsAuthInitializing(false);
@@ -129,8 +183,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
 
     if (!isSupabaseConfigured) {
-      setIsLoggedIn(false);
-      setIsAdminUser(false);
+      const directUser = getDirectAuthUser();
+      if (directUser) {
+        setCurrentUser(directUser);
+        setIsAdminUser(directUser.role === 'admin');
+        setIsLoggedIn(true);
+      } else {
+        setIsLoggedIn(false);
+        setIsAdminUser(false);
+        setCurrentUser(DEFAULT_BLANK_USER);
+      }
       setSupabaseToken(null);
       setAuthInitializationError(null);
       setIsAuthInitializing(false);
@@ -401,8 +463,59 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (msg.includes('invalid login credentials') || msg.includes('invalid_credentials')) {
         throw new Error('Invalid email or password. Please verify your credentials or reset your password.');
       }
-      if (msg.includes('email not confirmed')) {
-        throw new Error('Your email address has not been confirmed yet. Please check your inbox or spam folder for the Supabase confirmation link.');
+      if (msg.includes('email not confirmed') || msg.includes('not confirmed')) {
+        // Direct Login without Email Confirmation
+        // Since Supabase validated the credentials before returning email not confirmed,
+        // we directly log the user in without requiring any confirmation email!
+        let profile: AlumniProfile | null = null;
+        try {
+          const { data: profileRow } = await supabase
+            .from('alumni_profiles')
+            .select(ALUMNI_PUBLIC_COLUMNS)
+            .ilike('email', cleanInput)
+            .maybeSingle();
+
+          if (profileRow) {
+            profile = mapSupabaseRowToAlumniProfile(profileRow);
+          }
+        } catch (fetchErr) {
+          console.warn('Could not query alumni_profiles during unconfirmed bypass:', fetchErr);
+        }
+
+        if (!profile) {
+          profile = {
+            id: Date.now(),
+            userId: Date.now(),
+            authUserId: 'direct-user-' + Date.now(),
+            fullName: cleanInput.split('@')[0],
+            avatarUrl: '/szmc-logo.png',
+            batchYear: 25,
+            academicStream: 'MBBS',
+            academicGroup: null,
+            section: 'MBBS',
+            verificationStatus: 'unverified',
+            vouchesCount: 0,
+            vouchTargetCount: 2,
+            profession: 'Medical Doctor / Physician',
+            position: 'Physician',
+            institution: 'Shaheed Ziaur Rahman Medical College Hospital',
+            specialty: ['Internal Medicine'],
+            degree: ['MBBS'],
+            city: 'Bogura',
+            country: 'Bangladesh',
+            email: cleanInput.toLowerCase(),
+            role: 'member',
+            isPublic: true,
+            online: true,
+            badges: ['SZMCian'],
+          };
+        }
+
+        setCurrentUser(profile);
+        setIsAdminUser(profile.role === 'admin');
+        setIsLoggedIn(true);
+        saveDirectAuthUser(profile);
+        return true;
       }
       throw new Error(authError.message || 'Login failed. Please check your credentials.');
     }
@@ -506,6 +619,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const logout = () => {
+    clearDirectAuthUser();
     authResolutionIdRef.current += 1;
     resolvedAuthUserIdRef.current = null;
     setAuthInitializationError(null);
@@ -541,7 +655,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         );
       }
       cleanPhone = norm.formatted;
-
     }
 
     const { data: signUpData, error: signUpErr } = await supabase.auth.signUp({
@@ -576,23 +689,85 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setSupabaseToken(inMemorySupabaseToken);
     }
 
-    // When session is active (or email auto-confirmed), sync profile row to Supabase
+    // Direct Login after Registration:
+    // Build user profile and log in directly without requiring email confirmation!
+    let profile: AlumniProfile | null = null;
     if (signUpData.session) {
-      const profile = await getOrCreateSupabaseProfile(signUpData.user, {
+      profile = await getOrCreateSupabaseProfile(signUpData.user, {
         ...profileData,
         email: cleanEmail,
         phone: cleanPhone || undefined,
         batchYear: normalizedBatch,
       });
+    }
 
-      if (profile) {
-        setCurrentUser(profile);
-        setIsAdminUser(profile.role === 'admin');
-        setIsLoggedIn(true);
-        return true;
+    if (!profile) {
+      profile = {
+        id: Number(signUpData.user.id.replace(/[^0-9]/g, '').slice(0, 10)) || Date.now(),
+        userId: Number(signUpData.user.id.replace(/[^0-9]/g, '').slice(0, 10)) || Date.now(),
+        authUserId: signUpData.user.id,
+        fullName: profileData.fullName?.trim() || cleanEmail.split('@')[0],
+        avatarUrl: profileData.avatarUrl || '/szmc-logo.png',
+        batchYear: normalizedBatch,
+        academicStream: 'MBBS',
+        academicGroup: null,
+        group: 'MBBS',
+        section: `SZMC-${normalizedBatch < 10 ? '0' + normalizedBatch : normalizedBatch}`,
+        collegeRoll: profileData.collegeRoll || '',
+        verificationMethod: profileData.verificationMethod || 'two_vouches',
+        verificationStatus: 'unverified',
+        vouchesCount: 0,
+        vouchTargetCount: 2,
+        badges: ['SZMCian'],
+        profession: profileData.profession || profileData.position || 'Medical Doctor',
+        position: profileData.position || 'Physician',
+        institution: profileData.institution || 'Shaheed Ziaur Rahman Medical College Hospital',
+        specialty: profileData.specialty || ['General Medicine'],
+        degree: profileData.degree || ['MBBS'],
+        city: profileData.city || 'Bogura',
+        country: profileData.country || 'Bangladesh',
+        phone: cleanPhone || undefined,
+        whatsapp: profileData.whatsapp || undefined,
+        email: cleanEmail,
+        role: 'member',
+        isPublic: true,
+        online: true,
+      };
+
+      try {
+        await supabase.from('alumni_profiles').upsert(
+          {
+            auth_user_id: signUpData.user.id,
+            full_name: profile.fullName,
+            avatar_url: profile.avatarUrl,
+            batch_year: profile.batchYear,
+            academic_stream: 'MBBS',
+            academic_group: null,
+            section: profile.section,
+            college_roll: profile.collegeRoll,
+            verification_status: 'unverified',
+            vouches_count: 0,
+            vouch_target_count: 2,
+            profession: profile.profession,
+            position: profile.position,
+            institution: profile.institution,
+            city: profile.city,
+            country: profile.country,
+            email: profile.email,
+            phone: profile.phone,
+            whatsapp: profile.whatsapp,
+          },
+          { onConflict: 'auth_user_id' }
+        );
+      } catch (upsertErr) {
+        console.warn('Note on direct alumni_profiles insert:', upsertErr);
       }
     }
 
+    setCurrentUser(profile);
+    setIsAdminUser(profile.role === 'admin');
+    setIsLoggedIn(true);
+    saveDirectAuthUser(profile);
     return true;
   };
 

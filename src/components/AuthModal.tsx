@@ -522,11 +522,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         }
       }
 
-      setSuccessMessage('Registration successful! Welcome to the SZMC Alumni Network.');
+      setSuccessMessage('Registration successful! Welcome to the SZMC Alumni Network. Logging you in...');
       setTimeout(() => {
         onClose();
         if (onSuccess) onSuccess('register');
-      }, 600);
+      }, 500);
     } catch (err: unknown) {
       const error = err as Error;
       setErrorMessage(error.message || 'Registration failed. Please check your details and try again.');
@@ -854,7 +854,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     </div>
                     <input
                       type="text"
-                      placeholder="e.g. Md. Tanvir Ahmed Chowdhury"
+                      placeholder="Enter your full name"
                       value={fullName}
                       onChange={(e) => setFullName(e.target.value)}
                       className="w-full px-3 py-2.5 text-xs sm:text-sm text-slate-900 dark:text-white placeholder-slate-500 dark:placeholder-slate-400 bg-transparent focus:outline-none"
@@ -887,7 +887,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                       </option>
                       {Array.from({ length: 35 }, (_, idx) => {
                         const bNum = idx + 1;
-                        const startYear = 1991 + bNum;
+                        const startYear = 1990 + bNum;
                         const endYearShort = String(startYear + 1).slice(-2);
                         return (
                           <option key={bNum} value={String(bNum)} className="text-slate-900 dark:bg-slate-900 dark:text-white">
@@ -899,31 +899,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   </div>
                 </motion.div>
 
-                {/* 3. College Roll / BMDC Reg No. */}
+                {/* 3. Mobile Number * */}
                 <motion.div
                   initial={{ opacity: 0, y: 8 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.3, delay: 0.14 }}
                 >
-                  <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
-                    College Roll / BMDC Reg No.
-                  </label>
-                  <div className="relative flex items-center rounded-2xl bg-white/45 dark:bg-white/[0.07] backdrop-blur-md border border-white/60 dark:border-white/15 focus-within:border-blue-500 transition-all">
-                    <div className="pl-3 text-slate-500 dark:text-slate-400">
-                      <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                    </div>
-                    <input
-                      type="text"
-                      placeholder="e.g. A-12345 or College Roll"
-                      value={bmdcNumber}
-                      onChange={(e) => setBmdcNumber(e.target.value)}
-                      className="w-full px-2.5 py-2.5 text-xs sm:text-sm text-slate-900 dark:text-white placeholder-slate-500 dark:placeholder-slate-400 bg-transparent focus:outline-none"
-                    />
-                  </div>
-                </motion.div>
-
-                {/* 4. Mobile Number * */}
-                <div>
                   <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
                     Mobile Number <span className="text-rose-500">*</span>
                   </label>
@@ -940,10 +921,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                       required
                     />
                   </div>
-                </div>
+                </motion.div>
 
-                {/* 5. Email Address * */}
-                <div>
+                {/* 4. Email Address * */}
+                <div className="sm:col-span-2">
                   <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
                     Email Address <span className="text-rose-500">*</span>
                   </label>
@@ -963,90 +944,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 </div>
               </motion.div>
 
-              {/* SECTION 2: Professional, Location & WhatsApp */}
+              {/* SECTION 2: Location (City & Country) */}
               <motion.div
                 initial={{ opacity: 0, y: 12 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.35, delay: 0.18 }}
                 className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 pt-2 border-t border-white/35 dark:border-white/10"
               >
-                {/* 6. Current Profession / Role */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
-                    Current Profession / Role
-                  </label>
-                  <div className="relative flex items-center rounded-2xl bg-white/45 dark:bg-white/[0.07] backdrop-blur-md border border-white/60 dark:border-white/15 focus-within:border-blue-500 transition-all">
-                    <div className="pl-3 text-slate-500 dark:text-slate-400">
-                      <Briefcase className="w-4 h-4 text-blue-600 dark:text-blue-400" />
-                    </div>
-                    <input
-                      type="text"
-                      placeholder="e.g. Senior Software Engineer / Lead / CEO"
-                      value={position}
-                      onChange={(e) => setPosition(e.target.value)}
-                      className="w-full px-2.5 py-2.5 text-xs sm:text-sm text-slate-900 dark:text-white placeholder-slate-500 dark:placeholder-slate-400 bg-transparent focus:outline-none"
-                    />
-                  </div>
-                </div>
-
-                {/* 7. Organization / Workplace */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
-                    Organization / Workplace
-                  </label>
-                  <div className="relative flex items-center rounded-2xl bg-white/45 dark:bg-white/[0.07] backdrop-blur-md border border-white/60 dark:border-white/15 focus-within:border-blue-500 transition-all">
-                    <div className="pl-3 text-slate-500 dark:text-slate-400">
-                      <Building2 className="w-4 h-4 text-blue-600 dark:text-blue-400" />
-                    </div>
-                    <input
-                      type="text"
-                      placeholder="e.g. Google / BUET / DMC / Apex"
-                      value={institution}
-                      onChange={(e) => setInstitution(e.target.value)}
-                      className="w-full px-2.5 py-2.5 text-xs sm:text-sm text-slate-900 dark:text-white placeholder-slate-500 dark:placeholder-slate-400 bg-transparent focus:outline-none"
-                    />
-                  </div>
-                </div>
-
-                {/* 8. Field / Specialty */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
-                    Field / Specialty
-                  </label>
-                  <div className="relative flex items-center rounded-2xl bg-white/45 dark:bg-white/[0.07] backdrop-blur-md border border-white/60 dark:border-white/15 focus-within:border-blue-500 transition-all">
-                    <div className="pl-3 text-slate-500 dark:text-slate-400">
-                      <Briefcase className="w-4 h-4 text-blue-500" />
-                    </div>
-                    <input
-                      type="text"
-                      placeholder="e.g. Computer Science & Software"
-                      value={specialtyInput}
-                      onChange={(e) => setSpecialtyInput(e.target.value)}
-                      className="w-full px-2.5 py-2.5 text-xs sm:text-sm text-slate-900 dark:text-white placeholder-slate-500 dark:placeholder-slate-400 bg-transparent focus:outline-none"
-                    />
-                  </div>
-                </div>
-
-                {/* 9. Degrees & Qualifications */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
-                    Degrees & Qualifications
-                  </label>
-                  <div className="relative flex items-center rounded-2xl bg-white/45 dark:bg-white/[0.07] backdrop-blur-md border border-white/60 dark:border-white/15 focus-within:border-blue-500 transition-all">
-                    <div className="pl-3 text-slate-500 dark:text-slate-400">
-                      <Award className="w-4 h-4 text-amber-500" />
-                    </div>
-                    <input
-                      type="text"
-                      placeholder="e.g. MBBS, FCPS, MD, MS, MRCP, FRCS"
-                      value={degreeInput}
-                      onChange={(e) => setDegreeInput(e.target.value)}
-                      className="w-full px-2.5 py-2.5 text-xs sm:text-sm text-slate-900 dark:text-white placeholder-slate-500 dark:placeholder-slate-400 bg-transparent focus:outline-none"
-                    />
-                  </div>
-                </div>
-
-                {/* 10. City */}
+                {/* City */}
                 <div>
                   <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
                     City
@@ -1057,7 +962,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     </div>
                     <input
                       type="text"
-                      placeholder="e.g. Dhaka"
+                      placeholder="e.g. Bogura"
                       value={city}
                       onChange={(e) => setCity(e.target.value)}
                       className="w-full px-2.5 py-2.5 text-xs sm:text-sm text-slate-900 dark:text-white placeholder-slate-500 dark:placeholder-slate-400 bg-transparent focus:outline-none"
@@ -1065,7 +970,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   </div>
                 </div>
 
-                {/* 11. Country */}
+                {/* Country */}
                 <div>
                   <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
                     Country
@@ -1079,25 +984,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                       placeholder="e.g. Bangladesh"
                       value={country}
                       onChange={(e) => setCountry(e.target.value)}
-                      className="w-full px-2.5 py-2.5 text-xs sm:text-sm text-slate-900 dark:text-white placeholder-slate-500 dark:placeholder-slate-400 bg-transparent focus:outline-none"
-                    />
-                  </div>
-                </div>
-
-                {/* 12. WhatsApp Number */}
-                <div className="sm:col-span-2">
-                  <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-1">
-                    WhatsApp Number
-                  </label>
-                  <div className="relative flex items-center rounded-2xl bg-white/45 dark:bg-white/[0.07] backdrop-blur-md border border-white/60 dark:border-white/15 focus-within:border-emerald-500 transition-all">
-                    <div className="pl-3 text-emerald-600 dark:text-emerald-400">
-                      <WhatsAppIcon className="w-4 h-4" />
-                    </div>
-                    <input
-                      type="text"
-                      placeholder="e.g. 01711223344"
-                      value={whatsapp}
-                      onChange={(e) => setWhatsapp(e.target.value)}
                       className="w-full px-2.5 py-2.5 text-xs sm:text-sm text-slate-900 dark:text-white placeholder-slate-500 dark:placeholder-slate-400 bg-transparent focus:outline-none"
                     />
                   </div>

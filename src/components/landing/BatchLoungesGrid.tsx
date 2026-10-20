@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { motion, useReducedMotion } from 'motion/react';
 import {
   Users,
@@ -19,7 +19,8 @@ interface BatchLoungesGridProps {
 
 type EraFilter = 'all' | 'recent' | '2010s' | '2000s' | '90s' | 'pioneers';
 
-const INITIAL_VISIBLE_BATCHES = 8;
+const DESKTOP_VISIBLE_BATCHES = 10;
+const MOBILE_VISIBLE_BATCHES = 5;
 
 export const BatchLoungesGrid: React.FC<BatchLoungesGridProps> = ({
   batches,
@@ -29,6 +30,20 @@ export const BatchLoungesGrid: React.FC<BatchLoungesGridProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [activeEra, setActiveEra] = useState<EraFilter>('all');
   const [isExpanded, setIsExpanded] = useState(false);
+  const [isMobile, setIsMobile] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      return window.innerWidth < 640;
+    }
+    return false;
+  });
+
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobile(window.innerWidth < 640);
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   const filteredBatches = useMemo(() => {
     return batches.filter((b) => {
@@ -54,17 +69,18 @@ export const BatchLoungesGrid: React.FC<BatchLoungesGridProps> = ({
     });
   }, [batches, searchQuery, activeEra]);
 
+  const initialLimit = isMobile ? MOBILE_VISIBLE_BATCHES : DESKTOP_VISIBLE_BATCHES;
   const isSearching = searchQuery.trim().length > 0;
   const visibleBatches = useMemo(() => {
     if (isSearching || isExpanded) {
       return filteredBatches;
     }
-    return filteredBatches.slice(0, INITIAL_VISIBLE_BATCHES);
-  }, [filteredBatches, isSearching, isExpanded]);
+    return filteredBatches.slice(0, initialLimit);
+  }, [filteredBatches, isSearching, isExpanded, initialLimit]);
 
   const prefersReducedMotion = useReducedMotion();
-  const hasMore = !isSearching && filteredBatches.length > INITIAL_VISIBLE_BATCHES;
-  const remainingCount = filteredBatches.length - INITIAL_VISIBLE_BATCHES;
+  const hasMore = !isSearching && filteredBatches.length > initialLimit;
+  const remainingCount = filteredBatches.length - initialLimit;
 
   return (
     <section id="batches-section" className="py-5 sm:py-8 lg:py-10 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800">
@@ -81,7 +97,7 @@ export const BatchLoungesGrid: React.FC<BatchLoungesGridProps> = ({
                 Find Your Batch Circle
               </h2>
               <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5 max-w-xl">
-                Every graduating MBBS class (1992–2026) has a dedicated private lounge. Reconnect with batchmates, consultants, and interns.
+                Every graduating MBBS class (Session 1991–2026) has a dedicated private lounge. Reconnect with batchmates, consultants, and interns.
               </p>
             </div>
 
@@ -134,6 +150,7 @@ export const BatchLoungesGrid: React.FC<BatchLoungesGridProps> = ({
             return (
               <motion.div
                 key={batch.batchYear}
+                className={!isExpanded && !isSearching && idx >= 5 ? 'hidden sm:block' : ''}
                 initial={prefersReducedMotion ? false : { opacity: 0, y: 18 }}
                 whileInView={{ opacity: 1, y: 0 }}
                 viewport={{ once: true, amount: 0.12 }}
@@ -170,7 +187,7 @@ export const BatchLoungesGrid: React.FC<BatchLoungesGridProps> = ({
                   <div className="mt-3 pt-2 border-t border-slate-200/60 dark:border-slate-700/60 flex items-center justify-between text-[11px]">
                     <div className="flex items-center gap-1 text-slate-600 dark:text-slate-400 font-medium">
                       <Users className="w-3 h-3 text-blue-500" />
-                      <span>{batch.total}+ Brothers</span>
+                      <span>{batch.total}+ Members</span>
                     </div>
 
                     <span className="font-bold text-blue-600 dark:text-blue-400 flex items-center gap-0.5 group-hover:translate-x-0.5 transition-transform text-xs">
@@ -199,9 +216,6 @@ export const BatchLoungesGrid: React.FC<BatchLoungesGridProps> = ({
                 <ChevronDown className="w-4 h-4 text-blue-600 dark:text-blue-400" />
               )}
             </button>
-            <span className="text-[11px] text-slate-400">
-              Showing {visibleBatches.length} of {filteredBatches.length} batches
-            </span>
           </div>
         )}
 
