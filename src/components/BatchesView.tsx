@@ -583,11 +583,14 @@ export const BatchesView: React.FC<BatchesViewProps> = ({ onSelectBatch, onViewP
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <span
-                    className={`text-[10px] font-bold ${
-                      isSelected ? 'text-blue-100' : 'text-slate-400'
+                    className={`inline-flex items-center gap-1 text-[10px] font-mono font-bold px-2 py-0.5 rounded-md border transition-all duration-300 ease-out transform group-hover:scale-105 ${
+                      isSelected
+                        ? 'text-white bg-blue-700/80 border-blue-300/40 shadow-[0_0_12px_rgba(255,255,255,0.4)]'
+                        : 'text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/60 border-blue-200/80 dark:border-blue-800/80 group-hover:border-blue-400 dark:group-hover:border-blue-400 group-hover:shadow-[0_0_12px_rgba(59,130,246,0.35)] dark:group-hover:shadow-[0_0_14px_rgba(96,165,250,0.4)] hover:scale-105 hover:border-blue-400 hover:shadow-[0_0_12px_rgba(59,130,246,0.35)]'
                     }`}
                   >
-                    SZMC-{batch.batchYear < 10 ? `0${batch.batchYear}` : batch.batchYear}
+                    <span className="w-1.5 h-1.5 rounded-full bg-blue-500 dark:bg-blue-400 animate-pulse" />
+                    <span>SZMC-{batch.batchYear < 10 ? `0${batch.batchYear}` : batch.batchYear}</span>
                   </span>
                 </div>
 

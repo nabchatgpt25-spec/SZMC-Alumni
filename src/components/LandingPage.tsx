@@ -1,4 +1,5 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import {
   Sparkles,
   BookOpen,
@@ -33,23 +34,85 @@ import { QuickProfileModal } from './landing/QuickProfileModal';
 import { BatchMembersModal } from './landing/BatchMembersModal';
 import { VerificationExplainerModal } from './landing/VerificationExplainerModal';
 import { BloodNeededNowSection } from './landing/BloodNeededNowSection';
+import { LiquidGlassLoginBar } from './landing/LiquidGlassLoginBar';
 import { CursorSpotlight, MagneticWrap } from './motion/CinematicMotion';
 
 interface LandingPageProps {
   onOpenLogin: () => void;
   onOpenRegister: () => void;
   onNavigate: (route: string) => void;
+  isAuthModalOpen?: boolean;
 }
 
 export const LandingPage: React.FC<LandingPageProps> = ({
   onOpenLogin,
   onOpenRegister,
   onNavigate,
+  isAuthModalOpen = false,
 }) => {
   // Modal states for interactive preview
   const [previewAlumnus, setPreviewAlumnus] = useState<AlumniProfile | null>(null);
   const [previewBatch, setPreviewBatch] = useState<BatchSummary | null>(null);
   const [isVerificationModalOpen, setIsVerificationModalOpen] = useState(false);
+
+  // Hide thumb login bars when user is filling up login/registration credentials or active dialogs
+  const isFormActive =
+    Boolean(isAuthModalOpen) ||
+    isVerificationModalOpen ||
+    Boolean(previewAlumnus) ||
+    Boolean(previewBatch);
+
+  // Dynamic Scroll & Click/Tap Awareness: bar is NOT static; it only shows when scrolling or clicking
+  const [isFloatingBarVisible, setIsFloatingBarVisible] = useState(false);
+  const hideTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const isHoveredRef = useRef(false);
+
+  const wakeFloatingBar = (duration = 3200) => {
+    setIsFloatingBarVisible(true);
+    if (hideTimerRef.current) {
+      clearTimeout(hideTimerRef.current);
+    }
+    if (!isHoveredRef.current) {
+      hideTimerRef.current = setTimeout(() => {
+        if (!isHoveredRef.current) {
+          setIsFloatingBarVisible(false);
+        }
+      }, duration);
+    }
+  };
+
+  useEffect(() => {
+    if (isFormActive) {
+      setIsFloatingBarVisible(false);
+      return;
+    }
+
+    const handleScroll = () => {
+      // Reveal on scroll once beyond very top 50px
+      if (window.scrollY > 50) {
+        wakeFloatingBar(2800);
+      } else {
+        // At the very top, keep UI clean
+        setIsFloatingBarVisible(false);
+      }
+    };
+
+    const handleClickOrTouch = () => {
+      // Wake up on any user click / tap
+      wakeFloatingBar(3500);
+    };
+
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    window.addEventListener('click', handleClickOrTouch, { passive: true });
+    window.addEventListener('touchstart', handleClickOrTouch, { passive: true });
+
+    return () => {
+      window.removeEventListener('scroll', handleScroll);
+      window.removeEventListener('click', handleClickOrTouch);
+      window.removeEventListener('touchstart', handleClickOrTouch);
+      if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+    };
+  }, [isFormActive]);
 
   // Smooth scroll helper
   const scrollToSection = (sectionId: string) => {
@@ -263,9 +326,23 @@ export const LandingPage: React.FC<LandingPageProps> = ({
           {/* Divider & Bottom Section */}
           <div className="border-t border-slate-200/80 dark:border-slate-800/80 pt-4">
             {/* Motto Spotlight */}
-            <div className="text-center pb-3">
-              <span className="font-serif italic font-bold text-xs sm:text-sm text-blue-600 dark:text-blue-400 tracking-wide">
-                &ldquo;Once a SZMCian, Always a SZMCian&rdquo;
+            <div className="text-center pb-4 flex flex-col items-center">
+              <span className="group relative inline-flex flex-col items-center justify-center px-6 py-3 sm:px-8 sm:py-3.5 rounded-2xl bg-blue-50/80 dark:bg-blue-950/40 border border-blue-200/80 dark:border-blue-800/70 hover:border-blue-400 dark:hover:border-blue-400 shadow-xs hover:shadow-lg hover:shadow-blue-500/10 dark:hover:shadow-blue-900/20 transition-all duration-300 ease-out transform hover:scale-[1.02] cursor-default overflow-hidden select-none">
+                {/* Specular Card Hover Spotlight Glare */}
+                <span
+                  aria-hidden="true"
+                  className="card-spotlight-overlay pointer-events-none absolute inset-0 z-10 opacity-0 group-hover:opacity-100 transition-opacity duration-300"
+                />
+                <span className="relative z-20 font-serif italic font-extrabold text-sm sm:text-base text-blue-600 dark:text-blue-400 tracking-wide group-hover:text-blue-700 dark:group-hover:text-blue-300 transition-colors">
+                  &ldquo;Once a SZMCian, Always a SZMCian.&rdquo;
+                </span>
+                <span className="relative z-20 text-[11px] font-medium text-slate-500 dark:text-slate-400 mt-1 flex items-center justify-center gap-1.5 flex-wrap">
+                  <span>Est. 1992</span>
+                  <span className="text-slate-300 dark:text-slate-600">•</span>
+                  <span>35 MBBS Batches</span>
+                  <span className="text-slate-300 dark:text-slate-600">•</span>
+                  <span>Silimpur, Bogura</span>
+                </span>
               </span>
             </div>
 
@@ -314,6 +391,32 @@ export const LandingPage: React.FC<LandingPageProps> = ({
         }}
         onRegisterPrompt={onOpenRegister}
       />
+
+      {/* Mobile Thumb-Comfort Floating Liquid Glass Login Bar */}
+      {/* Dynamic: NEVER static; only appears when scrolling or clicking, and gently auto-hides when idle */}
+      <AnimatePresence>
+        {!isFormActive && isFloatingBarVisible && (
+          <motion.aside
+            key="floating-liquid-login-dock"
+            initial={{ opacity: 0, y: 35, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 30, scale: 0.96 }}
+            transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
+            onMouseEnter={() => {
+              isHoveredRef.current = true;
+              if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+            }}
+            onMouseLeave={() => {
+              isHoveredRef.current = false;
+              wakeFloatingBar(2400);
+            }}
+            aria-label="Quick Member Login"
+            className="fixed bottom-3 inset-x-3 sm:bottom-5 sm:inset-x-auto sm:right-6 sm:left-auto z-40 flex justify-center pointer-events-auto pb-safe"
+          >
+            <LiquidGlassLoginBar onLogin={onOpenLogin} variant="floating" />
+          </motion.aside>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

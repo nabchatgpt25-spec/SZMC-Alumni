@@ -91,7 +91,7 @@ export const BatchExplorerSection: React.FC<BatchExplorerSectionProps> = ({
             >
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <span className="w-8 h-8 rounded-xl bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400 font-black text-xs flex items-center justify-center group-hover:scale-110 transition-transform">
+                  <span className="w-8 h-8 rounded-xl bg-blue-50 dark:bg-blue-950/70 text-blue-600 dark:text-blue-400 font-black text-xs flex items-center justify-center border border-blue-200/70 dark:border-blue-800/70 transition-all duration-300 ease-out transform group-hover:scale-110 group-hover:border-blue-400 dark:group-hover:border-blue-400 group-hover:shadow-[0_0_12px_rgba(59,130,246,0.35)] dark:group-hover:shadow-[0_0_15px_rgba(96,165,250,0.45)] hover:scale-110 hover:border-blue-400 hover:shadow-[0_0_14px_rgba(59,130,246,0.4)]">
                     {b.batchYear < 10 ? `0${b.batchYear}` : b.batchYear}
                   </span>
                   <span className="text-[11px] font-bold text-slate-400 flex items-center gap-1">

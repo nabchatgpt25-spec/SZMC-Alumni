@@ -166,8 +166,9 @@ export const BatchLoungesGrid: React.FC<BatchLoungesGridProps> = ({
                 >
                   <div>
                     <div className="flex items-center justify-between gap-2 mb-2">
-                      <span className="text-[11px] font-mono font-bold px-2 py-0.5 rounded-md bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300">
-                        Batch {batch.batchYear < 10 ? `0${batch.batchYear}` : batch.batchYear}
+                      <span className="inline-flex items-center gap-1.5 text-[11px] font-mono font-bold px-2.5 py-0.5 rounded-md bg-blue-100 dark:bg-blue-950/80 text-blue-700 dark:text-blue-300 border border-blue-200/80 dark:border-blue-800/80 transition-all duration-300 ease-out transform group-hover:scale-105 group-hover:border-blue-400 dark:group-hover:border-blue-400 group-hover:shadow-[0_0_12px_rgba(59,130,246,0.35)] dark:group-hover:shadow-[0_0_15px_rgba(96,165,250,0.45)] hover:scale-105 hover:border-blue-400 dark:hover:border-blue-400 hover:shadow-[0_0_14px_rgba(59,130,246,0.4)] cursor-pointer">
+                        <span className="w-1.5 h-1.5 rounded-full bg-blue-500 dark:bg-blue-400 animate-pulse" />
+                        <span>Batch {batch.batchYear < 10 ? `0${batch.batchYear}` : batch.batchYear}</span>
                       </span>
                       <span className="text-[10px] font-medium text-slate-500 dark:text-slate-400 flex items-center gap-1">
                         <Lock className="w-2.5 h-2.5 text-slate-400" />

@@ -80,7 +80,7 @@ export const QuickProfileModal: React.FC<QuickProfileModalProps> = ({
           </button>
 
           {/* Batch Pill in Cover */}
-          <div className="absolute bottom-3 right-4 px-3 py-1 rounded-full bg-black/50 backdrop-blur-md text-white text-xs font-bold flex items-center gap-1.5 border border-white/20">
+          <div className="absolute bottom-3 right-4 px-3 py-1 rounded-full bg-black/60 backdrop-blur-md text-white text-xs font-bold flex items-center gap-1.5 border border-white/20 hover:border-blue-400 hover:shadow-[0_0_15px_rgba(96,165,250,0.5)] hover:scale-105 transition-all duration-300 ease-out cursor-default select-none">
             <GraduationCap className="w-3.5 h-3.5 text-blue-400" />
             <span>SZMC Batch {profile.batchYear < 10 ? `0${profile.batchYear}` : profile.batchYear}</span>
           </div>

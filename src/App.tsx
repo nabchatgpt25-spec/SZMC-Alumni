@@ -20,6 +20,8 @@ import { GalleryView } from './components/GalleryView';
 import { LandingPage } from './components/LandingPage';
 import { AuthModal } from './components/AuthModal';
 import { UpcomingFeatureView } from './components/UpcomingFeatureView';
+import { CareerView } from './components/CareerView';
+import { MentorshipView } from './components/MentorshipView';
 import { ContactUsView } from './components/ContactUsView';
 import { SavedPostsView } from './components/SavedPostsView';
 import { OfflineIndicator } from './components/OfflineIndicator';
@@ -157,6 +159,7 @@ function AlumniAppContent() {
         <LandingPage
           onOpenLogin={() => setAuthModalMode('login')}
           onOpenRegister={() => setAuthModalMode('register')}
+          isAuthModalOpen={authModalMode !== null}
           onNavigate={(target) => {
             if (target === 'landing') {
               navigateTo(target);
@@ -278,7 +281,12 @@ function AlumniAppContent() {
               )}
 
               {route === 'mentorship' && (
-                <UpcomingFeatureView type="mentorship" onNavigate={navigateTo} />
+                <MentorshipView
+                  currentUser={currentUser}
+                  isLoggedIn={isLoggedIn}
+                  onViewProfile={handleViewProfile}
+                  onNavigate={navigateTo}
+                />
               )}
 
               {route === 'news' && (
@@ -294,7 +302,12 @@ function AlumniAppContent() {
               )}
 
               {route === 'careers' && (
-                <UpcomingFeatureView type="careers" onNavigate={navigateTo} />
+                <CareerView
+                  currentUser={currentUser}
+                  isLoggedIn={isLoggedIn}
+                  onViewProfile={handleViewProfile}
+                  onNavigate={navigateTo}
+                />
               )}
 
               {(route === 'emergency' || route === 'blood' || route === 'blood-network') && (
