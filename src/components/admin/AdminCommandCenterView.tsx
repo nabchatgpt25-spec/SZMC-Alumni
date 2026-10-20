@@ -689,7 +689,7 @@ export const AdminCommandCenterView: React.FC<AdminCommandCenterViewProps> = ({
       URL.revokeObjectURL(url);
       showBanner(
         'success',
-        'Downloaded complete Production SQL Migration Bundle (001 -> 004).'
+        'Downloaded complete Production SQL Migration Bundle (001 -> 009 & Storage Policies).'
       );
     } catch (err: any) {
       showBanner('error', err?.message || 'Failed to download SQL bundle.');

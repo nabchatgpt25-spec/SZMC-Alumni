@@ -9,7 +9,44 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export default defineConfig(() => {
+  // Resolve valid Supabase URL: must be an http(s) URL
+  const rawUrlCandidates = [
+    process.env.SUPABASE_URL,
+    process.env.VITE_SUPABASE_URL,
+  ];
+  const resolvedSupabaseUrl =
+    rawUrlCandidates.find(
+      (u) =>
+        typeof u === 'string' &&
+        (u.trim().startsWith('http://') || u.trim().startsWith('https://')) &&
+        !u.includes('placeholder.supabase.co')
+    )?.trim() || 'https://hjuyiqyviohinbhzaipl.supabase.co';
+
+  // Resolve valid Supabase Anon / Publishable Key:
+  const rawKeyCandidates = [
+    process.env.SUPABASE_ANON_KEY,
+    process.env.VITE_SUPABASE_URL && !process.env.VITE_SUPABASE_URL.startsWith('http')
+      ? process.env.VITE_SUPABASE_URL
+      : undefined,
+    process.env.VITE_SUPABASE_ANON_KEY,
+  ];
+  const resolvedSupabaseAnonKey =
+    rawKeyCandidates.find(
+      (k) =>
+        typeof k === 'string' &&
+        (k.trim().startsWith('eyJ') || k.trim().startsWith('sb_publishable_'))
+    )?.trim() ||
+    process.env.SUPABASE_ANON_KEY ||
+    process.env.VITE_SUPABASE_ANON_KEY ||
+    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhqdXlpcXl2aW9oaW5iaHphaXBsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE2MjQ2NzIsImV4cCI6MjEwNzIwMDY3Mn0.fppNXVPWcsWGsUIBwvirhjEkdDyUCX-SyydNWExbwk8';
+
   return {
+    define: {
+      'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(resolvedSupabaseUrl),
+      'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(resolvedSupabaseAnonKey),
+      'import.meta.env.SUPABASE_URL': JSON.stringify(resolvedSupabaseUrl),
+      'import.meta.env.SUPABASE_ANON_KEY': JSON.stringify(resolvedSupabaseAnonKey),
+    },
     plugins: [
       react(),
       tailwindcss(),

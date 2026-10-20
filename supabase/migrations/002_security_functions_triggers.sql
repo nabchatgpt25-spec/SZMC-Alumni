@@ -147,6 +147,7 @@ REVOKE ALL ON FUNCTION public.is_internal_or_service_role() FROM PUBLIC, anon, a
 GRANT EXECUTE ON FUNCTION public.is_internal_or_service_role() TO service_role;
 
 -- 1.8 Controlled RPC for retrieving sensitive contact fields only when permitted.
+DROP FUNCTION IF EXISTS public.get_alumni_contact_details(BIGINT) CASCADE;
 CREATE OR REPLACE FUNCTION public.get_alumni_contact_details(p_profile_id BIGINT)
 RETURNS TABLE (
   profile_id BIGINT,

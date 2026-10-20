@@ -33,7 +33,7 @@ export function apiUrl(path: string): string {
   }
 
   // 3. Admin Command Center & Directory routes -> Supabase 'admin-hub' Edge Function
-  if (path.startsWith('/api/admin') || path.startsWith('/api/alumni')) {
+  if ((path.startsWith('/api/admin') && !path.startsWith('/api/admin/export-')) || path.startsWith('/api/alumni')) {
     const [pathname, queryString] = path.split('?');
     const params = new URLSearchParams(queryString || '');
     params.set('endpoint', pathname);

@@ -13,9 +13,21 @@
 BEGIN;
 
 -- -----------------------------------------------------------------------------
--- 0. ENSURE RLS IS ENABLED ON storage.objects
+-- 0. PROVISION STORAGE BUCKETS IDEMPOTENTLY
 -- -----------------------------------------------------------------------------
-ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES 
+  ('avatars', 'avatars', true, 5242880, ARRAY['image/jpeg', 'image/png', 'image/webp', 'image/gif']),
+  ('post-media', 'post-media', true, 20971520, ARRAY['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'video/mp4', 'video/webm']),
+  ('gallery', 'gallery', true, 20971520, ARRAY['image/jpeg', 'image/png', 'image/webp', 'image/gif']),
+  ('verification-documents', 'verification-documents', false, 10485760, ARRAY['image/jpeg', 'image/png', 'image/webp', 'application/pdf'])
+ON CONFLICT (id) DO UPDATE SET
+  public = EXCLUDED.public,
+  file_size_limit = EXCLUDED.file_size_limit,
+  allowed_mime_types = EXCLUDED.allowed_mime_types;
+
+-- storage.objects already has RLS enabled by default in Supabase (owned by supabase_storage_admin)
+
 
 -- -----------------------------------------------------------------------------
 -- 1. AVATARS (PUBLIC BUCKET)

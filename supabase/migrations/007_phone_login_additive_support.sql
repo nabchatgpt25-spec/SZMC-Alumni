@@ -19,6 +19,7 @@ CREATE INDEX IF NOT EXISTS idx_alumni_profiles_phone_lookup
 
 -- 2. SECURITY DEFINER function to check if a phone number is available for registration
 -- Returns TRUE if available (not registered by another user), FALSE if already claimed.
+DROP FUNCTION IF EXISTS public.check_phone_available(TEXT) CASCADE;
 CREATE OR REPLACE FUNCTION public.check_phone_available(p_phone TEXT)
 RETURNS BOOLEAN
 LANGUAGE plpgsql

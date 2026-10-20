@@ -29,6 +29,7 @@ GRANT ALL ON TABLE public.auth_rate_limits TO service_role;
 -- Atomically checks and increments attempts within a sliding time window.
 -- Uses clock_timestamp() for real-time concurrency across transactions.
 -- Returns TRUE if request is within limits, FALSE if rate limit exceeded.
+DROP FUNCTION IF EXISTS public.check_and_increment_rate_limit(TEXT, INTEGER, INTEGER) CASCADE;
 CREATE OR REPLACE FUNCTION public.check_and_increment_rate_limit(
   p_key TEXT,
   p_max_attempts INTEGER,

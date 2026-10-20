@@ -251,60 +251,6 @@ export const LandingPage: React.FC<LandingPageProps> = ({
             </button>
           </div>
         </div>
-
-        {/* Mobile Horizontal Quick-Jump Bar (Clean pills for compact screens) */}
-        <div className="lg:hidden flex items-center gap-1.5 overflow-x-auto px-3 py-2 border-t border-slate-100 dark:border-slate-800/80 bg-slate-50/90 dark:bg-slate-900/80 no-scrollbar text-[11px] font-semibold text-slate-600 dark:text-slate-300 whitespace-nowrap scroll-smooth">
-          <button
-            type="button"
-            onClick={() => scrollToSection('feed-preview-section')}
-            className="px-3 py-1.5 rounded-full bg-white/90 dark:bg-slate-800/90 hover:bg-blue-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 transition-colors shrink-0 whitespace-nowrap shadow-2xs border border-slate-200/60 dark:border-slate-700/60 active:scale-95"
-          >
-            The Quad
-          </button>
-          <button
-            type="button"
-            onClick={() => scrollToSection('batches-section')}
-            className="px-3 py-1.5 rounded-full bg-white/90 dark:bg-slate-800/90 hover:bg-blue-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 transition-colors shrink-0 whitespace-nowrap shadow-2xs border border-slate-200/60 dark:border-slate-700/60 active:scale-95"
-          >
-            Batches 01–76
-          </button>
-          <button
-            type="button"
-            onClick={() => scrollToSection('featured-alumni-section')}
-            className="px-3 py-1.5 rounded-full bg-white/90 dark:bg-slate-800/90 hover:bg-blue-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 transition-colors shrink-0 whitespace-nowrap shadow-2xs border border-slate-200/60 dark:border-slate-700/60 active:scale-95"
-          >
-            Leaders
-          </button>
-          <button
-            type="button"
-            onClick={() => onNavigate('directory')}
-            className="px-3 py-1.5 rounded-full bg-white/90 dark:bg-slate-800/90 hover:bg-blue-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 transition-colors shrink-0 whitespace-nowrap shadow-2xs border border-slate-200/60 dark:border-slate-700/60 active:scale-95"
-          >
-            Directory
-          </button>
-          <button
-            type="button"
-            onClick={() => onNavigate('gallery')}
-            className="px-3 py-1.5 rounded-full bg-white/90 dark:bg-slate-800/90 hover:bg-blue-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 transition-colors shrink-0 whitespace-nowrap shadow-2xs border border-slate-200/60 dark:border-slate-700/60 active:scale-95"
-          >
-            Gallery
-          </button>
-          <button
-            type="button"
-            onClick={() => onNavigate('emergency')}
-            className="px-3 py-1.5 rounded-full bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 hover:bg-rose-100 transition-colors shrink-0 whitespace-nowrap shadow-2xs border border-rose-200/60 dark:border-rose-900/60 font-bold active:scale-95 flex items-center gap-1"
-          >
-            <span>Blood</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setIsVerificationModalOpen(true)}
-            className="px-3 py-1.5 rounded-full bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-100 transition-colors shrink-0 whitespace-nowrap shadow-2xs border border-emerald-200/60 dark:border-emerald-900/60 font-bold active:scale-95 flex items-center gap-1"
-          >
-            <ShieldCheck className="w-3 h-3" />
-            <span>Verify</span>
-          </button>
-        </div>
       </header>
 
       {/* Main Social Network Home Content */}

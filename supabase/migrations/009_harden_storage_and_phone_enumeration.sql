@@ -9,10 +9,7 @@ BEGIN;
 REVOKE ALL ON FUNCTION public.check_phone_available(TEXT) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.check_phone_available(TEXT) TO service_role;
 
--- -----------------------------------------------------------------------------
--- 0. ENSURE RLS IS ENABLED ON storage.objects
--- -----------------------------------------------------------------------------
-ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
+-- storage.objects already has RLS enabled by default in Supabase (owned by supabase_storage_admin)
 
 -- -----------------------------------------------------------------------------
 -- 1. AVATARS (PUBLIC BUCKET)
@@ -169,3 +166,5 @@ USING (
     OR public.is_admin_or_mod()
   )
 );
+
+COMMIT;

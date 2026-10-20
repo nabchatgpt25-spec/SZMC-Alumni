@@ -1123,24 +1123,37 @@ app.get(
   requireAdmin,
   async (_req: AuthRequest, res: Response) => {
     try {
-      const files = [
-        '001_core_schema.sql',
-        '002_security_functions_triggers.sql',
-        '003_rls_policies.sql',
-        '004_reference_seed_data.sql',
-        '005_admin_phone_verification.sql',
-      ];
-      const parts: string[] = [];
-      for (const file of files) {
-        const filePath = path.resolve(__dirname, 'supabase', 'migrations', file);
-        const content = await readFile(filePath, 'utf-8');
-        parts.push(
-          `-- =============================================================================\n-- MIGRATION FILE: ${file}\n-- =============================================================================\n\n${content}`
-        );
+      const fullSchemaPath = path.resolve(__dirname, 'supabase', 'full_schema.sql');
+      let bundleSql = '';
+      try {
+        bundleSql = await readFile(fullSchemaPath, 'utf-8');
+      } catch {
+        const files = [
+          path.join('supabase', 'migrations', '001_core_schema.sql'),
+          path.join('supabase', 'migrations', '002_security_functions_triggers.sql'),
+          path.join('supabase', 'migrations', '003_rls_policies.sql'),
+          path.join('supabase', 'migrations', '004_reference_seed_data.sql'),
+          path.join('supabase', 'migrations', '005_admin_phone_verification.sql'),
+          path.join('supabase', 'migrations', '006_edge_functions_support.sql'),
+          path.join('supabase', 'migrations', '007_phone_login_additive_support.sql'),
+          path.join('supabase', 'migrations', '008_expand_academic_stream_groups.sql'),
+          path.join('supabase', 'migrations', '009_harden_storage_and_phone_enumeration.sql'),
+          path.join('supabase', 'storage_policies.sql'),
+        ];
+        const parts: string[] = [];
+        for (const file of files) {
+          const filePath = path.resolve(__dirname, file);
+          const content = await readFile(filePath, 'utf-8');
+          parts.push(
+            `-- =============================================================================\n-- MIGRATION FILE: ${file}\n-- =============================================================================\n\n${content}`
+          );
+        }
+        bundleSql = parts.join('\n\n');
       }
+
       res.json({
-        bundleSql: parts.join('\n\n'),
-        filesCount: files.length,
+        bundleSql,
+        filesCount: 1,
       });
     } catch (error: any) {
       console.error('Failed to export SQL bundle:', error);
@@ -1148,6 +1161,18 @@ app.get(
     }
   }
 );
+
+// Public / Admin Direct SQL Download Endpoint for easy copy-pasting into Supabase SQL Editor
+app.get('/api/sql/full-schema.sql', async (_req: Request, res: Response) => {
+  try {
+    const fullSchemaPath = path.resolve(__dirname, 'supabase', 'full_schema.sql');
+    const content = await readFile(fullSchemaPath, 'utf-8');
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.send(content);
+  } catch (error: any) {
+    res.status(500).send(`-- Error loading SQL: ${error.message}`);
+  }
+});
 
 // Admin Command Center: Full Database Snapshot Export (JSON Backup)
 app.get(
@@ -1186,6 +1211,13 @@ app.get(['/download/szmc-alumni-dist.zip', '/szmc-alumni-dist.zip', '/download/n
   const finalPath = existsSync(zipPath) ? zipPath : fallbackZip;
   res.download(finalPath, 'szmc-alumni-dist.zip');
 });
+
+// Direct download route for the consolidated master Supabase SQL script
+app.get(['/szmc_full_schema.sql', '/download/szmc_full_schema.sql'], (_req: Request, res: Response) => {
+  const sqlPath = path.resolve(__dirname, 'supabase', 'full_schema.sql');
+  res.download(sqlPath, 'SZMC_Alumni_Full_Database_Schema.sql');
+});
+
 
 // ---------------------------------------------------------------------------
 // VITE DEV SERVER / STATIC ASSET SERVING

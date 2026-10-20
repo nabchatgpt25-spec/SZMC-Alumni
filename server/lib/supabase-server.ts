@@ -1,23 +1,50 @@
 import 'dotenv/config';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-const supabaseUrl = (process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '').trim();
-const supabaseKey = (
-  process.env.VITE_SUPABASE_ANON_KEY ||
-  process.env.SUPABASE_ANON_KEY ||
-  ''
+export const DEFAULT_SUPABASE_URL = 'https://hjuyiqyviohinbhzaipl.supabase.co';
+export const DEFAULT_SUPABASE_ANON_KEY =
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhqdXlpcXl2aW9oaW5iaHphaXBsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE2MjQ2NzIsImV4cCI6MjEwNzIwMDY3Mn0.fppNXVPWcsWGsUIBwvirhjEkdDyUCX-SyydNWExbwk8';
+
+const urlCandidates = [
+  process.env.SUPABASE_URL,
+  process.env.VITE_SUPABASE_URL,
+];
+const rawUrl = (
+  urlCandidates.find(
+    (u) =>
+      typeof u === 'string' &&
+      (u.trim().startsWith('http://') || u.trim().startsWith('https://')) &&
+      !u.includes('placeholder.supabase.co')
+  ) || DEFAULT_SUPABASE_URL
+).trim();
+
+// Prefer service_role key for administrative operations if provided, otherwise fallback to anon key
+const keyCandidates = [
+  process.env.SUPABASE_SERVICE_ROLE_KEY,
+  process.env.SUPABASE_ANON_KEY,
+  process.env.VITE_SUPABASE_URL && !process.env.VITE_SUPABASE_URL.startsWith('http')
+    ? process.env.VITE_SUPABASE_URL
+    : undefined,
+  process.env.VITE_SUPABASE_ANON_KEY,
+];
+const rawKey = (
+  keyCandidates.find(
+    (k) =>
+      typeof k === 'string' &&
+      (k.trim().startsWith('eyJ') || k.trim().startsWith('sb_') || k.trim().length > 30)
+  ) || DEFAULT_SUPABASE_ANON_KEY
 ).trim();
 
 export const isSupabaseServerConfigured = Boolean(
-  supabaseUrl &&
-  supabaseKey &&
-  supabaseUrl.startsWith('http') &&
-  !supabaseUrl.includes('placeholder.supabase.co')
+  rawUrl &&
+  rawKey &&
+  rawUrl.startsWith('http') &&
+  !rawUrl.includes('placeholder.supabase.co')
 );
 
 // Safe fallback client for server-side execution so imports never fail at startup
-const effectiveUrl = isSupabaseServerConfigured ? supabaseUrl : 'https://placeholder.supabase.co';
-const effectiveKey = isSupabaseServerConfigured ? supabaseKey : 'public-anon-placeholder-key';
+const effectiveUrl = isSupabaseServerConfigured ? rawUrl : DEFAULT_SUPABASE_URL;
+const effectiveKey = isSupabaseServerConfigured ? rawKey : DEFAULT_SUPABASE_ANON_KEY;
 
 export const supabaseServer: SupabaseClient = createClient(effectiveUrl, effectiveKey, {
   auth: {
@@ -25,6 +52,7 @@ export const supabaseServer: SupabaseClient = createClient(effectiveUrl, effecti
     autoRefreshToken: false,
   },
 });
+
 
 /**
  * Reconciled Supabase Table Name Constants

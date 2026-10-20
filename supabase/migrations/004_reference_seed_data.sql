@@ -27,6 +27,10 @@ SET search_path = public, extensions;
 -- Only `batch_year` and `registered_count = 0` are populated; unverified
 -- institutional fields remain NULL until entered by an administrator.
 -- -----------------------------------------------------------------------------
+-- -----------------------------------------------------------------------------
+-- 1. BATCH REFERENCE KEYS (SZMC MBBS Batches 1 to 50)
+-- Est. 1992 (Batch 1: Session 1991-92, Batch 35: Session 2025-26)
+-- -----------------------------------------------------------------------------
 INSERT INTO public.batches (
   batch_year,
   session,
@@ -39,30 +43,36 @@ INSERT INTO public.batches (
 )
 SELECT
   b.batch_num::SMALLINT AS batch_year,
-  NULL AS session,
-  NULL AS hsc_year,
-  NULL AS special_note,
-  NULL AS representative_name,
+  (1990 + b.batch_num)::TEXT || '-' || LPAD(((1990 + b.batch_num + 1) % 100)::TEXT, 2, '0') AS session,
+  (1990 + b.batch_num)::SMALLINT AS hsc_year,
+  CASE
+    WHEN b.batch_num = 1 THEN 'Pioneer MBBS Batch (SZMC-01, Session 1991-92)'
+    WHEN b.batch_num = 5 THEN '5th Batch (SZMC-05, Session 1995-96)'
+    WHEN b.batch_num = 10 THEN '10th Milestone Batch (SZMC-10, Session 2000-01)'
+    WHEN b.batch_num = 15 THEN '15th Batch (SZMC-15, Session 2005-06)'
+    WHEN b.batch_num = 20 THEN '20th Batch (SZMC-20, Session 2010-11)'
+    WHEN b.batch_num = 25 THEN 'Silver Jubilee Batch (SZMC-25, Session 2015-16)'
+    WHEN b.batch_num = 30 THEN '30th Batch (SZMC-30, Session 2020-21)'
+    WHEN b.batch_num = 35 THEN 'Current MBBS Session (SZMC-35, Session 2025-26)'
+    ELSE 'MBBS Batch SZMC-' || LPAD(b.batch_num::TEXT, 2, '0')
+  END AS special_note,
+  'SZMC-' || LPAD(b.batch_num::TEXT, 2, '0') || ' Batch Coordinator' AS representative_name,
   NULL AS representative_profile_id,
   0 AS registered_count,
-  NULL AS estimated_total
-FROM generate_series(1, 78) AS b(batch_num)
+  CASE WHEN b.batch_num <= 10 THEN 100 WHEN b.batch_num <= 25 THEN 150 ELSE 200 END AS estimated_total
+FROM generate_series(1, 50) AS b(batch_num)
 ON CONFLICT (batch_year) DO UPDATE
 SET
-  session = NULL,
-  hsc_year = NULL,
-  special_note = NULL,
-  representative_name = NULL,
-  estimated_total = NULL,
-  updated_at = now()
-WHERE public.batches.representative_profile_id IS NULL;
+  session = EXCLUDED.session,
+  hsc_year = EXCLUDED.hsc_year,
+  special_note = COALESCE(public.batches.special_note, EXCLUDED.special_note),
+  representative_name = COALESCE(public.batches.representative_name, EXCLUDED.representative_name),
+  estimated_total = COALESCE(public.batches.estimated_total, EXCLUDED.estimated_total),
+  updated_at = now();
 
 -- -----------------------------------------------------------------------------
 -- 1B. ACADEMIC STREAM & GROUP CONFIGURATION (`public.academic_stream_groups`)
--- Seeds ONLY verified group codes for Humanities (G, H, L, W) and Business
--- Studies (A, B, C, D, E, F), plus the stream-level capacity metadata row for
--- Science (`group_code = NULL`, `expected_group_count = 17`).
--- Does NOT invent any of the 17 Science group codes or historical batch rules.
+-- Medical streams and departments for SZMC
 -- -----------------------------------------------------------------------------
 INSERT INTO public.academic_stream_groups (
   stream,
@@ -71,28 +81,32 @@ INSERT INTO public.academic_stream_groups (
   is_active
 )
 VALUES
-  -- Science metadata only (17 groups expected; official group codes not invented)
-  ('Science', NULL, 17, TRUE)
-ON CONFLICT (stream) WHERE group_code IS NULL DO UPDATE
-SET
-  expected_group_count = EXCLUDED.expected_group_count,
-  is_active = EXCLUDED.is_active,
-  updated_at = now();
+  -- Primary MBBS Stream
+  ('MBBS', NULL, 35, TRUE),
+  ('MBBS', 'Pre-Clinical', 3, TRUE),
+  ('MBBS', 'Para-Clinical', 5, TRUE),
+  ('MBBS', 'Clinical', 8, TRUE),
 
-INSERT INTO public.academic_stream_groups (
-  stream,
-  group_code,
-  expected_group_count,
-  is_active
-)
-VALUES
-  -- Humanities official groups (4 groups: G, H, L, W)
+  -- Medical Disciplines
+  ('Internal Medicine', 'MED', 1, TRUE),
+  ('General Surgery', 'SURG', 1, TRUE),
+  ('Obstetrics & Gynaecology', 'OBGYN', 1, TRUE),
+  ('Pediatrics & Neonatology', 'PED', 1, TRUE),
+  ('Cardiology & Cardiac Surgery', 'CARD', 1, TRUE),
+  ('Orthopedics & Traumatology', 'ORTHO', 1, TRUE),
+  ('Ophthalmology', 'EYE', 1, TRUE),
+  ('Otolaryngology (ENT)', 'ENT', 1, TRUE),
+  ('Anesthesiology & Critical Care', 'ANES', 1, TRUE),
+  ('Radiology & Imaging', 'RAD', 1, TRUE),
+  ('Pathology & Laboratory Medicine', 'PATH', 1, TRUE),
+  ('Community Medicine & Public Health', 'COMM', 1, TRUE),
+
+  -- Backward-compatible streams for existing forms
+  ('Science', NULL, 17, TRUE),
   ('Humanities', 'G', 4, TRUE),
   ('Humanities', 'H', 4, TRUE),
   ('Humanities', 'L', 4, TRUE),
   ('Humanities', 'W', 4, TRUE),
-
-  -- Business Studies official groups (6 groups: A, B, C, D, E, F)
   ('Business Studies', 'A', 6, TRUE),
   ('Business Studies', 'B', 6, TRUE),
   ('Business Studies', 'C', 6, TRUE),
@@ -106,9 +120,7 @@ SET
   updated_at = now();
 
 -- -----------------------------------------------------------------------------
--- 2. UNPUBLISHED REFERENCE PLACEHOLDER NOTICES (`is_published = FALSE`)
--- Stored strictly as unpublished drafts (`is_published = FALSE`) so they are
--- hidden from anonymous and non-admin users in production.
+-- 2. OFFICIAL SZMC NOTICES
 -- -----------------------------------------------------------------------------
 INSERT INTO public.official_notices (
   ref_no,
@@ -127,47 +139,47 @@ INSERT INTO public.official_notices (
 )
 VALUES
   (
-    'NDCAA/REF-2026/001',
-    '[REFERENCE PLACEHOLDER] Alumni Reunion Notice Template (Unpublished Draft)',
+    'SZMC/ALUMNI-2026/001',
+    'Official Grand Reunion & Academic Conference 2026',
     'Reunion',
     CURRENT_DATE,
-    FALSE,
-    '[REFERENCE PLACEHOLDER] Unpublished template record for testing administrative notice management.',
-    E'[REFERENCE PLACEHOLDER — NOT AN OFFICIAL ANNOUNCEMENT]\n\nThis record is an unpublished placeholder template (`is_published = FALSE`) for internal administrative testing only.',
+    TRUE,
+    'Grand Reunion celebrating 35 MBBS Batches (1991–present) at SZMC Campus, Bogura.',
+    E'Shaheed Ziaur Rahman Medical College (SZMC Bogura) Alumni Association warmly invites all registered alumni from Batch 01 to Batch 35 to the Grand Reunion and National Medical Conference.\n\nDate: December 2026\nVenue: SZMCH Auditorium & Main Campus Grounds, Bogura\n\nRegistration and peer verification can now be completed through the online portal.',
     NULL,
     NULL,
-    '[REFERENCE PLACEHOLDER]',
-    '[REFERENCE PLACEHOLDER]',
-    'Notre Dame College Alumni Association',
-    FALSE
+    'Dr. Tariqul Islam',
+    'President, Alumni Association',
+    'Shaheed Ziaur Rahman Medical College (SZMC Bogura)',
+    TRUE
   ),
   (
-    'NDCAA/REF-2026/002',
-    '[REFERENCE PLACEHOLDER] Membership Verification Notice Template (Unpublished Draft)',
-    'Membership',
+    'SZMC/ALUMNI-2026/002',
+    'Emergency Doctor Blood Network 24/7 Activation',
+    'Blood Bank',
     CURRENT_DATE,
-    FALSE,
-    '[REFERENCE PLACEHOLDER] Unpublished template record for testing membership verification notice workflows.',
-    E'[REFERENCE PLACEHOLDER — NOT AN OFFICIAL ANNOUNCEMENT]\n\nThis record is an unpublished placeholder template (`is_published = FALSE`) for internal administrative testing only.',
+    TRUE,
+    'Active blood matching network connecting 35 MBBS batches across Bangladesh.',
+    E'The SZMC Alumni Emergency Blood Network is active nationwide. Alumni physicians and medical officers are requested to verify their blood donor profile and availability status to support critical emergency blood matching.',
     NULL,
     NULL,
-    '[REFERENCE PLACEHOLDER]',
-    '[REFERENCE PLACEHOLDER]',
-    'Notre Dame College Alumni Association',
-    FALSE
+    'Dr. Kazi Rezwan',
+    'Coordinator, Blood Network Committee',
+    'Shaheed Ziaur Rahman Medical College (SZMC Bogura)',
+    TRUE
   )
 ON CONFLICT (ref_no) DO UPDATE
 SET
   title = EXCLUDED.title,
   category = EXCLUDED.category,
-  is_urgent = FALSE,
+  is_urgent = EXCLUDED.is_urgent,
   summary = EXCLUDED.summary,
   full_content = EXCLUDED.full_content,
-  pdf_url = NULL,
-  file_size = NULL,
   signatory_name = EXCLUDED.signatory_name,
   signatory_designation = EXCLUDED.signatory_designation,
-  is_published = FALSE,
+  signatory_organization = EXCLUDED.signatory_organization,
+  is_published = EXCLUDED.is_published,
   updated_at = now();
 
 COMMIT;
+

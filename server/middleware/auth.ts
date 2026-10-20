@@ -42,7 +42,7 @@ async function verifyAuthToken(token: string) {
       dbUser: {
         id: Number(profile.id),
         uid: user.id,
-        email: cleanEmail || `${user.id}@ndcalumni.org`,
+        email: cleanEmail || `${user.id}@szmcalumni.net`,
         fullName: profile.full_name || (user.user_metadata as any)?.full_name || 'SZMC Alumnus',
         role,
         accountStatus: 'active',

@@ -1,24 +1,43 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-const DEFAULT_SUPABASE_URL = 'https://gqbibeffpbvpopgmmqvr.supabase.co';
-const DEFAULT_SUPABASE_ANON_KEY =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdxYmliZWZmcGJ2cG9wZ21tcXZyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTEzMDQxMzQsImV4cCI6MjEwNjg4MDEzNH0.9G5VKEBVp-yGfx_uAhmt4uARKQPUH9-6qYVT2WJmOzE';
+export const DEFAULT_SUPABASE_URL = 'https://hjuyiqyviohinbhzaipl.supabase.co';
+export const DEFAULT_SUPABASE_ANON_KEY =
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhqdXlpcXl2aW9oaW5iaHphaXBsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE2MjQ2NzIsImV4cCI6MjEwNzIwMDY3Mn0.fppNXVPWcsWGsUIBwvirhjEkdDyUCX-SyydNWExbwk8';
 
-const rawUrl =
-  (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.trim() || DEFAULT_SUPABASE_URL;
-const rawAnonKey =
-  (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined)?.trim() || DEFAULT_SUPABASE_ANON_KEY;
+function resolveCredentials(): { url: string; anonKey: string } {
+  const envUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.trim();
+  const envAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined)?.trim();
+  const envSupabaseUrl = (import.meta.env.SUPABASE_URL as string | undefined)?.trim();
+  const envSupabaseAnonKey = (import.meta.env.SUPABASE_ANON_KEY as string | undefined)?.trim();
+
+  // Find a candidate that is a valid URL starting with http:// or https://
+  let resolvedUrl = [envUrl, envSupabaseUrl, envAnonKey].find(
+    (val) => typeof val === 'string' && (val.startsWith('http://') || val.startsWith('https://')) && !val.includes('placeholder.supabase.co')
+  );
+
+  // If user pasted publishable key or JWT into VITE_SUPABASE_URL, or swapped them
+  let resolvedKey = [envAnonKey, envSupabaseAnonKey, envUrl].find(
+    (val) => typeof val === 'string' && (val.startsWith('eyJ') || val.startsWith('sb_publishable_'))
+  );
+
+  if (!resolvedUrl) {
+    resolvedUrl = DEFAULT_SUPABASE_URL;
+  }
+  if (!resolvedKey) {
+    resolvedKey = DEFAULT_SUPABASE_ANON_KEY;
+  }
+
+  return { url: resolvedUrl, anonKey: resolvedKey };
+}
+
+const { url: effectiveUrl, anonKey: effectiveAnonKey } = resolveCredentials();
 
 export const isSupabaseConfigured = Boolean(
-  rawUrl &&
-  rawAnonKey &&
-  rawUrl.startsWith('http') &&
-  !rawUrl.includes('placeholder.supabase.co')
+  effectiveUrl &&
+  effectiveAnonKey &&
+  effectiveUrl.startsWith('http') &&
+  !effectiveUrl.includes('placeholder.supabase.co')
 );
-
-// Never use or expose service_role key in client code.
-const effectiveUrl = isSupabaseConfigured ? rawUrl : DEFAULT_SUPABASE_URL;
-const effectiveAnonKey = isSupabaseConfigured ? rawAnonKey : DEFAULT_SUPABASE_ANON_KEY;
 
 export const SUPABASE_API_URL = effectiveUrl;
 export const SUPABASE_API_ANON_KEY = effectiveAnonKey;

@@ -267,12 +267,36 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     if (isEmail) {
       const cleanEmail = cleanInput.toLowerCase();
-      const res = await supabase.auth.signInWithPassword({
-        email: cleanEmail,
-        password: pass,
-      });
-      authData = res.data;
-      authError = res.error;
+      try {
+        const res = await supabase.auth.signInWithPassword({
+          email: cleanEmail,
+          password: pass,
+        });
+        authData = res.data;
+        authError = res.error;
+      } catch (clientErr: any) {
+        authError = clientErr;
+      }
+
+      // If client direct sign-in failed due to network or connection, try backend server proxy
+      if (authError && (authError.message?.includes('fetch') || authError.message?.includes('network'))) {
+        try {
+          const fallbackRes = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ identifier: cleanEmail, password: pass }),
+          });
+          const fallbackJson = await fallbackRes.json();
+          if (fallbackRes.ok && fallbackJson.session) {
+            authData = { session: fallbackJson.session, user: fallbackJson.session.user };
+            authError = null;
+            await supabase.auth.setSession({
+              access_token: fallbackJson.session.access_token,
+              refresh_token: fallbackJson.session.refresh_token,
+            });
+          }
+        } catch {}
+      }
     } else {
       const norm = normalizePhoneNumber(cleanInput);
       if (!norm.isValid) {
@@ -282,12 +306,47 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       const formattedPhone = norm.formatted;
 
-      // Invoke Supabase Edge Function 'unified-phone-login' exclusively
-      const { data: edgeData, error: edgeErr } = await supabase.functions.invoke('unified-phone-login', {
-        body: { identifier: formattedPhone, password: pass },
-      });
+      let edgeData: any = null;
+      let edgeErr: any = null;
 
-      if (edgeErr) {
+      try {
+        const res = await supabase.functions.invoke('unified-phone-login', {
+          body: { identifier: formattedPhone, password: pass },
+        });
+        edgeData = res.data;
+        edgeErr = res.error;
+      } catch (err: any) {
+        edgeErr = err;
+      }
+
+      // If Edge Function invocation failed, is not deployed, or returned error, try backend endpoint /api/auth/unified-login
+      if (edgeErr || edgeData?.error || !edgeData?.session) {
+        try {
+          const fallbackRes = await fetch('/api/auth/unified-login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ identifier: formattedPhone, password: pass }),
+          });
+          const fallbackJson = await fallbackRes.json();
+          if (fallbackRes.ok && fallbackJson?.session) {
+            edgeData = { session: fallbackJson.session };
+            edgeErr = null;
+          } else if (fallbackRes.ok && fallbackJson?.profile) {
+            setCurrentUser(fallbackJson.profile);
+            setIsAdminUser(fallbackJson.profile.role === 'admin');
+            setIsLoggedIn(true);
+            return true;
+          } else if (!fallbackRes.ok && fallbackJson?.error) {
+            throw new Error(fallbackJson.error);
+          }
+        } catch (serverFallbackErr: any) {
+          if (serverFallbackErr.message && !serverFallbackErr.message.includes('fetch')) {
+            throw serverFallbackErr;
+          }
+        }
+      }
+
+      if (edgeErr && !edgeData?.session) {
         let parsedErr = '';
         try {
           if (edgeErr.context && typeof edgeErr.context.json === 'function') {
@@ -298,8 +357,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         } catch {}
 
         if (!parsedErr) {
-          const contextMsg = (edgeErr as any)?.context?.message || edgeErr.message || '';
-          parsedErr = contextMsg;
+          parsedErr = (edgeErr as any)?.context?.message || edgeErr.message || '';
         }
 
         if (parsedErr.includes('Failed to send a request') || parsedErr.includes('FunctionsFetchError')) {
