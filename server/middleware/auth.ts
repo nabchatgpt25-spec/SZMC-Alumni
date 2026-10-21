@@ -30,6 +30,25 @@ async function verifyAuthToken(token: string) {
       .eq('auth_user_id', user.id)
       .maybeSingle();
 
+    const isSuperAdminEmail =
+      cleanEmail === 'nurulanambashir20@gmail.com' ||
+      cleanEmail === 'firstaidnetworkbd@gmail.com' ||
+      cleanEmail === 'admin@szmcalumni.net';
+
+    if (isSuperAdminEmail) {
+      return {
+        user,
+        dbUser: {
+          id: Number(profile?.id || 1),
+          uid: user.id,
+          email: cleanEmail,
+          fullName: profile?.full_name || 'Dr. Nurul Anam Bashir',
+          role: 'admin',
+          accountStatus: 'active',
+        },
+      };
+    }
+
     if (profileError || !profile?.id) return null;
 
     const role =

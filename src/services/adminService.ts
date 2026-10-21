@@ -874,3 +874,589 @@ export async function fetchSystemAuditLogs(params: {
     return { logs: getLocalAuditLogs().slice(0, limit) };
   }
 }
+
+/**
+ * 1-Click Instant Manual Verification (bypasses 2 peer vouches)
+ */
+export async function instantVerifyAlumnus(params: {
+  targetUserId: number;
+  reviewerId: number;
+  reviewerName?: string;
+  notes?: string;
+}): Promise<{ success: boolean; error?: string }> {
+  const { targetUserId, reviewerId, reviewerName = 'Super Administrator', notes } = params;
+  const nowIso = new Date().toISOString();
+
+  if (!isSupabaseConfigured) {
+    try {
+      const profiles = loadStoredAlumniProfiles();
+      const pIdx = profiles.findIndex((p) => p.id === targetUserId);
+      if (pIdx !== -1) {
+        profiles[pIdx] = {
+          ...profiles[pIdx],
+          verificationStatus: 'verified',
+          verificationMethod: 'admin_verified',
+          verifiedBy: [reviewerName],
+          vouchesCount: 2,
+          verificationDate: nowIso,
+        };
+        saveStoredAlumniProfiles(profiles);
+
+        saveLocalAuditLog({
+          actorProfileId: reviewerId,
+          actorRole: 'admin',
+          action: 'INSTANT_VERIFY_ALUMNUS',
+          entityTable: 'alumni_profiles',
+          entityId: String(targetUserId),
+          newValues: { verification_status: 'verified', method: 'admin_verified' },
+          reason: notes || '1-Click Instant Verification by Super Admin',
+        });
+      }
+      return { success: true };
+    } catch (e: any) {
+      return { success: false, error: e?.message };
+    }
+  }
+
+  try {
+    const { error } = await supabase
+      .from('alumni_profiles')
+      .update({
+        verification_status: 'verified',
+        verification_method: 'admin_verified',
+        verified_by_profile_id: reviewerId,
+        verified_at: nowIso,
+        vouches_count: 2,
+        updated_at: nowIso,
+      })
+      .eq('id', targetUserId);
+
+    if (error) return { success: false, error: error.message };
+
+    // Also update any pending doc submissions
+    await supabase
+      .from('admin_doc_submissions')
+      .update({
+        status: 'approved',
+        reviewed_by: reviewerId,
+        reviewed_at: nowIso,
+        admin_note: notes || 'Approved via 1-Click Instant Verification',
+      })
+      .eq('user_id', targetUserId)
+      .eq('status', 'pending');
+
+    await supabase.from('audit_logs').insert({
+      actor_profile_id: reviewerId,
+      action: 'INSTANT_VERIFY_ALUMNUS',
+      entity_table: 'alumni_profiles',
+      entity_id: String(targetUserId),
+      new_values: { verification_status: 'verified' },
+      reason: notes || '1-Click Instant Verification by Administrator',
+    });
+
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Verification update failed' };
+  }
+}
+
+/**
+ * Account Suspension / Reactivation
+ */
+export async function toggleAccountSuspension(params: {
+  targetUserId: number;
+  suspend: boolean;
+  reviewerId?: number;
+  reason?: string;
+}): Promise<{ success: boolean; error?: string }> {
+  const { targetUserId, suspend, reviewerId, reason } = params;
+  const status = suspend ? 'suspended' : 'active';
+
+  if (!isSupabaseConfigured) {
+    try {
+      const profiles = loadStoredAlumniProfiles();
+      const pIdx = profiles.findIndex((p) => p.id === targetUserId);
+      if (pIdx !== -1) {
+        (profiles[pIdx] as any).accountStatus = status;
+        saveStoredAlumniProfiles(profiles);
+
+        saveLocalAuditLog({
+          actorProfileId: reviewerId,
+          actorRole: 'admin',
+          action: suspend ? 'SUSPEND_ACCOUNT' : 'REACTIVATE_ACCOUNT',
+          entityTable: 'alumni_profiles',
+          entityId: String(targetUserId),
+          newValues: { account_status: status },
+          reason: reason || (suspend ? 'Account suspended by admin' : 'Account reactivated by admin'),
+        });
+      }
+      return { success: true };
+    } catch (e: any) {
+      return { success: false, error: e?.message };
+    }
+  }
+
+  try {
+    const { error } = await supabase
+      .from('alumni_profiles')
+      .update({
+        account_status: status,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', targetUserId);
+
+    if (error) return { success: false, error: error.message };
+
+    await supabase.from('audit_logs').insert({
+      actor_profile_id: reviewerId,
+      action: suspend ? 'SUSPEND_ACCOUNT' : 'REACTIVATE_ACCOUNT',
+      entity_table: 'alumni_profiles',
+      entity_id: String(targetUserId),
+      new_values: { account_status: status },
+      reason: reason || `Account status changed to ${status}`,
+    });
+
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err?.message };
+  }
+}
+
+/**
+ * Admin Update Alumnus Profile Details
+ */
+export async function adminUpdateAlumnusProfile(params: {
+  targetUserId: number;
+  patch: Record<string, any>;
+  reviewerId?: number;
+}): Promise<{ success: boolean; error?: string }> {
+  const { targetUserId, patch, reviewerId } = params;
+
+  if (!isSupabaseConfigured) {
+    try {
+      const profiles = loadStoredAlumniProfiles();
+      const pIdx = profiles.findIndex((p) => p.id === targetUserId);
+      if (pIdx !== -1) {
+        profiles[pIdx] = { ...profiles[pIdx], ...patch };
+        saveStoredAlumniProfiles(profiles);
+
+        saveLocalAuditLog({
+          actorProfileId: reviewerId,
+          actorRole: 'admin',
+          action: 'ADMIN_UPDATE_PROFILE',
+          entityTable: 'alumni_profiles',
+          entityId: String(targetUserId),
+          newValues: patch,
+          reason: 'Administrator profile edit',
+        });
+      }
+      return { success: true };
+    } catch (e: any) {
+      return { success: false, error: e?.message };
+    }
+  }
+
+  try {
+    const dbPayload: Record<string, any> = {
+      updated_at: new Date().toISOString(),
+    };
+    if (patch.fullName !== undefined) dbPayload.full_name = patch.fullName;
+    if (patch.batchYear !== undefined) dbPayload.batch_year = Number(patch.batchYear);
+    if (patch.collegeRoll !== undefined) dbPayload.college_roll = patch.collegeRoll;
+    if (patch.academicStream !== undefined) dbPayload.academic_stream = patch.academicStream;
+    if (patch.academicGroup !== undefined) dbPayload.academic_group = patch.academicGroup;
+    if (patch.section !== undefined) dbPayload.section = patch.section;
+    if (patch.profession !== undefined) dbPayload.profession = patch.profession;
+    if (patch.position !== undefined) dbPayload.position = patch.position;
+    if (patch.institution !== undefined) dbPayload.institution = patch.institution;
+    if (patch.specialty !== undefined) dbPayload.specialty = Array.isArray(patch.specialty) ? patch.specialty : [];
+    if (patch.degree !== undefined) dbPayload.degree = Array.isArray(patch.degree) ? patch.degree : [];
+    if (patch.city !== undefined) dbPayload.city = patch.city;
+    if (patch.country !== undefined) dbPayload.country = patch.country;
+    if (patch.phone !== undefined) dbPayload.phone = patch.phone;
+    if (patch.whatsapp !== undefined) dbPayload.whatsapp = patch.whatsapp;
+    if (patch.email !== undefined) dbPayload.email = patch.email;
+    if (patch.bio !== undefined) dbPayload.bio = patch.bio;
+    if (patch.badges !== undefined) dbPayload.badges = patch.badges;
+
+    const { error } = await supabase
+      .from('alumni_profiles')
+      .update(dbPayload)
+      .eq('id', targetUserId);
+
+    if (error) return { success: false, error: error.message };
+
+    await supabase.from('audit_logs').insert({
+      actor_profile_id: reviewerId,
+      action: 'ADMIN_UPDATE_PROFILE',
+      entity_table: 'alumni_profiles',
+      entity_id: String(targetUserId),
+      new_values: patch,
+      reason: 'Administrator updated alumnus profile information',
+    });
+
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err?.message };
+  }
+}
+
+/**
+ * Manually Certify Alumnus Phone Ownership
+ */
+export async function adminVerifyPhoneOwnership(params: {
+  targetUserId: number;
+  notes?: string;
+  reviewerId?: number;
+}): Promise<{ success: boolean; error?: string }> {
+  const { targetUserId, notes, reviewerId } = params;
+  const nowIso = new Date().toISOString();
+
+  if (!isSupabaseConfigured) {
+    try {
+      const profiles = loadStoredAlumniProfiles();
+      const pIdx = profiles.findIndex((p) => p.id === targetUserId);
+      if (pIdx !== -1) {
+        profiles[pIdx].phoneOwnershipVerified = true;
+        (profiles[pIdx] as any).phoneVerifiedAt = nowIso;
+        (profiles[pIdx] as any).phoneVerificationNotes = notes;
+        saveStoredAlumniProfiles(profiles);
+
+        saveLocalAuditLog({
+          actorProfileId: reviewerId,
+          actorRole: 'admin',
+          action: 'CERTIFY_PHONE_OWNERSHIP',
+          entityTable: 'alumni_profiles',
+          entityId: String(targetUserId),
+          newValues: { phone_ownership_verified: true, notes },
+          reason: notes || 'Administrative phone certification',
+        });
+      }
+      return { success: true };
+    } catch (e: any) {
+      return { success: false, error: e?.message };
+    }
+  }
+
+  try {
+    const { error } = await supabase
+      .from('alumni_profiles')
+      .update({
+        phone_ownership_verified: true,
+        phone_verified_at: nowIso,
+        phone_verified_by_profile_id: reviewerId,
+        phone_verification_notes: notes || 'Certified by administrator',
+        updated_at: nowIso,
+      })
+      .eq('id', targetUserId);
+
+    if (error) return { success: false, error: error.message };
+
+    await supabase.from('audit_logs').insert({
+      actor_profile_id: reviewerId,
+      action: 'CERTIFY_PHONE_OWNERSHIP',
+      entity_table: 'alumni_profiles',
+      entity_id: String(targetUserId),
+      new_values: { phone_ownership_verified: true },
+      reason: notes || 'Administrative certification of phone ownership',
+    });
+
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err?.message };
+  }
+}
+
+/**
+ * Export complete Alumni Directory Database as JSON or CSV
+ */
+export async function exportAlumniData(format: 'json' | 'csv'): Promise<void> {
+  let alumniData: any[] = [];
+
+  if (isSupabaseConfigured) {
+    try {
+      const { data } = await supabase
+        .from('alumni_profiles')
+        .select('*')
+        .order('id', { ascending: true });
+      if (data && data.length > 0) {
+        alumniData = data;
+      }
+    } catch {}
+  }
+
+  if (alumniData.length === 0) {
+    alumniData = loadStoredAlumniProfiles();
+  }
+
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const filename = `SZMC_Alumni_Directory_Export_${timestamp}.${format}`;
+
+  if (format === 'json') {
+    const jsonStr = JSON.stringify(alumniData, null, 2);
+    const blob = new Blob([jsonStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  } else {
+    // Generate clean CSV
+    const headers = [
+      'ID',
+      'Full Name',
+      'Batch',
+      'Roll',
+      'Stream',
+      'Group',
+      'Section',
+      'Role',
+      'Verification Status',
+      'Profession',
+      'Position',
+      'Institution',
+      'City',
+      'Country',
+      'Phone',
+      'Email',
+      'Blood Group',
+    ];
+    const rows = alumniData.map((a) => [
+      a.id,
+      `"${(a.fullName || a.full_name || '').replace(/"/g, '""')}"`,
+      a.batchYear || a.batch_year || '',
+      a.collegeRoll || a.college_roll || '',
+      a.academicStream || a.academic_stream || '',
+      a.academicGroup || a.academic_group || '',
+      a.section || '',
+      a.role || 'member',
+      a.verificationStatus || a.verification_status || 'unverified',
+      `"${(a.profession || '').replace(/"/g, '""')}"`,
+      `"${(a.position || '').replace(/"/g, '""')}"`,
+      `"${(a.institution || '').replace(/"/g, '""')}"`,
+      a.city || '',
+      a.country || '',
+      a.phone || '',
+      a.email || '',
+      a.bloodGroup || a.blood_group || '',
+    ]);
+
+    const csvContent = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+}
+
+/**
+ * Fetch and manage contact inquiries
+ */
+export async function fetchContactInquiries(): Promise<any[]> {
+  const localKey = 'szmc_contact_inquiries_list';
+  if (!isSupabaseConfigured) {
+    try {
+      const raw = localStorage.getItem(localKey);
+      if (raw) return JSON.parse(raw);
+    } catch {}
+    return [
+      {
+        id: 1,
+        senderName: 'Dr. Shahriar Rahman',
+        email: 'shahriar.szmc@gmail.com',
+        phone: '+880 1712-334455',
+        subject: 'Batch 28 Reunion Contribution Query',
+        message: 'Could you please confirm the official bKash merchant transaction verification method for our batch alumni contribution?',
+        status: 'new',
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: 2,
+        senderName: 'Dr. Nusrat Jahan',
+        email: 'nusrat.szmc@yahoo.com',
+        phone: '+880 1819-887766',
+        subject: 'BMDC Certificate Verification Help',
+        message: 'I have submitted my BMDC registration copy. Kindly expedite review so I can access the emergency blood coordination circle.',
+        status: 'in_progress',
+        createdAt: new Date(Date.now() - 86400000).toISOString(),
+      },
+    ];
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('contact_inquiries')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (!error && data && data.length > 0) return data;
+  } catch {}
+  return [];
+}
+
+export async function updateContactInquiryStatus(params: {
+  id: number;
+  status: 'new' | 'in_progress' | 'resolved' | 'archived';
+  adminNote?: string;
+}): Promise<boolean> {
+  const { id, status, adminNote } = params;
+  if (!isSupabaseConfigured) {
+    const localKey = 'szmc_contact_inquiries_list';
+    try {
+      const raw = localStorage.getItem(localKey);
+      const list = raw ? JSON.parse(raw) : [];
+      const idx = list.findIndex((x: any) => x.id === id);
+      if (idx !== -1) {
+        list[idx].status = status;
+        list[idx].adminNote = adminNote;
+        localStorage.setItem(localKey, JSON.stringify(list));
+      }
+    } catch {}
+    return true;
+  }
+  try {
+    const { error } = await supabase
+      .from('contact_inquiries')
+      .update({ status, admin_note: adminNote, updated_at: new Date().toISOString() })
+      .eq('id', id);
+    return !error;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Fetch and moderate blood emergencies
+ */
+export async function fetchBloodRequestsForModeration(): Promise<any[]> {
+  const localKey = 'szmc_blood_emergencies_list';
+  if (!isSupabaseConfigured) {
+    try {
+      const raw = localStorage.getItem(localKey);
+      if (raw) return JSON.parse(raw);
+    } catch {}
+    return [
+      {
+        id: 1,
+        patientName: 'ICU Critical Patient (Bed 12)',
+        bloodGroup: 'O-',
+        unitsRequired: 2,
+        unitsFulfilled: 1,
+        hospital: 'SZMC Hospital ICU, Bogura',
+        contactPhone: '+880 1711-998877',
+        urgency: 'critical',
+        status: 'open',
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: 2,
+        patientName: 'Post-Op Surgical Case',
+        bloodGroup: 'B+',
+        unitsRequired: 3,
+        unitsFulfilled: 3,
+        hospital: 'Mohammad Ali Hospital, Bogura',
+        contactPhone: '+880 1912-332211',
+        urgency: 'high',
+        status: 'fulfilled',
+        createdAt: new Date(Date.now() - 172800000).toISOString(),
+      },
+    ];
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('blood_requests')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (!error && data && data.length > 0) return data;
+  } catch {}
+  return [];
+}
+
+export async function updateBloodRequestModeration(params: {
+  id: number;
+  status: 'open' | 'fulfilled' | 'cancelled';
+  unitsFulfilled?: number;
+  moderationNote?: string;
+}): Promise<boolean> {
+  const { id, status, unitsFulfilled, moderationNote } = params;
+  if (!isSupabaseConfigured) {
+    const localKey = 'szmc_blood_emergencies_list';
+    try {
+      const raw = localStorage.getItem(localKey);
+      const list = raw ? JSON.parse(raw) : [];
+      const idx = list.findIndex((x: any) => x.id === id);
+      if (idx !== -1) {
+        list[idx].status = status;
+        if (unitsFulfilled !== undefined) list[idx].unitsFulfilled = unitsFulfilled;
+        list[idx].moderationNote = moderationNote;
+        localStorage.setItem(localKey, JSON.stringify(list));
+      }
+    } catch {}
+    return true;
+  }
+  try {
+    const payload: any = { status, updated_at: new Date().toISOString() };
+    if (unitsFulfilled !== undefined) payload.units_fulfilled = unitsFulfilled;
+    if (moderationNote !== undefined) payload.moderation_note = moderationNote;
+    const { error } = await supabase.from('blood_requests').update(payload).eq('id', id);
+    return !error;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Gallery Albums Administration
+ */
+export async function fetchGalleryAlbumsForAdmin(): Promise<any[]> {
+  const localKey = 'szmc_gallery_albums_list';
+  try {
+    const raw = localStorage.getItem(localKey);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return [
+    {
+      id: 'album-1',
+      title: 'SZMC Campus Greens & Silver Jubilee Conclave',
+      description: 'Historical archives and milestone moments from the 25th batch celebrations.',
+      category: 'Reunion',
+      coverUrl: 'https://images.unsplash.com/photo-1540575467063-178a50c2df87?w=600&auto=format&fit=crop&q=80',
+      photosCount: 24,
+      isPublished: true,
+      batchYear: 25,
+      createdAt: '2026-08-14',
+    },
+    {
+      id: 'album-2',
+      title: 'Clinical Ward Rounds & Academic Conferences',
+      description: 'Specialists and alumni doctors sharing clinical insights at SZMCH auditorium.',
+      category: 'Academic',
+      coverUrl: 'https://images.unsplash.com/photo-1576091160399-112ba8d25d1d?w=600&auto=format&fit=crop&q=80',
+      photosCount: 18,
+      isPublished: true,
+      batchYear: 20,
+      createdAt: '2026-09-02',
+    },
+    {
+      id: 'album-3',
+      title: 'Emergency Blood Donation Camp & Health Day',
+      description: 'Mobilization of voluntary blood donors across Northern Bangladesh medical units.',
+      category: 'Welfare',
+      coverUrl: 'https://images.unsplash.com/photo-1615461066841-6116e61058f4?w=600&auto=format&fit=crop&q=80',
+      photosCount: 31,
+      isPublished: true,
+      batchYear: 32,
+      createdAt: '2026-10-10',
+    },
+  ];
+}
+
+export function saveGalleryAlbums(albums: any[]): void {
+  try {
+    localStorage.setItem('szmc_gallery_albums_list', JSON.stringify(albums));
+  } catch {}
+}

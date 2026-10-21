@@ -28,6 +28,7 @@ import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { NDCLogo } from './NDCLogo';
 import { loadVouchRequests } from '../utils/verificationService';
+import { isUserSuperAdmin, isUserSubAdmin } from '../types';
 
 export interface NavItemConfig {
   id: string;
@@ -64,6 +65,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const { currentUser } = useAuth();
   const isVerified = (currentUser.verificationStatus || 'verified') === 'verified';
   const pendingCount = loadVouchRequests().filter((r) => r.status === 'pending').length;
+  const isSuperAdmin = isUserSuperAdmin(currentUser);
+  const isSubAdmin = isUserSubAdmin(currentUser);
 
   // Segment 1: MAIN Navigation
   const mainNavItems: NavItemConfig[] = [
@@ -313,31 +316,61 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 </button>
               )}
 
-              {/* Admin Command Hub */}
-              <button
-                type="button"
-                onClick={() => {
-                  onSelectTab('admin');
-                  onClose();
-                }}
-                className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-xl font-medium text-xs sm:text-[13px] transition-all text-left cursor-pointer group ${
-                  isItemActive('admin')
-                    ? 'bg-indigo-600 text-white font-bold shadow-md shadow-indigo-600/25'
-                    : 'text-indigo-700 dark:text-indigo-300 hover:text-indigo-950 dark:hover:text-white hover:bg-indigo-100/60 dark:hover:bg-indigo-950/50'
-                }`}
-              >
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <ShieldAlert
-                    className={`w-4 h-4 shrink-0 transition-colors ${
-                      isItemActive('admin') ? 'text-white' : 'text-indigo-600 dark:text-indigo-400'
-                    }`}
-                  />
-                  <span className="truncate font-bold">Admin Hub</span>
-                </div>
-                <span className="shrink-0 text-[9px] font-black uppercase px-1.5 py-0.5 rounded-md border tracking-wider bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 border-indigo-500/30">
-                  ADMIN
-                </span>
-              </button>
+              {/* Super Admin Command Hub - Strictly visible ONLY to verified Super Admins */}
+              {isSuperAdmin && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onSelectTab('admin');
+                    onClose();
+                  }}
+                  className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-xl font-medium text-xs sm:text-[13px] transition-all text-left cursor-pointer group ${
+                    isItemActive('admin')
+                      ? 'bg-gradient-to-r from-indigo-600 to-blue-600 text-white font-bold shadow-md shadow-indigo-600/30'
+                      : 'text-indigo-700 dark:text-indigo-300 hover:text-indigo-950 dark:hover:text-white hover:bg-indigo-100/70 dark:hover:bg-indigo-950/60 border border-indigo-200/50 dark:border-indigo-800/40'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <ShieldAlert
+                      className={`w-4 h-4 shrink-0 transition-colors ${
+                        isItemActive('admin') ? 'text-white' : 'text-indigo-600 dark:text-indigo-400 animate-pulse'
+                      }`}
+                    />
+                    <span className="truncate font-black tracking-tight">Super Admin Hub</span>
+                  </div>
+                  <span className="shrink-0 text-[9px] font-black uppercase px-2 py-0.5 rounded-md border tracking-wider bg-indigo-500/20 text-indigo-700 dark:text-indigo-200 border-indigo-500/40 shadow-xs">
+                    ROOT ADMIN
+                  </span>
+                </button>
+              )}
+
+              {/* Sub-Admin Portal - Strictly visible ONLY to appointed Sub-Admins / Moderators */}
+              {isSubAdmin && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onSelectTab('admin');
+                    onClose();
+                  }}
+                  className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-xl font-medium text-xs sm:text-[13px] transition-all text-left cursor-pointer group ${
+                    isItemActive('admin')
+                      ? 'bg-gradient-to-r from-teal-600 to-emerald-600 text-white font-bold shadow-md shadow-teal-600/30'
+                      : 'text-teal-700 dark:text-teal-300 hover:text-teal-950 dark:hover:text-white hover:bg-teal-100/70 dark:hover:bg-teal-950/60 border border-teal-200/50 dark:border-teal-800/40'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <ShieldCheck
+                      className={`w-4 h-4 shrink-0 transition-colors ${
+                        isItemActive('admin') ? 'text-white' : 'text-teal-600 dark:text-teal-400'
+                      }`}
+                    />
+                    <span className="truncate font-black tracking-tight">Sub-Admin Portal</span>
+                  </div>
+                  <span className="shrink-0 text-[9px] font-black uppercase px-2 py-0.5 rounded-md border tracking-wider bg-teal-500/20 text-teal-700 dark:text-teal-200 border-teal-500/40 shadow-xs">
+                    SUB-ADMIN
+                  </span>
+                </button>
+              )}
 
               {/* Quick Light / Dark Mode Toggle */}
               <button

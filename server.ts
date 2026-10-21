@@ -138,7 +138,7 @@ function resolveActor(req: AuthRequest) {
     const user = req.user as any;
     return {
       uid: user.uid || user.id || 'admin-user',
-      email: user.email || 'admin@ndcalumni.org',
+      email: user.email || 'admin@szmcalumni.net',
       role: 'admin',
     };
   }

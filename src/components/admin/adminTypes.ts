@@ -15,6 +15,7 @@ export type AdminSectionId =
   | 'moderation'
   | 'audit'
   | 'small_admins'
+  | 'customizer'
   | 'documents'
   | 'alumni'
   | 'batches'

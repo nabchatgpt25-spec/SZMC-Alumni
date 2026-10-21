@@ -5,6 +5,7 @@ import { NDCLogo } from './NDCLogo';
 import { NotificationDropdown } from './NotificationDropdown';
 import { useAuth } from '../context/AuthContext';
 import { loadVouchRequests } from '../utils/verificationService';
+import { isUserSuperAdmin, isUserSubAdmin } from '../types';
 
 interface HeaderProps {
   onToggleSidebar: () => void;
@@ -29,6 +30,8 @@ export const Header: React.FC<HeaderProps> = ({
 
   const isUserVerified = (currentUser.verificationStatus || 'verified') === 'verified';
   const userVouchesCount = currentUser.vouchesCount ?? (currentUser.verifiedBy?.length ?? (isUserVerified ? 2 : 0));
+  const isSuperAdmin = isUserSuperAdmin(currentUser);
+  const isSubAdmin = isUserSubAdmin(currentUser);
 
   useEffect(() => {
     const syncVouches = () => {
@@ -209,22 +212,45 @@ export const Header: React.FC<HeaderProps> = ({
                     </button>
                   )}
 
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onNavigate('admin');
-                      setShowProfileMenu(false);
-                    }}
-                    className="w-full flex items-center justify-between gap-2 px-3 py-2 text-xs font-medium text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 rounded-lg transition-colors text-left"
-                  >
-                    <span className="flex items-center gap-2.5">
-                      <ShieldAlert className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                      <span className="font-bold">Admin Hub</span>
-                    </span>
-                    <span className="text-[10px] font-black uppercase px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-600 dark:text-indigo-400">
-                      ADMIN
-                    </span>
-                  </button>
+                  {/* Super Admin Hub in profile dropdown */}
+                  {isSuperAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onNavigate('admin');
+                        setShowProfileMenu(false);
+                      }}
+                      className="w-full flex items-center justify-between gap-2 px-3 py-2 text-xs font-medium text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 rounded-lg transition-colors text-left"
+                    >
+                      <span className="flex items-center gap-2.5">
+                        <ShieldAlert className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                        <span className="font-bold">Super Admin Hub</span>
+                      </span>
+                      <span className="text-[10px] font-black uppercase px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-600 dark:text-indigo-400">
+                        ROOT
+                      </span>
+                    </button>
+                  )}
+
+                  {/* Sub-Admin Portal in profile dropdown */}
+                  {isSubAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onNavigate('admin');
+                        setShowProfileMenu(false);
+                      }}
+                      className="w-full flex items-center justify-between gap-2 px-3 py-2 text-xs font-medium text-teal-700 dark:text-teal-300 hover:bg-teal-50 dark:hover:bg-teal-950/40 rounded-lg transition-colors text-left"
+                    >
+                      <span className="flex items-center gap-2.5">
+                        <ShieldCheck className="w-4 h-4 text-teal-600 dark:text-teal-400" />
+                        <span className="font-bold">Sub-Admin Portal</span>
+                      </span>
+                      <span className="text-[10px] font-black uppercase px-1.5 py-0.5 rounded bg-teal-500/15 text-teal-600 dark:text-teal-400">
+                        MODERATOR
+                      </span>
+                    </button>
+                  )}
 
                   <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
 

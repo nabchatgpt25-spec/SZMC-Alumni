@@ -76,6 +76,26 @@ export interface VouchRequest {
 }
 
 export type UserRole = 'member' | 'batch_representative' | 'moderator' | 'admin';
+
+export const SUPER_ADMIN_EMAILS: readonly string[] = [
+  'firstaidnetworkbd@gmail.com',
+  'nurulanambashir20@gmail.com',
+  'admin@szmcalumni.net',
+];
+
+export function isUserSuperAdmin(user?: { email?: string | null; role?: string | null } | null): boolean {
+  if (!user) return false;
+  const cleanEmail = (user.email || '').toLowerCase().trim();
+  if (cleanEmail && SUPER_ADMIN_EMAILS.includes(cleanEmail)) return true;
+  return user.role === 'admin';
+}
+
+export function isUserSubAdmin(user?: { email?: string | null; role?: string | null } | null): boolean {
+  if (!user) return false;
+  if (isUserSuperAdmin(user)) return false;
+  return user.role === 'moderator' || user.role === 'batch_representative';
+}
+
 export type AcademicStreamType = 'MBBS' | 'Science' | 'Humanities' | 'Business Studies';
 
 export interface AlumniProfile {

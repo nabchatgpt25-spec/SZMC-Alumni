@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { Megaphone, ChevronRight, Pause, Play, Bell } from 'lucide-react';
+import { Megaphone, ChevronRight, Pause, Play, Bell, AlertTriangle } from 'lucide-react';
 import { OFFICIAL_NOTICES, OfficialNotice } from '../../data/noticesData';
+import { useSiteConfig } from '../../services/siteConfigService';
 
 interface AnnouncementTickerProps {
   onSelectNotice: (notice: OfficialNotice) => void;
@@ -11,17 +12,27 @@ export const AnnouncementTicker: React.FC<AnnouncementTickerProps> = ({
   onSelectNotice,
   onOpenNoticeBoard,
 }) => {
+  const { config } = useSiteConfig();
   const [isPaused, setIsPaused] = useState(false);
-  const urgentNotices = OFFICIAL_NOTICES;
+  const urgentNotices = config.notices && config.notices.length > 0 ? (config.notices as any) : OFFICIAL_NOTICES;
+
+  const isEmergencyTicker = config.liveTickerEnabled && config.liveTickerMessage;
 
   return (
     <div className="bg-blue-900 dark:bg-slate-900 border-y border-blue-800 dark:border-slate-800 text-white shadow-xs overflow-hidden relative z-20">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 flex items-center h-11 text-xs">
         {/* Ticker Label Badge */}
-        <div className="flex items-center gap-1.5 px-3 py-1 bg-amber-500 text-slate-950 font-black rounded-lg uppercase tracking-wider text-[11px] shrink-0 shadow-xs mr-3">
-          <Megaphone className="w-3.5 h-3.5 animate-bounce" />
-          <span className="hidden sm:inline">OFFICIAL NOTICE</span>
-          <span className="sm:hidden">NOTICE</span>
+        {/* Ticker Label Badge */}
+        <div className={`flex items-center gap-1.5 px-3 py-1 font-black rounded-lg uppercase tracking-wider text-[11px] shrink-0 shadow-xs mr-3 ${
+          isEmergencyTicker && config.liveTickerUrgency === 'emergency'
+            ? 'bg-rose-600 text-white animate-pulse'
+            : isEmergencyTicker && config.liveTickerUrgency === 'urgent'
+            ? 'bg-amber-500 text-slate-950'
+            : 'bg-amber-500 text-slate-950'
+        }`}>
+          {isEmergencyTicker ? <AlertTriangle className="w-3.5 h-3.5" /> : <Megaphone className="w-3.5 h-3.5 animate-bounce" />}
+          <span className="hidden sm:inline">{isEmergencyTicker ? (config.liveTickerUrgency === 'emergency' ? 'EMERGENCY BROADCAST' : 'LIVE ANNOUNCEMENT') : 'OFFICIAL NOTICE'}</span>
+          <span className="sm:hidden">{isEmergencyTicker ? 'ALERT' : 'NOTICE'}</span>
         </div>
 
         {/* Scrolling News Strip */}
@@ -40,7 +51,18 @@ export const AnnouncementTicker: React.FC<AnnouncementTickerProps> = ({
               animationIterationCount: 'infinite',
             }}
           >
-            {urgentNotices.concat(urgentNotices).map((item, idx) => (
+            {isEmergencyTicker && (
+              <div className="inline-flex items-center gap-2 font-bold text-amber-200">
+                <span className="w-2 h-2 rounded-full bg-rose-400 animate-ping shrink-0" />
+                <span>{config.liveTickerMessage}</span>
+                {config.liveTickerActionText && (
+                  <span className="px-2 py-0.5 rounded bg-amber-400 text-slate-900 text-[10px] font-black uppercase tracking-wider ml-1">
+                    {config.liveTickerActionText}
+                  </span>
+                )}
+              </div>
+            )}
+            {urgentNotices.concat(urgentNotices).map((item: any, idx: number) => (
               <button
                 key={`${item.id}-${idx}`}
                 type="button"

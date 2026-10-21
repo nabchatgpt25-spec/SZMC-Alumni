@@ -1,6 +1,6 @@
 import { User } from '@supabase/supabase-js';
 import { supabase, isSupabaseConfigured, ALUMNI_PUBLIC_COLUMNS } from './supabase.ts';
-import { AlumniProfile, UserRole } from '../types.ts';
+import { AlumniProfile, UserRole, SUPER_ADMIN_EMAILS } from '../types.ts';
 import { formatToE164Phone } from '../utils/phone.ts';
 import { normalizeAcademicStreamAndGroup } from '../utils/academicGroupMapping.ts';
 
@@ -13,36 +13,38 @@ export function mapSupabaseRowToAlumniProfile(row: any): AlumniProfile {
     throw new Error('Cannot map empty row to AlumniProfile');
   }
 
-  const email = row.email || '';
-  const resolvedRole: UserRole =
-    row.role === 'admin' || row.role === 'moderator'
-      ? row.role
-      : 'member';
+  const email = (row.email || '').toLowerCase().trim();
+  const isSuperAdminEmail = SUPER_ADMIN_EMAILS.includes(email);
+  const resolvedRole: UserRole = isSuperAdminEmail
+    ? 'admin'
+    : (row.role === 'admin' || row.role === 'moderator' ? row.role : 'member');
 
   return {
     id: Number(row.id),
     userId: Number(row.id),
     authUserId: row.auth_user_id || undefined,
     role: resolvedRole,
-    fullName: row.full_name || 'SZMC Alumnus',
+    fullName: isSuperAdminEmail ? (row.full_name || 'Dr. Nurul Anam Bashir') : (row.full_name || 'SZMC Alumnus'),
     avatarUrl:
       row.avatar_url ||
       '/assets/aistudio/images__1__2778177d.png',
     coverUrl: row.cover_url || undefined,
-    batchYear: Number(row.batch_year) || 68,
+    batchYear: isSuperAdminEmail ? (Number(row.batch_year) || 34) : (Number(row.batch_year) || 25),
     session: row.session || undefined,
     collegeRoll: row.college_roll || undefined,
-    academicStream: row.academic_stream || 'Science',
+    academicStream: row.academic_stream || 'Medicine',
     academicGroup: row.academic_group || undefined,
-    group: row.academic_stream || 'Science',
+    group: row.academic_stream || 'MBBS',
     section: row.section || undefined,
-    verificationStatus: row.verification_status || 'unverified',
-    verificationMethod: row.verification_method || undefined,
-    verifiedBy: row.verified_by_profile_id ? [String(row.verified_by_profile_id)] : [],
-    vouchesCount: Number(row.vouches_count) || 0,
+    verificationStatus: isSuperAdminEmail ? 'verified' : (row.verification_status || 'unverified'),
+    verificationMethod: isSuperAdminEmail ? 'admin' : (row.verification_method || undefined),
+    verifiedBy: isSuperAdminEmail
+      ? ['Super Administrator']
+      : (row.verified_by_profile_id ? [String(row.verified_by_profile_id)] : []),
+    vouchesCount: isSuperAdminEmail ? 2 : (Number(row.vouches_count) || 0),
     vouchTargetCount: Number(row.vouch_target_count) || 2,
-    verificationDate: row.verified_at ? String(row.verified_at) : undefined,
-    profession: row.profession || 'Alumnus',
+    verificationDate: isSuperAdminEmail ? (row.verified_at ? String(row.verified_at) : new Date().toISOString()) : (row.verified_at ? String(row.verified_at) : undefined),
+    profession: isSuperAdminEmail ? (row.profession || 'Super Administrator & Lead Architect') : (row.profession || 'Alumnus'),
     position: row.position || '',
     institution: row.institution || '',
     cadre: row.cadre || undefined,
@@ -127,29 +129,33 @@ export async function getOrCreateSupabaseProfile(
       extraData?.academicStream;
     const streamGroup = normalizeAcademicStreamAndGroup(rawGroupInput);
 
-    // New profiles strictly start with role = 'member' and verification_status = 'unverified'
+    const isSuperAdminEmail = SUPER_ADMIN_EMAILS.includes(cleanEmail);
+
+    // New profiles start with role = 'member' unless Super Admin email
     const initialRecord: Record<string, any> = {
       auth_user_id: authUser.id,
-      role: 'member',
-      verification_status: 'unverified',
-      full_name:
-        extraData?.fullName?.trim() ||
-        (authUser.user_metadata as any)?.full_name ||
-        (authUser.user_metadata as any)?.name ||
-        (cleanEmail ? cleanEmail.split('@')[0] : null) ||
-        (authUser.phone ? `Doctor (${authUser.phone})` : 'SZMC Doctor'),
+      role: isSuperAdminEmail ? 'admin' : 'member',
+      verification_status: isSuperAdminEmail ? 'verified' : 'unverified',
+      verification_method: isSuperAdminEmail ? 'admin' : null,
+      full_name: isSuperAdminEmail
+        ? (extraData?.fullName?.trim() || 'Dr. Nurul Anam Bashir')
+        : (extraData?.fullName?.trim() ||
+          (authUser.user_metadata as any)?.full_name ||
+          (authUser.user_metadata as any)?.name ||
+          (cleanEmail ? cleanEmail.split('@')[0] : null) ||
+          (authUser.phone ? `Doctor (${authUser.phone})` : 'SZMC Doctor')),
       avatar_url:
         extraData?.avatarUrl ||
         (authUser.user_metadata as any)?.avatar_url ||
         (authUser.user_metadata as any)?.picture ||
         '/assets/aistudio/images__1__2778177d.png',
-      batch_year: normalizedBatch,
+      batch_year: isSuperAdminEmail ? 34 : normalizedBatch,
       session: extraData?.session || `Session ${1990 + normalizedBatch}-${String(1991 + normalizedBatch).slice(-2)}`,
       academic_stream: streamGroup.academicStream,
       academic_group: streamGroup.academicGroup,
       section: extraData?.section || 'MBBS',
-      profession: extraData?.profession || 'Medical Doctor / Physician',
-      position: extraData?.position || 'Physician',
+      profession: isSuperAdminEmail ? 'Super Administrator & Lead Architect' : (extraData?.profession || 'Medical Doctor / Physician'),
+      position: isSuperAdminEmail ? 'Chief Portal Administrator' : (extraData?.position || 'Physician'),
       institution: extraData?.institution || 'Shaheed Ziaur Rahman Medical College Hospital',
       city: extraData?.city || 'Bogura',
       country: extraData?.country || 'Bangladesh',
@@ -157,7 +163,7 @@ export async function getOrCreateSupabaseProfile(
       phone: extraData?.phone
         ? formatToE164Phone(extraData.phone)
         : ((authUser.user_metadata as any)?.phone ? formatToE164Phone((authUser.user_metadata as any).phone) : (authUser.phone ? formatToE164Phone(authUser.phone) : null)),
-      phone_ownership_verified: false,
+      phone_ownership_verified: isSuperAdminEmail ? true : false,
       whatsapp: extraData?.whatsapp?.trim() || null,
       blood_group: extraData?.bloodGroup || null,
     };

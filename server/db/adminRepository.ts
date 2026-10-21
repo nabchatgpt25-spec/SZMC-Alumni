@@ -269,7 +269,7 @@ export async function getAdminOverviewMetrics() {
         recentAuditLogs = auditLogsRes.data.map((r: any) => ({
           id: r.id,
           actorUid: r.actor_auth_id || 'system',
-          actorEmail: r.actor_auth_id || 'admin@ndcalumni.org',
+          actorEmail: r.actor_auth_id || 'admin@szmcalumni.net',
           actorRole: 'admin',
           action: r.action,
           targetType: r.entity_table,
@@ -529,7 +529,7 @@ export async function createOrRegisterAlumniProfile(input: {
             {
               auth_user_id: effectiveAuthUid,
               full_name: input.fullName.trim(),
-              avatar_url: input.avatarUrl || '/ndc-logo.png',
+              avatar_url: input.avatarUrl || '/assets/aistudio/images__1__2778177d.png',
               batch_year: batchNum,
               session,
               college_roll: input.collegeRoll?.trim() || null,
@@ -987,7 +987,7 @@ export async function getVerificationQueue(statusFilter?: string) {
           submissionCode: `DOC-${String(r.id).slice(0, 8)}`,
           profileId: r.user_id,
           fullName: 'SZMC Alumnus',
-          avatarUrl: '/ndc-logo.png',
+          avatarUrl: '/assets/aistudio/images__1__2778177d.png',
           batchYear: r.batch_year,
           collegeRoll: r.college_roll,
           academicStream: r.academic_stream,
@@ -1181,7 +1181,7 @@ export async function getOfficialNoticesList() {
       if (!error && data) {
         return data.map((r: any) => ({
           id: r.id,
-          refNo: r.ref_no || `NDCAA/NOT-${String(r.id).slice(0, 6)}`,
+          refNo: r.ref_no || `SZMC/NOT-${String(r.id).slice(0, 6)}`,
           title: r.title,
           category: r.category,
           content: r.full_content || r.summary,
@@ -1234,7 +1234,7 @@ export async function createOrUpdateOfficialNotice(params: {
         const { data, error } = await supabaseServer
           .from(SUPABASE_TABLES.OFFICIAL_NOTICES)
           .insert({
-            ref_no: `NDCAA/NOT-2026/${Math.floor(Math.random() * 900) + 100}`,
+            ref_no: `SZMC/NOT-2026/${Math.floor(Math.random() * 900) + 100}`,
             title: params.title.trim(),
             category: params.category as any,
             published_date: new Date().toISOString().split('T')[0],
@@ -1257,7 +1257,7 @@ export async function createOrUpdateOfficialNotice(params: {
 
   return {
     id: params.id || Date.now(),
-    refNo: `NDCAA/NOT-2026/099`,
+    refNo: `SZMC/NOT-2026/099`,
     title: params.title.trim(),
     category: params.category,
     content: params.content.trim(),
