@@ -101,7 +101,7 @@ import {
 import { NDCLogo } from '../NDCLogo';
 import { compressImageFileToDataUrl } from '../../utils/mediaStorage';
 import { loadStoredAlumniProfiles } from '../../data/mockData';
-import { AlumniProfile, isUserSuperAdmin, isUserSubAdmin } from '../../types';
+import { AlumniProfile, isUserSuperAdmin, isUserGeneralAdmin, isUserSubAdmin } from '../../types';
 
 interface AdminHubViewProps {
   currentUser: {
@@ -124,7 +124,8 @@ export type AdminTab =
   | 'gallery'
   | 'blood'
   | 'batches_streams'
-  | 'controls_audit';
+  | 'controls_audit'
+  | 'audit';
 
 export const AdminHubView: React.FC<AdminHubViewProps> = ({
   currentUser,
@@ -132,7 +133,8 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
   onViewProfile,
 }) => {
   const isSuperAdmin = isUserSuperAdmin(currentUser);
-  const isSubAdmin = !isSuperAdmin;
+  const isGeneralAdmin = isUserGeneralAdmin(currentUser);
+  const isSubAdmin = !isSuperAdmin && !isGeneralAdmin;
 
   const { config, updateConfig, resetConfig, exportJson, importJson } = useSiteConfig();
   const [activeTab, setActiveTab] = useState<AdminTab>('overview');
@@ -340,11 +342,14 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
     if (isSubAdmin && ['controls_audit', 'small_admins', 'users', 'customizer'].includes(activeTab)) {
       setActiveTab('overview');
     }
-  }, [isSubAdmin, activeTab]);
+    if (isGeneralAdmin && ['controls_audit', 'small_admins'].includes(activeTab)) {
+      setActiveTab('overview');
+    }
+  }, [isSubAdmin, isGeneralAdmin, activeTab]);
 
   useEffect(() => {
     if (activeTab === 'verifications') loadSubmissions();
-    if (activeTab === 'users' && isSuperAdmin) loadAlumni();
+    if (activeTab === 'users' && (isSuperAdmin || isGeneralAdmin)) loadAlumni();
     if (activeTab === 'moderation') loadModerationPosts();
     if ((activeTab === 'audit' || activeTab === 'controls_audit') && isSuperAdmin) {
       loadAuditLogs();
@@ -353,7 +358,7 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
     if (activeTab === 'small_admins' && isSuperAdmin) loadSmallAdmins();
     if (activeTab === 'gallery') loadGallery();
     if (activeTab === 'blood') loadBlood();
-  }, [activeTab, isSuperAdmin]);
+  }, [activeTab, isSuperAdmin, isGeneralAdmin]);
 
   // Handle Document Review
   const handleReviewSubmission = async (submission: AdminDocSubmission, action: 'approved' | 'rejected') => {
@@ -525,7 +530,7 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
     try {
-      const dataUrl = await compressImageFileToDataUrl(file, 400, 400, 0.9);
+      const dataUrl = await compressImageFileToDataUrl(file, 400, 0.9);
       updateConfig({ logoUrl: dataUrl });
       showToast('Site emblem logo updated across the whole website!', 'success');
     } catch {
@@ -578,18 +583,24 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <h1 className="text-xl sm:text-2xl font-black tracking-tight text-slate-900 dark:text-white">
-                  {isSuperAdmin ? 'Super Admin Command Center' : 'Sub-Admin Moderation Desk'}
+                  {isSuperAdmin
+                    ? 'Super Admin Command Center'
+                    : isGeneralAdmin
+                    ? 'SZMC Admin Management Portal'
+                    : 'Sub-Admin Moderation Desk'}
                 </h1>
                 <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider border ${
                   isSuperAdmin
                     ? 'bg-rose-500/15 text-rose-600 dark:text-rose-400 border-rose-500/30'
+                    : isGeneralAdmin
+                    ? 'bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/30'
                     : 'bg-teal-500/15 text-teal-600 dark:text-teal-400 border-teal-500/30'
                 }`}>
-                  {isSuperAdmin ? 'ROOT PRIVILEGES' : 'SUB-ADMIN DELEGATE'}
+                  {isSuperAdmin ? 'SUPER ADMIN (ROOT)' : isGeneralAdmin ? 'ADMIN' : 'SUB-ADMIN DELEGATE'}
                 </span>
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                Logged in as <strong className="text-slate-800 dark:text-slate-200">{currentUser.fullName}</strong> ({isSuperAdmin ? (currentUser.email || 'Super Administrator') : 'Sub-Admin / Moderator'})
+                Logged in as <strong className="text-slate-800 dark:text-slate-200">{currentUser.fullName}</strong> ({isSuperAdmin ? (currentUser.email || 'nurulanambashir20@gmail.com') : isGeneralAdmin ? (currentUser.email || 'firstaidnetworkbd@gmail.com') : 'Sub-Admin / Moderator'})
               </p>
             </div>
           </div>
@@ -675,6 +686,17 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
                 { id: 'blood', label: 'Blood Coordination', icon: HeartHandshake, badge: bloodRequests.length },
                 { id: 'gallery', label: 'Photo Gallery', icon: ImageIcon, badge: galleryAlbums.length },
                 { id: 'batches_streams', label: 'Batches Directory', icon: BookOpen },
+              ]
+            : isGeneralAdmin
+            ? [
+                { id: 'overview', label: 'Overview', icon: Sliders },
+                { id: 'users', label: 'Alumni & Roles', icon: Users, badge: totalAlumniCount || stats?.totalUsers },
+                { id: 'verifications', label: 'ID Verification Queue', icon: FileCheck, badge: stats?.pendingDocReviews },
+                { id: 'moderation', label: 'Feed Moderation', icon: ShieldAlert, badge: posts.length },
+                { id: 'customizer', label: 'Site Customizer', icon: Palette },
+                { id: 'gallery', label: 'Photo Gallery', icon: ImageIcon, badge: galleryAlbums.length },
+                { id: 'blood', label: 'Blood Coordination', icon: HeartHandshake, badge: bloodRequests.length },
+                { id: 'batches_streams', label: 'Batches & Hall of Fame', icon: BookOpen },
               ]
             : [
                 { id: 'overview', label: 'Overview', icon: Sliders },
@@ -1325,12 +1347,12 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
                       </div>
                       <span
                         className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-md ${
-                          admin.status === 'active'
+                          admin.isActive
                             ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
                             : 'bg-rose-500/15 text-rose-600 dark:text-rose-400'
                         }`}
                       >
-                        {admin.status}
+                        {admin.isActive ? 'Active' : 'Suspended'}
                       </span>
                     </div>
 
@@ -1367,7 +1389,7 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
                         }}
                         className="text-slate-600 dark:text-slate-300 hover:underline font-semibold cursor-pointer"
                       >
-                        {admin.status === 'active' ? 'Suspend' : 'Activate'}
+                        {admin.isActive ? 'Suspend' : 'Activate'}
                       </button>
                       <button
                         type="button"

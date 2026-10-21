@@ -28,7 +28,7 @@ import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { NDCLogo } from './NDCLogo';
 import { loadVouchRequests } from '../utils/verificationService';
-import { isUserSuperAdmin, isUserSubAdmin } from '../types';
+import { isUserSuperAdmin, isUserGeneralAdmin, isUserSubAdmin } from '../types';
 
 export interface NavItemConfig {
   id: string;
@@ -66,6 +66,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const isVerified = (currentUser.verificationStatus || 'verified') === 'verified';
   const pendingCount = loadVouchRequests().filter((r) => r.status === 'pending').length;
   const isSuperAdmin = isUserSuperAdmin(currentUser);
+  const isGeneralAdmin = isUserGeneralAdmin(currentUser);
   const isSubAdmin = isUserSubAdmin(currentUser);
 
   // Segment 1: MAIN Navigation
@@ -267,11 +268,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <span className="truncate">My Profile</span>
               </button>
 
-              {/* Account Settings */}
+              {/* Settings */}
               <button
                 type="button"
                 onClick={() => {
-                  onSelectTab('profile-settings');
+                  onSelectTab('settings');
                   onClose();
                 }}
                 className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl font-medium text-xs sm:text-[13px] transition-all text-left cursor-pointer group ${
@@ -287,7 +288,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       : 'text-slate-400 dark:text-blue-300/60 group-hover:text-blue-600 dark:group-hover:text-blue-300'
                   }`}
                 />
-                <span className="truncate">Account Settings</span>
+                <span className="truncate">Settings</span>
               </button>
 
               {/* Verification Center */}
@@ -316,7 +317,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 </button>
               )}
 
-              {/* Super Admin Command Hub - Strictly visible ONLY to verified Super Admins */}
+              {/* Super Admin Command Hub - Strictly visible ONLY when logged in as nurulanambashir20@gmail.com */}
               {isSuperAdmin && (
                 <button
                   type="button"
@@ -336,10 +337,38 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         isItemActive('admin') ? 'text-white' : 'text-indigo-600 dark:text-indigo-400 animate-pulse'
                       }`}
                     />
-                    <span className="truncate font-black tracking-tight">Super Admin Hub</span>
+                    <span className="truncate font-black tracking-tight">Super Admin</span>
                   </div>
                   <span className="shrink-0 text-[9px] font-black uppercase px-2 py-0.5 rounded-md border tracking-wider bg-indigo-500/20 text-indigo-700 dark:text-indigo-200 border-indigo-500/40 shadow-xs">
-                    ROOT ADMIN
+                    SUPER ADMIN
+                  </span>
+                </button>
+              )}
+
+              {/* General Admin Hub - Strictly visible ONLY when logged in as firstaidnetworkbd@gmail.com */}
+              {isGeneralAdmin && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onSelectTab('admin');
+                    onClose();
+                  }}
+                  className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-xl font-medium text-xs sm:text-[13px] transition-all text-left cursor-pointer group ${
+                    isItemActive('admin')
+                      ? 'bg-gradient-to-r from-blue-600 to-cyan-600 text-white font-bold shadow-md shadow-blue-600/30'
+                      : 'text-blue-700 dark:text-blue-300 hover:text-blue-950 dark:hover:text-white hover:bg-blue-100/70 dark:hover:bg-blue-950/60 border border-blue-200/50 dark:border-blue-800/40'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <ShieldCheck
+                      className={`w-4 h-4 shrink-0 transition-colors ${
+                        isItemActive('admin') ? 'text-white' : 'text-blue-600 dark:text-blue-400'
+                      }`}
+                    />
+                    <span className="truncate font-black tracking-tight">Admin</span>
+                  </div>
+                  <span className="shrink-0 text-[9px] font-black uppercase px-2 py-0.5 rounded-md border tracking-wider bg-blue-500/20 text-blue-700 dark:text-blue-200 border-blue-500/40 shadow-xs">
+                    ADMIN
                   </span>
                 </button>
               )}

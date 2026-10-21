@@ -13,6 +13,7 @@ export interface SmallAdminUser {
   appointedAt: string;
   appointedBy: string;
   isActive: boolean;
+  status?: 'active' | 'suspended';
   permissions: SmallAdminPermissions;
   notes?: string;
 }

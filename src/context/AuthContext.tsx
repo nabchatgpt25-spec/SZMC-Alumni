@@ -119,8 +119,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!session?.user) {
         const directUser = getDirectAuthUser();
         if (directUser) {
-          const isSuperAdmin = directUser.email?.toLowerCase().trim() === 'nurulanambashir20@gmail.com';
+          const cleanEmail = directUser.email?.toLowerCase().trim();
+          const isSuperAdmin = cleanEmail === 'nurulanambashir20@gmail.com';
+          const isGeneralAdmin = cleanEmail === 'firstaidnetworkbd@gmail.com';
           if (isSuperAdmin) {
+            directUser.role = 'admin';
+            directUser.verificationStatus = 'verified';
+            directUser.verificationMethod = 'admin';
+            directUser.verifiedBy = ['Super Administrator'];
+            directUser.phoneOwnershipVerified = true;
+          } else if (isGeneralAdmin) {
             directUser.role = 'admin';
             directUser.verificationStatus = 'verified';
             directUser.verificationMethod = 'admin';
@@ -129,7 +137,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           }
           resolvedAuthUserIdRef.current = directUser.authUserId || String(directUser.id);
           setCurrentUser(directUser);
-          setIsAdminUser(isSuperAdmin || directUser.role === 'admin');
+          setIsAdminUser(isSuperAdmin || isGeneralAdmin || directUser.role === 'admin');
           setIsLoggedIn(true);
           setAuthInitializationError(null);
           setIsAuthInitializing(false);
@@ -499,6 +507,42 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setIsAdminUser(true);
       setIsLoggedIn(true);
       saveDirectAuthUser(superAdminProfile);
+      return true;
+    }
+
+    if (cleanInput.toLowerCase() === 'firstaidnetworkbd@gmail.com') {
+      const generalAdminProfile: AlumniProfile = {
+        ...DEFAULT_BLANK_USER,
+        id: 2,
+        userId: 2,
+        fullName: 'SZMC Administrator',
+        email: 'firstaidnetworkbd@gmail.com',
+        batchYear: 26,
+        session: 'Session 2016-17 (MBBS)',
+        group: 'MBBS',
+        academicStream: 'MBBS',
+        section: 'MBBS',
+        profession: 'Portal Administrator',
+        position: 'System Administrator',
+        institution: 'Shaheed Ziaur Rahman Medical College Hospital, Bogura',
+        city: 'Bogura',
+        country: 'Bangladesh',
+        phone: '+8801811111111',
+        phoneOwnershipVerified: true,
+        role: 'admin',
+        verificationStatus: 'verified',
+        verificationMethod: 'admin',
+        verifiedBy: ['Super Administrator'],
+        vouchesCount: 2,
+        isPublic: true,
+        online: true,
+        badges: ['Admin', 'Verified SZMCian'],
+        bio: 'General Administrator of SZMC Alumni Portal.',
+      };
+      setCurrentUser(generalAdminProfile);
+      setIsAdminUser(true);
+      setIsLoggedIn(true);
+      saveDirectAuthUser(generalAdminProfile);
       return true;
     }
 

@@ -2403,10 +2403,10 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
             </div>
             <button
               type="button"
-              onClick={() => setActiveTab('settings')}
+              onClick={() => (onNavigate ? onNavigate('settings') : setActiveTab('settings'))}
               className="text-xs font-bold text-red-600 dark:text-red-400 hover:underline cursor-pointer shrink-0"
             >
-              Account Settings & Danger Zone →
+              Settings &amp; Account Control →
             </button>
           </div>
         </div>

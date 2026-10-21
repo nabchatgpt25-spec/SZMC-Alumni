@@ -5,7 +5,7 @@ import { NDCLogo } from './NDCLogo';
 import { NotificationDropdown } from './NotificationDropdown';
 import { useAuth } from '../context/AuthContext';
 import { loadVouchRequests } from '../utils/verificationService';
-import { isUserSuperAdmin, isUserSubAdmin } from '../types';
+import { isUserSuperAdmin, isUserGeneralAdmin, isUserSubAdmin } from '../types';
 
 interface HeaderProps {
   onToggleSidebar: () => void;
@@ -31,6 +31,7 @@ export const Header: React.FC<HeaderProps> = ({
   const isUserVerified = (currentUser.verificationStatus || 'verified') === 'verified';
   const userVouchesCount = currentUser.vouchesCount ?? (currentUser.verifiedBy?.length ?? (isUserVerified ? 2 : 0));
   const isSuperAdmin = isUserSuperAdmin(currentUser);
+  const isGeneralAdmin = isUserGeneralAdmin(currentUser);
   const isSubAdmin = isUserSubAdmin(currentUser);
 
   useEffect(() => {
@@ -178,13 +179,13 @@ export const Header: React.FC<HeaderProps> = ({
                   <button
                     type="button"
                     onClick={() => {
-                      onNavigate('profile-settings');
+                      onNavigate('settings');
                       setShowProfileMenu(false);
                     }}
                     className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors text-left"
                   >
                     <Settings className="w-4 h-4 text-slate-400" />
-                    Account Settings
+                    Settings
                   </button>
 
                   {onOpenVerificationCenter && (
@@ -212,7 +213,7 @@ export const Header: React.FC<HeaderProps> = ({
                     </button>
                   )}
 
-                  {/* Super Admin Hub in profile dropdown */}
+                  {/* Super Admin Hub in profile dropdown - Strictly for nurulanambashir20@gmail.com */}
                   {isSuperAdmin && (
                     <button
                       type="button"
@@ -224,10 +225,30 @@ export const Header: React.FC<HeaderProps> = ({
                     >
                       <span className="flex items-center gap-2.5">
                         <ShieldAlert className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                        <span className="font-bold">Super Admin Hub</span>
+                        <span className="font-bold">Super Admin</span>
                       </span>
                       <span className="text-[10px] font-black uppercase px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-600 dark:text-indigo-400">
-                        ROOT
+                        SUPER ADMIN
+                      </span>
+                    </button>
+                  )}
+
+                  {/* General Admin in profile dropdown - Strictly for firstaidnetworkbd@gmail.com */}
+                  {isGeneralAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onNavigate('admin');
+                        setShowProfileMenu(false);
+                      }}
+                      className="w-full flex items-center justify-between gap-2 px-3 py-2 text-xs font-medium text-blue-700 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-950/40 rounded-lg transition-colors text-left"
+                    >
+                      <span className="flex items-center gap-2.5">
+                        <ShieldCheck className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                        <span className="font-bold">Admin</span>
+                      </span>
+                      <span className="text-[10px] font-black uppercase px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-600 dark:text-blue-400">
+                        ADMIN
                       </span>
                     </button>
                   )}

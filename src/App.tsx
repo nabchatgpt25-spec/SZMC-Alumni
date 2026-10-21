@@ -31,6 +31,7 @@ import { ensureVouchRequestFromUrlParams } from './utils/verificationService';
 import { CursorSpotlight } from './components/motion/CinematicMotion';
 import { NDCLogo } from './components/NDCLogo';
 import { AdminPage } from './components/admin/AdminPage';
+import { SettingsView } from './components/SettingsView';
 
 function AlumniAppContent() {
   const { isLoggedIn, currentUser, isAuthInitializing, authInitializationError } = useAuth();
@@ -326,10 +327,17 @@ function AlumniAppContent() {
                 <SavedPostsView onNavigate={navigateTo} />
               )}
 
-              {(route === 'profile' || route === 'settings' || route === 'profile-settings') && (
+              {(route === 'settings' || route === 'profile-settings') && (
+                <SettingsView
+                  onNavigate={navigateTo}
+                  onOpenVerificationCenter={openVerificationCenter}
+                  onBack={() => navigateTo('profile')}
+                />
+              )}
+
+              {route === 'profile' && (
                 <ProfileView
                   profileId={selectedProfileId || currentUser.id}
-                  initialTab={route === 'settings' || route === 'profile-settings' ? 'settings' : undefined}
                   onBack={() => navigateTo(previousRoute || 'alumni')}
                   backLabel={getBackLabel()}
                   onOpenVerificationCenter={openVerificationCenter}

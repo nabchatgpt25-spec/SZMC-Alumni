@@ -20,7 +20,7 @@ export interface ThemeOption {
 }
 
 export type VerificationStatus = 'verified' | 'pending_vouch' | 'unverified';
-export type VerificationMethod = 'two_vouches' | 'id_card_upload' | 'souvenir_photo' | 'admin_verified';
+export type VerificationMethod = 'two_vouches' | 'id_card_upload' | 'souvenir_photo' | 'admin_verified' | 'admin';
 export type VerificationDocType = 'id_card' | 'nid_card' | 'hsc_slip' | 'souvenir';
 
 export interface AdminDocSubmission {
@@ -77,26 +77,52 @@ export interface VouchRequest {
 
 export type UserRole = 'member' | 'batch_representative' | 'moderator' | 'admin';
 
+export const SUPER_ADMIN_EMAIL = 'nurulanambashir20@gmail.com';
+export const GENERAL_ADMIN_EMAIL = 'firstaidnetworkbd@gmail.com';
+
 export const SUPER_ADMIN_EMAILS: readonly string[] = [
-  'firstaidnetworkbd@gmail.com',
   'nurulanambashir20@gmail.com',
-  'admin@szmcalumni.net',
 ];
 
+export const GENERAL_ADMIN_EMAILS: readonly string[] = [
+  'firstaidnetworkbd@gmail.com',
+];
+
+/**
+ * Super Admin check: Strictly for Dr. Nurul Anam Bashir (nurulanambashir20@gmail.com)
+ */
 export function isUserSuperAdmin(user?: { email?: string | null; role?: string | null } | null): boolean {
   if (!user) return false;
   const cleanEmail = (user.email || '').toLowerCase().trim();
-  if (cleanEmail && SUPER_ADMIN_EMAILS.includes(cleanEmail)) return true;
-  return user.role === 'admin';
+  return cleanEmail === 'nurulanambashir20@gmail.com';
 }
 
+/**
+ * General Admin check: Strictly for firstaidnetworkbd@gmail.com
+ */
+export function isUserGeneralAdmin(user?: { email?: string | null; role?: string | null } | null): boolean {
+  if (!user) return false;
+  const cleanEmail = (user.email || '').toLowerCase().trim();
+  return cleanEmail === 'firstaidnetworkbd@gmail.com';
+}
+
+/**
+ * Any admin check (Super Admin or General Admin)
+ */
+export function isUserAnyAdmin(user?: { email?: string | null; role?: string | null } | null): boolean {
+  return isUserSuperAdmin(user) || isUserGeneralAdmin(user);
+}
+
+/**
+ * Sub-Admin / Moderator check (excluding Super Admin and General Admin)
+ */
 export function isUserSubAdmin(user?: { email?: string | null; role?: string | null } | null): boolean {
   if (!user) return false;
-  if (isUserSuperAdmin(user)) return false;
+  if (isUserSuperAdmin(user) || isUserGeneralAdmin(user)) return false;
   return user.role === 'moderator' || user.role === 'batch_representative';
 }
 
-export type AcademicStreamType = 'MBBS' | 'Science' | 'Humanities' | 'Business Studies';
+export type AcademicStreamType = 'MBBS' | 'Medicine' | 'Science' | 'Humanities' | 'Business Studies';
 
 export interface AlumniProfile {
   id: number;
