@@ -406,7 +406,7 @@ export const StatsBar: React.FC = () => {
       {/* Real College Crest floating watermark */}
       <div className="absolute right-4 -bottom-6 opacity-[0.035] pointer-events-none hidden lg:block">
         <img
-          src="/szmc-logo.png"
+          src="/assets/aistudio/images__1__2778177d.png"
           alt="SZMC Crest Watermark"
           className="w-56 h-56 object-contain filter drop-shadow-xl"
         />

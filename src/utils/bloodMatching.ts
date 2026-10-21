@@ -2,15 +2,10 @@ import {
   BloodDonorProfile,
   BloodEmergencyRequest,
   BloodGroup,
-} from '../types';
+} from '../types/blood';
 
-/**
- * Mandatory coordination disclaimer:
- * This system only facilitates alumni donor discovery and coordination.
- * It does NOT make medical eligibility or transfusion compatibility decisions.
- */
 export const HOSPITAL_ELIGIBILITY_DISCLAIMER =
-  'Coordination match only. The hospital or licensed blood bank must perform cross-matching and confirm donor medical eligibility and blood compatibility prior to any donation.';
+  'Coordination match only. The hospital or licensed blood bank must perform cross-matching and confirm donor medical eligibility and blood compatibility prior to any transfusion.';
 
 export const STANDARD_DONATION_INTERVAL_DAYS = 90;
 
@@ -34,9 +29,6 @@ export interface MatchedDonorResult {
   intervalInfo: DonorIntervalInfo;
 }
 
-/**
- * Calculate days elapsed since the donor's last recorded blood donation date.
- */
 export function getDaysSinceLastDonation(lastDonationDate?: string): number | null {
   if (!lastDonationDate || !lastDonationDate.trim()) return null;
   const parsed = new Date(lastDonationDate);
@@ -47,9 +39,6 @@ export function getDaysSinceLastDonation(lastDonationDate?: string): number | nu
   return Math.floor(diffMs / (1000 * 60 * 60 * 24));
 }
 
-/**
- * Summarize the time interval since last donation for coordination awareness (not medical clearance).
- */
 export function getDonorIntervalInfo(lastDonationDate?: string): DonorIntervalInfo {
   const daysSince = getDaysSinceLastDonation(lastDonationDate);
   if (daysSince === null) {
@@ -79,12 +68,8 @@ export function getDonorIntervalInfo(lastDonationDate?: string): DonorIntervalIn
   };
 }
 
-/**
- * Normalize area/location strings to check zone proximity (e.g., Bogura / SZMCH, Shahbagh / DMCH, Dhanmondi / Panthapath).
- */
 const DHAKA_ZONE_CLUSTERS: string[][] = [
-  ['bogura', 'szmch', 'silimpur', 'thonthonia', 'colony', 'medical road', 'mofiz paglar mor'],
-  ['shahbagh', 'ramna', 'paltan', 'kakrail', 'mugda', 'dmc', 'bsmmu', 'birdem'],
+  ['motijheel', 'shahbagh', 'ramna', 'paltan', 'kakrail', 'mugda', 'dmc', 'bsmmu', 'birdem'],
   ['dhanmondi', 'panthapath', 'kalabagan', 'green road', 'mohammadpur', 'lalmatia', 'shyamoli', 'square'],
   ['gulshan', 'banani', 'baridhara', 'bashundhara', 'badda', 'evercare', 'united'],
   ['uttara', 'airport', 'tongi', 'kurmitola', 'nikunja'],
@@ -104,19 +89,16 @@ export function evaluateAreaMatch(
 
   const isSameCity = Boolean(dCity && rCity && (dCity === rCity || dCity.includes(rCity) || rCity.includes(dCity)));
 
-  // Direct substring match on area tokens
   const rTokens = rArea
     .split(/[,/\-\s]+/)
     .map((t) => t.trim())
     .filter((t) => t.length >= 3 && t !== 'dhaka' && t !== 'area' && t !== 'hospital');
 
   const isSameArea = rTokens.some((tok) => dArea.includes(tok));
-
   if (isSameArea) {
     return { isSameArea: true, isAdjacentZone: true, isSameCity: true };
   }
 
-  // Check if donor and hospital belong to the same Dhaka hospital/neighborhood cluster
   const isAdjacentZone = DHAKA_ZONE_CLUSTERS.some(
     (cluster) =>
       cluster.some((z) => dArea.includes(z)) && cluster.some((z) => rArea.includes(z))
@@ -125,17 +107,6 @@ export function evaluateAreaMatch(
   return { isSameArea: false, isAdjacentZone, isSameCity };
 }
 
-/**
- * Modular Donor Matching Service:
- * Ranks registered alumni blood donors for a given emergency blood request using:
- * 1. Blood group (exact match required for primary coordination)
- * 2. Area / location proximity
- * 3. Donor availability status
- * 4. Last donation date (90-day interval awareness)
- * 5. Emergency priority & donor alert preference
- *
- * NOTE: Does NOT perform medical eligibility or transfusion compatibility decisions.
- */
 export function matchDonorsForRequest(
   request: BloodEmergencyRequest,
   donors: BloodDonorProfile[],
@@ -143,7 +114,6 @@ export function matchDonorsForRequest(
 ): MatchedDonorResult[] {
   const includeCooldown = options?.includeCooldownDonors ?? false;
   const exactOnly = options?.exactBloodGroupOnly ?? true;
-
   const results: MatchedDonorResult[] = [];
 
   for (const donor of donors) {
@@ -167,7 +137,6 @@ export function matchDonorsForRequest(
       request.city
     );
 
-    // Check emergency alert preference alignment
     let matchesAlertPreference = true;
     if (donor.emergencyAlertPreference === 'paused') {
       matchesAlertPreference = false;
@@ -177,7 +146,6 @@ export function matchDonorsForRequest(
       matchesAlertPreference = isSameArea || isAdjacentZone;
     }
 
-    // Compute transparent coordination score
     let score = 0;
     const matchReasons: string[] = [];
 
@@ -232,43 +200,6 @@ export function matchDonorsForRequest(
   return results.sort((a, b) => b.matchScore - a.matchScore);
 }
 
-/**
- * Find active emergency requests that match a specific donor's blood group and area preferences.
- */
-export function findMatchingRequestsForDonor(
-  donor: BloodDonorProfile,
-  requests: BloodEmergencyRequest[]
-): BloodEmergencyRequest[] {
-  if (!donor.isRegisteredDonor) return [];
-
-  return requests
-    .filter((req) => {
-      if (req.status !== 'Active' && req.status !== 'Donor Found') return false;
-      if (req.bloodGroup !== donor.bloodGroup) return false;
-      if (donor.emergencyAlertPreference === 'paused') return false;
-      if (donor.emergencyAlertPreference === 'critical_only' && req.emergencyLevel !== 'critical') {
-        return false;
-      }
-      if (donor.emergencyAlertPreference === 'same_area_only') {
-        const { isSameArea, isAdjacentZone } = evaluateAreaMatch(
-          donor.preferredArea,
-          donor.city,
-          `${req.hospitalArea} ${req.hospitalName}`,
-          req.city
-        );
-        return isSameArea || isAdjacentZone;
-      }
-      return true;
-    })
-    .sort((a, b) => {
-      const priorityRank = { critical: 3, urgent: 2, standard: 1 };
-      return priorityRank[b.emergencyLevel] - priorityRank[a.emergencyLevel];
-    });
-}
-
-/**
- * Aggregate blood group overview statistics across all registered donors and active requests.
- */
 export function getBloodGroupOverviewStats(
   donors: BloodDonorProfile[],
   requests: BloodEmergencyRequest[]

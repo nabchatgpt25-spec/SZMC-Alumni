@@ -33,6 +33,18 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
       <div className="absolute top-1/4 right-4 sm:right-12 w-80 sm:w-96 h-80 sm:h-96 bg-amber-200/25 dark:bg-amber-600/10 rounded-full blur-3xl pointer-events-none" />
 
       <div className="relative z-10 max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+        {/* Prominent Official Emblem */}
+        <motion.div
+          initial={prefersReducedMotion ? false : { opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ duration: 0.4 }}
+          className="flex justify-center mb-4 sm:mb-5"
+        >
+          <div className="w-20 h-20 sm:w-24 sm:h-24 md:w-28 md:h-28 p-2 rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-xl shadow-blue-900/10 flex items-center justify-center">
+            <NDCLogo className="w-full h-full object-contain" />
+          </div>
+        </motion.div>
+
         {/* Top Status Pill: 340+ Online • 76 Batches • 42 Countries */}
         <motion.div
           initial={prefersReducedMotion ? false : { opacity: 0, y: -10 }}

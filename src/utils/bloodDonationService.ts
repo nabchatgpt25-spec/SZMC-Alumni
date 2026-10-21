@@ -1,8 +1,6 @@
 import {
-  AlumniProfile,
   BloodAlertPreference,
   BloodContactMethod,
-  BloodDonationHistoryItem,
   BloodDonorAvailability,
   BloodDonorProfile,
   BloodDonorResponse,
@@ -10,20 +8,516 @@ import {
   BloodEmergencyRequest,
   BloodGroup,
   BloodRequestStatus,
-  BLOOD_GROUPS_LIST,
-  NotificationItem,
-} from '../types';
+} from '../types/blood';
 import { matchDonorsForRequest } from './bloodMatching';
-import {
-  createBloodRequestInDb,
-  registerBloodDonorInDb,
-  respondToBloodRequestInDb,
-} from '../services/supabaseService';
 
-export const BLOOD_REQUESTS_STORAGE_KEY = 'ndc_blood_requests_v1';
-export const BLOOD_DONORS_STORAGE_KEY = 'ndc_blood_donors_v1';
-export const PORTAL_NOTIFICATIONS_STORAGE_KEY = 'ndc_portal_notifications_v1';
-export const BLOOD_BANNER_DISMISSED_KEY = 'ndc_blood_emergency_banner_dismissed_v2';
+export const BLOOD_REQUESTS_STORAGE_KEY = 'blood_requests_v1';
+export const BLOOD_DONORS_STORAGE_KEY = 'blood_donors_v1';
+
+export const DONATION_AREAS_LIST: string[] = [
+  'Shahbagh / Motijheel / Ramna (DMCH, BSMMU, BIRDEM)',
+  'Dhanmondi / Panthapath / Green Road (Square, Labaid)',
+  'Gulshan / Banani / Bashundhara (Evercare, United)',
+  'Mirpur / Agargaon / Shyamoli (NICVD, NIKDU, Heart Foundation)',
+  'Uttara / Kurmitola / Airport Corridor',
+  'Mugda / Khilgaon / Malibagh',
+  'Chattogram Metropolitan Area',
+  'Sylhet / Rajshahi / Khulna Regional Hub',
+];
+
+export function sanitizeInputText(value: string, maxLength = 300): string {
+  if (!value || typeof value !== 'string') return '';
+  return value
+    .replace(/<[^>]*>?/gm, '')
+    .replace(/javascript:/gi, '')
+    .trim()
+    .slice(0, maxLength);
+}
+
+const DEFAULT_SAMPLE_DONORS: BloodDonorProfile[] = [
+  {
+    userId: 101,
+    fullName: 'Dr. Tanvir Ahmed',
+    avatarUrl: 'https://images.unsplash.com/photo-1537368910025-700350fe46c7?w=120&auto=format&fit=crop&q=80',
+    batchYear: 24,
+    profession: 'Registrar, Internal Medicine',
+    institution: 'Dhaka Medical College Hospital',
+    phone: '+880 1711-234567',
+    whatsapp: '+880 1711-234567',
+    email: 'tanvir.ahmed@szmc.edu.bd',
+    verificationStatus: 'verified',
+    bloodGroup: 'O+',
+    isRegisteredDonor: true,
+    availability: 'available',
+    preferredArea: 'Shahbagh / Motijheel / Ramna (DMCH, BSMMU, BIRDEM)',
+    city: 'Dhaka',
+    lastDonationDate: '2024-01-10',
+    emergencyAlertPreference: 'all_urgent',
+    donationHistory: [
+      { id: 'dh-1', date: '2024-01-10', hospital: 'DMCH', units: 1, notes: 'Emergency cardiac surgery' }
+    ],
+    updatedAt: new Date().toISOString(),
+  },
+  {
+    userId: 102,
+    fullName: 'Dr. Nafis Rahman',
+    avatarUrl: 'https://images.unsplash.com/photo-1622253692010-333f2da6031d?w=120&auto=format&fit=crop&q=80',
+    batchYear: 26,
+    profession: 'Medical Officer, Cardiology',
+    institution: 'National Institute of Cardiovascular Diseases',
+    phone: '+880 1819-876543',
+    whatsapp: '+880 1819-876543',
+    email: 'nafis.rahman@szmc.edu.bd',
+    verificationStatus: 'verified',
+    bloodGroup: 'A+',
+    isRegisteredDonor: true,
+    availability: 'available',
+    preferredArea: 'Mirpur / Agargaon / Shyamoli (NICVD, NIKDU, Heart Foundation)',
+    city: 'Dhaka',
+    lastDonationDate: '2024-02-15',
+    emergencyAlertPreference: 'all_urgent',
+    donationHistory: [],
+    updatedAt: new Date().toISOString(),
+  },
+  {
+    userId: 103,
+    fullName: 'Dr. Sadia Islam',
+    avatarUrl: 'https://images.unsplash.com/photo-1594824813579-0824b2b4d455?w=120&auto=format&fit=crop&q=80',
+    batchYear: 27,
+    profession: 'Assistant Professor, Pediatrics',
+    institution: 'BSMMU',
+    phone: '+880 1912-345678',
+    whatsapp: '+880 1912-345678',
+    email: 'sadia.islam@szmc.edu.bd',
+    verificationStatus: 'verified',
+    bloodGroup: 'B+',
+    isRegisteredDonor: true,
+    availability: 'available',
+    preferredArea: 'Shahbagh / Motijheel / Ramna (DMCH, BSMMU, BIRDEM)',
+    city: 'Dhaka',
+    lastDonationDate: '2023-11-20',
+    emergencyAlertPreference: 'same_area_only',
+    donationHistory: [],
+    updatedAt: new Date().toISOString(),
+  },
+  {
+    userId: 104,
+    fullName: 'Dr. Mahmudul Hasan',
+    avatarUrl: 'https://images.unsplash.com/photo-1612349317150-e413f6a5b16d?w=120&auto=format&fit=crop&q=80',
+    batchYear: 25,
+    profession: 'Senior Consultant, Nephrology',
+    institution: 'Square Hospital',
+    phone: '+880 1611-456789',
+    whatsapp: '+880 1611-456789',
+    email: 'mahmud.hasan@szmc.edu.bd',
+    verificationStatus: 'verified',
+    bloodGroup: 'AB+',
+    isRegisteredDonor: true,
+    availability: 'available',
+    preferredArea: 'Dhanmondi / Panthapath / Green Road (Square, Labaid)',
+    city: 'Dhaka',
+    lastDonationDate: '2023-12-05',
+    emergencyAlertPreference: 'all_urgent',
+    donationHistory: [],
+    updatedAt: new Date().toISOString(),
+  },
+  {
+    userId: 105,
+    fullName: 'Dr. Farhana Yasmin',
+    avatarUrl: 'https://images.unsplash.com/photo-1559839734-2b71ea197ec2?w=120&auto=format&fit=crop&q=80',
+    batchYear: 28,
+    profession: 'Resident Physician, General Surgery',
+    institution: 'Evercare Hospital Dhaka',
+    phone: '+880 1722-334455',
+    whatsapp: '+880 1722-334455',
+    email: 'farhana.yasmin@szmc.edu.bd',
+    verificationStatus: 'verified',
+    bloodGroup: 'O-',
+    isRegisteredDonor: true,
+    availability: 'available',
+    preferredArea: 'Gulshan / Banani / Bashundhara (Evercare, United)',
+    city: 'Dhaka',
+    lastDonationDate: '2023-10-15',
+    emergencyAlertPreference: 'critical_only',
+    donationHistory: [],
+    updatedAt: new Date().toISOString(),
+  },
+  {
+    userId: 106,
+    fullName: 'Dr. Zubair Al Mamun',
+    avatarUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=120&auto=format&fit=crop&q=80',
+    batchYear: 23,
+    profession: 'Consultant, Orthopedics',
+    institution: 'National Institute of Traumatology (NITOR)',
+    phone: '+880 1515-678901',
+    whatsapp: '+880 1515-678901',
+    email: 'zubair.mamun@szmc.edu.bd',
+    verificationStatus: 'verified',
+    bloodGroup: 'A-',
+    isRegisteredDonor: true,
+    availability: 'available',
+    preferredArea: 'Mirpur / Agargaon / Shyamoli (NICVD, NIKDU, Heart Foundation)',
+    city: 'Dhaka',
+    lastDonationDate: '2023-09-10',
+    emergencyAlertPreference: 'all_urgent',
+    donationHistory: [],
+    updatedAt: new Date().toISOString(),
+  },
+  {
+    userId: 107,
+    fullName: 'Dr. Shahriar Kabir',
+    avatarUrl: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=120&auto=format&fit=crop&q=80',
+    batchYear: 22,
+    profession: 'Associate Professor, Surgery',
+    institution: 'Shaheed Ziaur Rahman Medical College Hospital',
+    phone: '+880 1712-998877',
+    whatsapp: '+880 1712-998877',
+    email: 'shahriar.kabir@szmc.edu.bd',
+    verificationStatus: 'verified',
+    bloodGroup: 'B-',
+    isRegisteredDonor: true,
+    availability: 'available',
+    preferredArea: 'Sylhet / Rajshahi / Khulna Regional Hub',
+    city: 'Bogura',
+    lastDonationDate: '2024-01-05',
+    emergencyAlertPreference: 'all_urgent',
+    donationHistory: [],
+    updatedAt: new Date().toISOString(),
+  },
+  {
+    userId: 108,
+    fullName: 'Dr. Rafiqul Haque',
+    avatarUrl: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=120&auto=format&fit=crop&q=80',
+    batchYear: 20,
+    profession: 'Clinical Hematologist',
+    institution: 'Kurmitola General Hospital',
+    phone: '+880 1811-332211',
+    whatsapp: '+880 1811-332211',
+    email: 'rafiqul.haque@szmc.edu.bd',
+    verificationStatus: 'verified',
+    bloodGroup: 'AB-',
+    isRegisteredDonor: true,
+    availability: 'available',
+    preferredArea: 'Uttara / Kurmitola / Airport Corridor',
+    city: 'Dhaka',
+    lastDonationDate: '2023-08-12',
+    emergencyAlertPreference: 'all_urgent',
+    donationHistory: [],
+    updatedAt: new Date().toISOString(),
+  }
+];
+
+const DEFAULT_SAMPLE_REQUESTS: BloodEmergencyRequest[] = [
+  {
+    id: 'req_sample_1',
+    bloodGroup: 'O+',
+    unitsRequired: 2,
+    unitsFulfilled: 1,
+    hospitalName: 'Dhaka Medical College Hospital (DMCH)',
+    hospitalArea: 'Shahbagh / Motijheel / Ramna (DMCH, BSMMU, BIRDEM)',
+    city: 'Dhaka',
+    requiredDateTime: new Date(Date.now() + 4 * 3600000).toISOString(),
+    emergencyLevel: 'critical',
+    contactMethod: 'Attendant Emergency Line',
+    contactPhone: '+880 1711-002233',
+    description: 'Emergency trauma resuscitation following road traffic accident. ICU Bed 4.',
+    patientRelation: 'Batchmate Mother',
+    requesterId: 201,
+    requesterName: 'Dr. Rezwan Karim',
+    requesterAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=120&auto=format&fit=crop&q=80',
+    requesterBatch: 25,
+    status: 'Active',
+    createdAt: new Date(Date.now() - 3600000).toISOString(),
+    updatedAt: new Date(Date.now() - 1800000).toISOString(),
+    responses: [],
+  },
+  {
+    id: 'req_sample_2',
+    bloodGroup: 'A+',
+    unitsRequired: 1,
+    unitsFulfilled: 0,
+    hospitalName: 'Square Hospital',
+    hospitalArea: 'Dhanmondi / Panthapath / Green Road (Square, Labaid)',
+    city: 'Dhaka',
+    requiredDateTime: new Date(Date.now() + 8 * 3600000).toISOString(),
+    emergencyLevel: 'urgent',
+    contactMethod: 'Attendant Emergency Line',
+    contactPhone: '+880 1819-445566',
+    description: 'Elective coronary artery bypass surgery tomorrow morning at 8:30 AM.',
+    patientRelation: 'Alumnus Relative',
+    requesterId: 202,
+    requesterName: 'Dr. Momena Khatun',
+    requesterAvatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=120&auto=format&fit=crop&q=80',
+    requesterBatch: 27,
+    status: 'Active',
+    createdAt: new Date(Date.now() - 7200000).toISOString(),
+    updatedAt: new Date(Date.now() - 7200000).toISOString(),
+    responses: [],
+  }
+];
+
+export function loadBloodDonors(): BloodDonorProfile[] {
+  if (typeof window === 'undefined') return DEFAULT_SAMPLE_DONORS;
+  try {
+    const raw = localStorage.getItem(BLOOD_DONORS_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+  } catch (err) {
+    console.warn('Failed to load blood donors from localStorage:', err);
+  }
+  return DEFAULT_SAMPLE_DONORS;
+}
+
+export function saveBloodDonors(donors: BloodDonorProfile[]): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(BLOOD_DONORS_STORAGE_KEY, JSON.stringify(donors));
+    window.dispatchEvent(new CustomEvent('blood_donors_changed', { detail: donors }));
+  } catch (err) {
+    console.error('Failed to save blood donors:', err);
+  }
+}
+
+export function loadBloodRequests(): BloodEmergencyRequest[] {
+  if (typeof window === 'undefined') return DEFAULT_SAMPLE_REQUESTS;
+  try {
+    const raw = localStorage.getItem(BLOOD_REQUESTS_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+  } catch (err) {
+    console.warn('Failed to load blood requests from localStorage:', err);
+  }
+  return DEFAULT_SAMPLE_REQUESTS;
+}
+
+export function saveBloodRequests(requests: BloodEmergencyRequest[]): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(BLOOD_REQUESTS_STORAGE_KEY, JSON.stringify(requests));
+    window.dispatchEvent(new CustomEvent('blood_requests_changed', { detail: requests }));
+  } catch (err) {
+    console.error('Failed to save blood requests:', err);
+  }
+}
+
+export function registerOrUpdateBloodDonor(profile: BloodDonorProfile): BloodDonorProfile {
+  const existing = loadBloodDonors();
+  const index = existing.findIndex((d) => d.userId === profile.userId);
+  const updatedProfile: BloodDonorProfile = {
+    ...profile,
+    updatedAt: new Date().toISOString(),
+  };
+
+  if (index >= 0) {
+    existing[index] = updatedProfile;
+  } else {
+    existing.unshift(updatedProfile);
+  }
+
+  saveBloodDonors(existing);
+  return updatedProfile;
+}
+
+export function getDonorProfileByUserId(userId: number): BloodDonorProfile | null {
+  const donors = loadBloodDonors();
+  return donors.find((d) => d.userId === userId) || null;
+}
+
+export function createBloodRequest(params: {
+  bloodGroup: BloodGroup;
+  unitsRequired: number;
+  hospitalName: string;
+  hospitalArea: string;
+  city: string;
+  requiredDateTime: string;
+  emergencyLevel: BloodEmergencyLevel;
+  contactMethod: BloodContactMethod;
+  contactPhone?: string;
+  description: string;
+  patientRelation?: string;
+  requesterId: number;
+  requesterName: string;
+  requesterAvatar: string;
+  requesterBatch: number;
+}): BloodEmergencyRequest {
+  const newRequest: BloodEmergencyRequest = {
+    id: `req_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+    bloodGroup: params.bloodGroup,
+    unitsRequired: Math.max(1, params.unitsRequired),
+    unitsFulfilled: 0,
+    hospitalName: sanitizeInputText(params.hospitalName, 120),
+    hospitalArea: sanitizeInputText(params.hospitalArea, 120),
+    city: sanitizeInputText(params.city || 'Dhaka', 60),
+    requiredDateTime: params.requiredDateTime,
+    emergencyLevel: params.emergencyLevel,
+    contactMethod: params.contactMethod,
+    contactPhone: sanitizeInputText(params.contactPhone || '', 30),
+    description: sanitizeInputText(params.description, 500),
+    patientRelation: sanitizeInputText(params.patientRelation || 'Alumnus / Relative', 50),
+    requesterId: params.requesterId,
+    requesterName: params.requesterName,
+    requesterAvatar: params.requesterAvatar,
+    requesterBatch: params.requesterBatch,
+    status: 'Active',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    responses: [],
+  };
+
+  const requests = loadBloodRequests();
+  requests.unshift(newRequest);
+  saveBloodRequests(requests);
+
+  return newRequest;
+}
+
+export function respondToBloodRequest(
+  param1:
+    | string
+    | {
+        requestId: string;
+        donorUserId: number;
+        donorName: string;
+        donorAvatar: string;
+        donorBatchYear: number;
+        donorBloodGroup: BloodGroup;
+        donorPreferredArea: string;
+        donorPhone?: string;
+        note?: string;
+      },
+  param2?: any,
+  param3?: string
+): any {
+  if (typeof param1 === 'string') {
+    const requestId = param1;
+    const actor = param2;
+    const note = param3;
+    const requests = loadBloodRequests();
+    const req = requests.find((r) => r.id === requestId);
+    if (!req) throw new Error('Blood request not found');
+
+    const existing = req.responses.find((r) => r.donorUserId === actor.id);
+    if (!existing) {
+      req.responses.push({
+        id: `resp_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        requestId,
+        donorUserId: actor.id,
+        donorName: actor.fullName,
+        donorAvatar: actor.avatarUrl,
+        donorBatchYear: actor.batchYear || 25,
+        donorBloodGroup: actor.bloodGroup || req.bloodGroup,
+        donorPreferredArea: actor.preferredArea || actor.city || 'Dhaka',
+        donorPhone: actor.phone,
+        respondedAt: new Date().toISOString(),
+        status: 'offered',
+        note: sanitizeInputText(note || '', 200),
+      });
+      if (req.status === 'Active') req.status = 'Donor Found';
+      req.updatedAt = new Date().toISOString();
+      saveBloodRequests(requests);
+    }
+    return req;
+  } else {
+    const params = param1;
+    const requests = loadBloodRequests();
+    const req = requests.find((r) => r.id === params.requestId);
+    if (!req) return false;
+
+    const existingResponse = req.responses.find((r) => r.donorUserId === params.donorUserId);
+    if (existingResponse) return false;
+
+    const responseItem: BloodDonorResponse = {
+      id: `resp_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      requestId: params.requestId,
+      donorUserId: params.donorUserId,
+      donorName: params.donorName,
+      donorAvatar: params.donorAvatar,
+      donorBatchYear: params.donorBatchYear,
+      donorBloodGroup: params.donorBloodGroup,
+      donorPreferredArea: params.donorPreferredArea,
+      donorPhone: params.donorPhone,
+      respondedAt: new Date().toISOString(),
+      status: 'offered',
+      note: sanitizeInputText(params.note || '', 200),
+    };
+
+    req.responses.push(responseItem);
+    if (req.status === 'Active') {
+      req.status = 'Donor Found';
+    }
+    req.updatedAt = new Date().toISOString();
+
+    saveBloodRequests(requests);
+    return true;
+  }
+}
+
+export function updateBloodRequestStatus(
+  requestId: string,
+  newStatus: BloodRequestStatus,
+  fulfilledUnitsOrActor?: number | any,
+  options?: any
+): any {
+  const requests = loadBloodRequests();
+  const req = requests.find((r) => r.id === requestId);
+  if (!req) return typeof fulfilledUnitsOrActor === 'number' ? false : null;
+
+  req.status = newStatus;
+  if (typeof fulfilledUnitsOrActor === 'number') {
+    req.unitsFulfilled = Math.min(req.unitsRequired, fulfilledUnitsOrActor);
+  } else if (newStatus === 'Fulfilled') {
+    req.unitsFulfilled = req.unitsRequired;
+  }
+  if (options?.moderationNote) {
+    req.moderationNote = sanitizeInputText(options.moderationNote, 200);
+  }
+  req.updatedAt = new Date().toISOString();
+
+  saveBloodRequests(requests);
+  return typeof fulfilledUnitsOrActor === 'number' ? true : req;
+}
+
+export function canModifyBloodRequest(
+  request: BloodEmergencyRequest,
+  actor: { id: number; userId?: number; role?: string },
+  isModerator = false
+): boolean {
+  if (!actor || !request) return false;
+  if (isModerator || actor.role === 'admin') return true;
+  const actorId = actor.id || actor.userId;
+  return request.requesterId === actorId;
+}
+
+export function confirmDonorDonationOnRequest(
+  requestId: string,
+  responseId: string,
+  actor: any,
+  isModerator = false
+): BloodEmergencyRequest {
+  const requests = loadBloodRequests();
+  const req = requests.find((r) => r.id === requestId);
+  if (!req) throw new Error('Blood request not found');
+
+  const resp = req.responses.find((r) => r.id === responseId);
+  if (resp) {
+    resp.status = 'confirmed_donated';
+  }
+  req.unitsFulfilled = Math.min(req.unitsRequired, (req.unitsFulfilled || 0) + 1);
+  if (req.unitsFulfilled >= req.unitsRequired) {
+    req.status = 'Fulfilled';
+  } else {
+    req.status = 'Donation Confirmed';
+  }
+  req.updatedAt = new Date().toISOString();
+  saveBloodRequests(requests);
+  return req;
+}
+
+export const BLOOD_BANNER_DISMISSED_KEY = 'blood_emergency_banner_dismissed_v2';
 
 export function isBloodBannerDismissed(): boolean {
   if (typeof window === 'undefined') return false;
@@ -38,620 +532,26 @@ export function dismissBloodBanner(): void {
   if (typeof window === 'undefined') return;
   try {
     localStorage.setItem(BLOOD_BANNER_DISMISSED_KEY, 'true');
-    window.dispatchEvent(new CustomEvent('ndc_blood_banner_dismissed'));
+    window.dispatchEvent(new CustomEvent('blood_banner_dismissed'));
   } catch (e) {
     console.warn('Failed to dismiss blood banner', e);
   }
 }
 
-export const DONATION_AREAS_LIST: string[] = [
-  'Bogura / Silimpur (SZMCH, Mohammad Ali Hospital, TMSS)',
-  'Shahbagh / Ramna (DMCH, BSMMU, BIRDEM)',
-  'Dhanmondi / Panthapath / Green Road (Square, Labaid)',
-  'Gulshan / Banani / Bashundhara (Evercare, United)',
-  'Mirpur / Agargaon / Shyamoli (NICVD, NIKDU, Heart Foundation, NITOR)',
-  'Uttara / Kurmitola / Airport Corridor',
-  'Mugda / Khilgaon / Malibagh',
-  'Chattogram Metropolitan Area',
-  'Rajshahi / Rangpur / Sylhet / Khulna Regional Hub',
-];
-
-/**
- * Sanitize user-entered text to prevent injection and enforce length bounds.
- */
-export function sanitizeInputText(value: string, maxLength = 300): string {
-  if (!value || typeof value !== 'string') return '';
-  return value
-    .replace(/<[^>]*>?/gm, '')
-    .replace(/javascript:/gi, '')
-    .trim()
-    .slice(0, maxLength);
-}
-
-/**
- * Initial blood donor profiles.
- * Production starts with empty list []; populated only with real registered blood donors.
- */
-export const INITIAL_BLOOD_DONORS: BloodDonorProfile[] = [];
-
-export const INITIAL_BLOOD_REQUESTS: BloodEmergencyRequest[] = [];
-
-/**
- * Load all blood donors from localStorage merged with INITIAL_BLOOD_DONORS.
- */
-export function loadBloodDonors(): BloodDonorProfile[] {
-  if (typeof window === 'undefined') return [];
-  try {
-    const raw = localStorage.getItem(BLOOD_DONORS_STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed.filter(
-          (d: BloodDonorProfile) =>
-            d &&
-            d.userId &&
-            !(d.userId >= 101 && d.userId <= 120) &&
-            !(d.userId >= 1001 && d.userId <= 1006) &&
-            !(d.userId >= 800000 && d.userId <= 999999)
-        );
-      }
-    }
-  } catch (e) {
-    console.warn('Failed to load blood donors from storage', e);
-  }
-  return [];
-}
-
-export function saveBloodDonors(donors: BloodDonorProfile[]): void {
+export function pushPortalNotification(notification: any): void {
   if (typeof window === 'undefined') return;
   try {
-    localStorage.setItem(BLOOD_DONORS_STORAGE_KEY, JSON.stringify(donors));
-    window.dispatchEvent(new CustomEvent('ndc_blood_network_updated'));
-  } catch (e) {
-    console.warn('Failed to save blood donors to storage', e);
-  }
-}
-
-/**
- * Get a specific user's blood donor profile if registered.
- */
-export function getDonorProfileByUserId(userId: number): BloodDonorProfile | undefined {
-  return loadBloodDonors().find((d) => d.userId === userId);
-}
-
-/**
- * Create or update a user's Blood Donor Profile (privacy-safe: never stores phone/email/home address).
- */
-export async function upsertBloodDonorProfile(
-  user: AlumniProfile,
-  input: {
-    bloodGroup: BloodGroup;
-    isRegisteredDonor: boolean;
-    availability: BloodDonorAvailability;
-    preferredArea: string;
-    lastDonationDate?: string;
-    emergencyAlertPreference: BloodAlertPreference;
-    donationHistory?: BloodDonationHistoryItem[];
-  }
-): Promise<BloodDonorProfile> {
-  if (!BLOOD_GROUPS_LIST.includes(input.bloodGroup)) {
-    throw new Error('Please select a valid blood group.');
-  }
-  const cleanArea = sanitizeInputText(input.preferredArea || user.city || 'Dhaka', 120);
-  if (!cleanArea) {
-    throw new Error('Please specify a preferred donation area.');
-  }
-
-  const donors = loadBloodDonors();
-  const existingIdx = donors.findIndex((d) => d.userId === user.id);
-
-  const updatedDonor: BloodDonorProfile = {
-    userId: user.id,
-    fullName: sanitizeInputText(user.fullName || 'SZMC Alumnus', 80),
-    avatarUrl: user.avatarUrl,
-    batchYear: user.batchYear || 68,
-    profession: user.profession,
-    institution: user.institution,
-    verificationStatus: user.verificationStatus || 'verified',
-    bloodGroup: input.bloodGroup,
-    isRegisteredDonor: input.isRegisteredDonor,
-    availability: input.availability,
-    preferredArea: cleanArea,
-    city: sanitizeInputText(user.city || 'Dhaka', 60),
-    lastDonationDate: input.lastDonationDate || undefined,
-    emergencyAlertPreference: input.emergencyAlertPreference,
-    donationHistory: input.donationHistory ?? (existingIdx > -1 ? donors[existingIdx].donationHistory : []),
-    updatedAt: 'Just now',
-  };
-
-  const savedToSupabase = await registerBloodDonorInDb({
-    userId: user.id,
-    bloodGroup: input.bloodGroup,
-    isRegisteredDonor: input.isRegisteredDonor,
-    availability: input.availability,
-    preferredArea: cleanArea,
-    city: sanitizeInputText(user.city || 'Dhaka', 60),
-    lastDonationDate: input.lastDonationDate,
-    emergencyAlertPreference: input.emergencyAlertPreference,
-    donationHistory: updatedDonor.donationHistory,
-  });
-  if (!savedToSupabase) {
-    throw new Error('Could not save donor settings to Supabase. Please try again.');
-  }
-
-  if (existingIdx > -1) {
-    donors[existingIdx] = updatedDonor;
-  } else {
-    donors.unshift(updatedDonor);
-  }
-  saveBloodDonors(donors);
-  return updatedDonor;
-}
-
-/**
- * Load all emergency blood requests, automatically marking expired requests if past their expiresAt timestamp.
- */
-export function loadBloodRequests(): BloodEmergencyRequest[] {
-  if (typeof window === 'undefined') return [];
-  try {
-    const raw = localStorage.getItem(BLOOD_REQUESTS_STORAGE_KEY);
-    let list: BloodEmergencyRequest[] = [];
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        list = parsed.filter(
-          (r: BloodEmergencyRequest) =>
-            r &&
-            r.id &&
-            !r.id.startsWith('blood-req-100') &&
-            !r.id.startsWith('mock-') &&
-            !r.id.startsWith('demo-')
-        );
-      }
-    }
-
-    // Check if any active/pending request has passed its expiresAt date
-    const now = Date.now();
-    let changed = false;
-    const checked = list.map((req) => {
-      if (
-        (req.status === 'Active' || req.status === 'Pending Verification') &&
-        req.expiresAt &&
-        !isNaN(new Date(req.expiresAt).getTime()) &&
-        new Date(req.expiresAt).getTime() < now
-      ) {
-        changed = true;
-        return { ...req, status: 'Expired' as BloodRequestStatus, updatedAt: 'Expired automatically' };
-      }
-      return req;
+    const raw = localStorage.getItem('portal_notifications_v1');
+    const list = raw ? JSON.parse(raw) : [];
+    list.unshift({
+      id: `notif_${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      read: false,
+      ...notification,
     });
-
-    if (changed) {
-      localStorage.setItem(BLOOD_REQUESTS_STORAGE_KEY, JSON.stringify(checked));
-    }
-    return checked;
+    localStorage.setItem('portal_notifications_v1', JSON.stringify(list));
+    window.dispatchEvent(new CustomEvent('portal_notifications_changed'));
   } catch (e) {
-    console.warn('Failed to load blood requests from storage', e);
+    console.warn('Failed to push portal notification', e);
   }
-  return [];
-}
-
-export function saveBloodRequests(requests: BloodEmergencyRequest[]): void {
-  if (typeof window === 'undefined') return;
-  try {
-    localStorage.setItem(BLOOD_REQUESTS_STORAGE_KEY, JSON.stringify(requests));
-    window.dispatchEvent(new CustomEvent('ndc_blood_network_updated'));
-  } catch (e) {
-    console.warn('Failed to save blood requests to storage', e);
-  }
-}
-
-/**
- * EXISTING Notification System Integration:
- * Loads and persists notifications into the single portal notification list used by Header.tsx.
- */
-export function loadPortalNotifications(): NotificationItem[] {
-  if (typeof window === 'undefined') return [];
-  try {
-    const raw = localStorage.getItem(PORTAL_NOTIFICATIONS_STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed;
-      }
-    }
-  } catch (e) {
-    console.warn('Failed to load notifications from storage', e);
-  }
-  return [];
-}
-
-export function savePortalNotifications(items: NotificationItem[]): void {
-  if (typeof window === 'undefined') return;
-  try {
-    localStorage.setItem(PORTAL_NOTIFICATIONS_STORAGE_KEY, JSON.stringify(items));
-    window.dispatchEvent(new CustomEvent('ndc_notifications_updated'));
-  } catch (e) {
-    console.warn('Failed to save notifications', e);
-  }
-}
-
-export function pushPortalNotification(input: {
-  title: string;
-  message: string;
-  type?: NotificationItem['type'];
-  targetRoute?: string;
-  bloodRequestId?: string;
-}): NotificationItem {
-  const existing = loadPortalNotifications();
-  const nextItem: NotificationItem = {
-    id: Date.now() + Math.floor(Math.random() * 1000),
-    title: sanitizeInputText(input.title, 110),
-    message: sanitizeInputText(input.message, 240),
-    timeAgo: 'Just now',
-    unread: true,
-    type: input.type || 'blood',
-    targetRoute: input.targetRoute || 'emergency',
-    bloodRequestId: input.bloodRequestId,
-  };
-  const updated = [nextItem, ...existing].slice(0, 35);
-  savePortalNotifications(updated);
-  return nextItem;
-}
-
-/**
- * Security & Authorization check:
- * Only the original requester or a verified moderator/admin can modify a request's status.
- */
-export function canModifyBloodRequest(
-  request: BloodEmergencyRequest,
-  currentUser: AlumniProfile,
-  isModeratorMode = false
-): boolean {
-  if (!currentUser) return false;
-  if (request.requesterId === currentUser.id || request.requesterId === currentUser.userId) {
-    return true;
-  }
-  if (isModeratorMode && (currentUser.verificationStatus || 'verified') === 'verified') {
-    return true;
-  }
-  return false;
-}
-
-/**
- * Create a new Emergency Blood Request with strict input validation and automatic donor matching notifications.
- */
-export async function createEmergencyBloodRequest(
-  requester: AlumniProfile,
-  input: {
-    bloodGroup: BloodGroup;
-    unitsRequired: number;
-    hospitalName: string;
-    hospitalArea: string;
-    city?: string;
-    requiredDateTime: string;
-    emergencyLevel: BloodEmergencyLevel;
-    contactMethod: BloodContactMethod;
-    coordinationRef?: string;
-    description: string;
-    patientRelation?: string;
-  }
-): Promise<{ request: BloodEmergencyRequest; matchedDonorsCount: number }> {
-  if (!BLOOD_GROUPS_LIST.includes(input.bloodGroup)) {
-    throw new Error('Please select a valid blood group.');
-  }
-  const units = Number(input.unitsRequired);
-  if (!Number.isInteger(units) || units < 1 || units > 10) {
-    throw new Error('Units required must be between 1 and 10.');
-  }
-
-  const hospitalName = sanitizeInputText(input.hospitalName, 140);
-  const hospitalArea = sanitizeInputText(input.hospitalArea, 120);
-  const requiredDateTime = sanitizeInputText(input.requiredDateTime, 80);
-  const description = sanitizeInputText(input.description, 350);
-
-  if (!hospitalName || hospitalName.length < 3) {
-    throw new Error('Please enter the hospital or blood bank name.');
-  }
-  if (!hospitalArea) {
-    throw new Error('Please select or enter the hospital area/location.');
-  }
-  if (!requiredDateTime) {
-    throw new Error('Please specify when the blood is required.');
-  }
-  if (!description || description.length < 10) {
-    throw new Error('Please provide a short clinical/coordination description (at least 10 characters).');
-  }
-
-  const isRequesterVerified = (requester.verificationStatus || 'verified') === 'verified';
-  const initialStatus: BloodRequestStatus = isRequesterVerified ? 'Active' : 'Pending Verification';
-
-  const newRequest: BloodEmergencyRequest = {
-    id: '',
-    bloodGroup: input.bloodGroup,
-    unitsRequired: units,
-    unitsFulfilled: 0,
-    hospitalName,
-    hospitalArea,
-    city: sanitizeInputText(input.city || requester.city || 'Dhaka', 60),
-    requiredDateTime,
-    emergencyLevel: input.emergencyLevel,
-    contactMethod: input.contactMethod,
-    coordinationRef: sanitizeInputText(input.coordinationRef || '', 120) || undefined,
-    description,
-    patientRelation: sanitizeInputText(input.patientRelation || 'SZMC Patient / Family', 80),
-    requesterId: requester.id,
-    requesterName: sanitizeInputText(requester.fullName || 'SZMC Alumnus', 80),
-    requesterAvatar: requester.avatarUrl,
-    requesterBatch: requester.batchYear || 68,
-    requesterVerified: isRequesterVerified,
-    status: initialStatus,
-    createdAt: 'Just now',
-    updatedAt: 'Just now',
-    expiresAt: new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString(),
-    responses: [],
-    verifiedByAdmin: undefined,
-  };
-
-  const persistedRequestId = await createBloodRequestInDb({
-    requesterId: requester.id,
-    bloodGroup: input.bloodGroup,
-    unitsRequired: units,
-    hospitalName,
-    hospitalArea,
-    city: sanitizeInputText(input.city || requester.city || 'Dhaka', 60),
-    requiredDateTime,
-    emergencyLevel: input.emergencyLevel,
-    contactMethod: input.contactMethod,
-    description,
-    status: initialStatus,
-    coordinationRef: input.coordinationRef,
-    patientRelation: input.patientRelation,
-  });
-  if (!persistedRequestId) {
-    throw new Error('Could not publish the blood request to Supabase. Please verify the required date/time and try again.');
-  }
-
-  newRequest.id = persistedRequestId;
-  const requests = loadBloodRequests();
-  const updatedRequests = [newRequest, ...requests];
-  saveBloodRequests(updatedRequests);
-
-  const donors = loadBloodDonors();
-  const matched = matchDonorsForRequest(newRequest, donors);
-
-  // Trigger notification through EXISTING notification system
-  pushPortalNotification({
-    title: `🩸 Emergency ${newRequest.bloodGroup} Blood Request (${newRequest.emergencyLevel.toUpperCase()})`,
-    message: `${newRequest.unitsRequired} unit(s) of ${newRequest.bloodGroup} needed at ${newRequest.hospitalName} (${newRequest.hospitalArea}). ${matched.length} matching alumni donors identified.`,
-    type: 'blood',
-    targetRoute: 'emergency',
-    bloodRequestId: newRequest.id,
-  });
-
-  return { request: newRequest, matchedDonorsCount: matched.length };
-}
-
-/**
- * Record a donor's "I Can Donate" response, update request status if appropriate,
- * and notify the requester via the existing notification system.
- */
-export async function respondToBloodRequest(
-  requestId: string,
-  donorUser: AlumniProfile,
-  note?: string
-): Promise<BloodEmergencyRequest> {
-  const requests = loadBloodRequests();
-  const idx = requests.findIndex((r) => r.id === requestId);
-  if (idx === -1) {
-    throw new Error('Blood request not found.');
-  }
-
-  const target = requests[idx];
-  if (target.status === 'Fulfilled' || target.status === 'Cancelled' || target.status === 'Expired') {
-    throw new Error(`Cannot respond to a ${target.status.toLowerCase()} request.`);
-  }
-
-  if (target.responses.some((r) => r.donorUserId === donorUser.id)) {
-    throw new Error('You have already responded "I Can Donate" to this request.');
-  }
-
-  const donorRecord = getDonorProfileByUserId(donorUser.id);
-  const donorBloodGroup: BloodGroup =
-    donorRecord?.bloodGroup || donorUser.bloodGroup || target.bloodGroup;
-  const donorArea =
-    donorRecord?.preferredArea ||
-    donorUser.bloodDonorProfile?.preferredArea ||
-    `${donorUser.city || 'Dhaka'}`;
-
-  const responseItem: BloodDonorResponse = {
-    id: `resp-${Date.now()}`,
-    requestId: target.id,
-    donorUserId: donorUser.id,
-    donorName: sanitizeInputText(donorUser.fullName || 'SZMC Colleague / Batchmate', 80),
-    donorAvatar: donorUser.avatarUrl,
-    donorBatchYear: donorUser.batchYear || 68,
-    donorBloodGroup,
-    donorPreferredArea: donorArea,
-    respondedAt: 'Just now',
-    status: 'offered',
-    note: sanitizeInputText(
-      note || 'Ready to coordinate at the hospital blood bank for cross-matching.',
-      200
-    ),
-  };
-
-  const nextStatus: BloodRequestStatus =
-    target.status === 'Active' ? 'Donor Found' : target.status;
-
-  const updatedRequest: BloodEmergencyRequest = {
-    ...target,
-    status: nextStatus,
-    updatedAt: 'Just now',
-    responses: [responseItem, ...target.responses],
-  };
-
-  const persisted = await respondToBloodRequestInDb({
-    requestId: target.id,
-    donorUserId: donorUser.id,
-    status: 'offered',
-    note: responseItem.note,
-  });
-  if (!persisted) {
-    throw new Error('Could not save your donor response to Supabase. Please try again.');
-  }
-
-  requests[idx] = updatedRequest;
-  saveBloodRequests(requests);
-
-  // Send notification via the EXISTING notification system
-  pushPortalNotification({
-    title: `🩸 Donor Response: ${donorUser.fullName} (Batch ${donorUser.batchYear}) Can Donate!`,
-    message: `${donorUser.fullName} (${donorBloodGroup}) responded "I Can Donate" for your ${target.bloodGroup} request at ${target.hospitalName}.`,
-    type: 'blood',
-    targetRoute: 'emergency',
-    bloodRequestId: target.id,
-  });
-
-  return updatedRequest;
-}
-
-/**
- * Update a donor response status (e.g., Confirm Donation) and synchronize request status & notifications.
- */
-export function confirmDonorDonationOnRequest(
-  requestId: string,
-  responseId: string,
-  actor: AlumniProfile,
-  isModeratorMode = false
-): BloodEmergencyRequest {
-  const requests = loadBloodRequests();
-  const idx = requests.findIndex((r) => r.id === requestId);
-  if (idx === -1) throw new Error('Request not found.');
-
-  const target = requests[idx];
-  if (!canModifyBloodRequest(target, actor, isModeratorMode)) {
-    throw new Error('Only the requester or an authorized moderator can confirm donations on this request.');
-  }
-
-  let confirmedDonorName = 'Alumnus Donor';
-  let confirmedDonorId = 0;
-
-  const updatedResponses = target.responses.map((resp) => {
-    if (resp.id === responseId) {
-      confirmedDonorName = resp.donorName;
-      confirmedDonorId = resp.donorUserId;
-      return { ...resp, status: 'confirmed_donated' as const };
-    }
-    return resp;
-  });
-
-  const confirmedCount = updatedResponses.filter((r) => r.status === 'confirmed_donated').length;
-  const nextUnitsFulfilled = Math.min(target.unitsRequired, Math.max(target.unitsFulfilled, confirmedCount));
-  const nextStatus: BloodRequestStatus =
-    nextUnitsFulfilled >= target.unitsRequired ? 'Fulfilled' : 'Donation Confirmed';
-
-  const updatedRequest: BloodEmergencyRequest = {
-    ...target,
-    unitsFulfilled: nextUnitsFulfilled,
-    status: nextStatus,
-    updatedAt: 'Just now',
-    responses: updatedResponses,
-  };
-
-  requests[idx] = updatedRequest;
-  saveBloodRequests(requests);
-
-  // Also update donor's lastDonationDate & history if registered
-  if (confirmedDonorId) {
-    const donors = loadBloodDonors();
-    const dIdx = donors.findIndex((d) => d.userId === confirmedDonorId);
-    if (dIdx > -1) {
-      const todayIso = new Date().toISOString().slice(0, 10);
-      donors[dIdx] = {
-        ...donors[dIdx],
-        availability: 'on_cooldown',
-        lastDonationDate: todayIso,
-        donationHistory: [
-          {
-            id: `dh-${Date.now()}`,
-            date: todayIso,
-            hospital: target.hospitalName,
-            location: target.hospitalArea,
-            units: 1,
-            notes: `Donated for ${target.bloodGroup} request (${target.patientRelation || 'NDC Alumni Network'})`,
-          },
-          ...(donors[dIdx].donationHistory || []),
-        ],
-        updatedAt: 'Just now',
-      };
-      saveBloodDonors(donors);
-    }
-  }
-
-  pushPortalNotification({
-    title:
-      nextStatus === 'Fulfilled'
-        ? `✅ Blood Request Fulfilled (${target.bloodGroup} at ${target.hospitalName})`
-        : `🩸 Donation Confirmed from ${confirmedDonorName}`,
-    message:
-      nextStatus === 'Fulfilled'
-        ? `All ${target.unitsRequired} unit(s) of ${target.bloodGroup} at ${target.hospitalName} have been confirmed and fulfilled.`
-        : `${confirmedDonorName}'s blood donation at ${target.hospitalName} has been confirmed (${nextUnitsFulfilled}/${target.unitsRequired} units).`,
-    type: 'blood',
-    targetRoute: 'emergency',
-    bloodRequestId: target.id,
-  });
-
-  return updatedRequest;
-}
-
-/**
- * Update blood request status (Requester or Admin/Moderation actions:
- * Verify & Activate, Donor Found, Donation Confirmed, Fulfilled, Cancelled, Expired).
- */
-export function updateBloodRequestStatus(
-  requestId: string,
-  newStatus: BloodRequestStatus,
-  actor: AlumniProfile,
-  options?: { isModeratorMode?: boolean; moderationNote?: string }
-): BloodEmergencyRequest {
-  const requests = loadBloodRequests();
-  const idx = requests.findIndex((r) => r.id === requestId);
-  if (idx === -1) {
-    throw new Error('Blood request not found.');
-  }
-
-  const target = requests[idx];
-  const isMod = Boolean(options?.isModeratorMode);
-  if (!canModifyBloodRequest(target, actor, isMod)) {
-    throw new Error('Unauthorized: Only the requester or a verified moderator can change this request status.');
-  }
-
-  const updatedRequest: BloodEmergencyRequest = {
-    ...target,
-    status: newStatus,
-    unitsFulfilled: newStatus === 'Fulfilled' ? target.unitsRequired : target.unitsFulfilled,
-    updatedAt: 'Just now',
-    moderationNote: options?.moderationNote
-      ? sanitizeInputText(options.moderationNote, 200)
-      : target.moderationNote,
-    verifiedByAdmin:
-      newStatus === 'Active' && target.status === 'Pending Verification'
-        ? `${actor.fullName} (Batch ${actor.batchYear})`
-        : target.verifiedByAdmin,
-  };
-
-  requests[idx] = updatedRequest;
-  saveBloodRequests(requests);
-
-  pushPortalNotification({
-    title: `🩸 Blood Request Status Updated: ${newStatus}`,
-    message: `${target.bloodGroup} request at ${target.hospitalName} is now marked as "${newStatus}" by ${actor.fullName}.`,
-    type: 'blood',
-    targetRoute: 'emergency',
-    bloodRequestId: target.id,
-  });
-
-  return updatedRequest;
 }

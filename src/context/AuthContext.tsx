@@ -488,7 +488,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             userId: Date.now(),
             authUserId: 'direct-user-' + Date.now(),
             fullName: cleanInput.split('@')[0],
-            avatarUrl: '/szmc-logo.png',
+            avatarUrl: '/assets/aistudio/images__1__2778177d.png',
             batchYear: 25,
             academicStream: 'MBBS',
             academicGroup: null,
@@ -546,7 +546,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         (authData.user.user_metadata as any)?.full_name ||
         (authData.user.user_metadata as any)?.name ||
         (isEmail ? cleanInput.split('@')[0] : cleanInput),
-      avatarUrl: (authData.user.user_metadata as any)?.avatar_url || '/szmc-logo.png',
+      avatarUrl: (authData.user.user_metadata as any)?.avatar_url || '/assets/aistudio/images__1__2778177d.png',
       batchYear: Number((authData.user.user_metadata as any)?.batch_year) || 25,
       academicStream: 'MBBS',
       academicGroup: null,
@@ -707,7 +707,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         userId: Number(signUpData.user.id.replace(/[^0-9]/g, '').slice(0, 10)) || Date.now(),
         authUserId: signUpData.user.id,
         fullName: profileData.fullName?.trim() || cleanEmail.split('@')[0],
-        avatarUrl: profileData.avatarUrl || '/szmc-logo.png',
+        avatarUrl: profileData.avatarUrl || '/assets/aistudio/images__1__2778177d.png',
         batchYear: normalizedBatch,
         academicStream: 'MBBS',
         academicGroup: null,

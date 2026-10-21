@@ -68,14 +68,19 @@ export const Header: React.FC<HeaderProps> = ({
             <Menu className="w-5 h-5" />
           </button>
 
-          {/* Mobile-only logo display */}
+          {/* Brand logo display */}
           <button
             type="button"
             onClick={() => onNavigate('dashboard')}
-            className="lg:hidden shrink-0 hidden min-[360px]:flex items-center cursor-pointer"
+            className="shrink-0 flex items-center gap-2 cursor-pointer"
             title="SZMC Alumni Home"
           >
-            <NDCLogo className="w-8 h-8" />
+            <div className="w-9 h-9 rounded-xl bg-white dark:bg-slate-800 p-0.5 border border-slate-200/80 dark:border-slate-700/80 flex items-center justify-center shadow-xs overflow-hidden">
+              <NDCLogo className="w-full h-full" />
+            </div>
+            <span className="hidden xl:inline font-bold text-sm tracking-tight text-slate-900 dark:text-white">
+              SZMC Alumni
+            </span>
           </button>
 
           {/* Global Search Bar */}

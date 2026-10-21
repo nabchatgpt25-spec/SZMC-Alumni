@@ -27,7 +27,7 @@ export function mapSupabaseRowToAlumniProfile(row: any): AlumniProfile {
     fullName: row.full_name || 'SZMC Alumnus',
     avatarUrl:
       row.avatar_url ||
-      '/ndc-logo.png',
+      '/assets/aistudio/images__1__2778177d.png',
     coverUrl: row.cover_url || undefined,
     batchYear: Number(row.batch_year) || 68,
     session: row.session || undefined,
@@ -142,7 +142,7 @@ export async function getOrCreateSupabaseProfile(
         extraData?.avatarUrl ||
         (authUser.user_metadata as any)?.avatar_url ||
         (authUser.user_metadata as any)?.picture ||
-        '/szmc-logo.png',
+        '/assets/aistudio/images__1__2778177d.png',
       batch_year: normalizedBatch,
       session: extraData?.session || `Session ${1990 + normalizedBatch}-${String(1991 + normalizedBatch).slice(-2)}`,
       academic_stream: streamGroup.academicStream,

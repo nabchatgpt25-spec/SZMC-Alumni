@@ -1,0 +1,1566 @@
+Here is the complete, modular Blood Donation & Emergency Coordination Codex. You can copy-paste each section directly into your project files.
+1. src/types/blood.ts
+All core interfaces, blood group types, compatibility definitions, and status enums.
+code
+TypeScript
+export type BloodGroup = 'A+' | 'A-' | 'B+' | 'B-' | 'AB+' | 'AB-' | 'O+' | 'O-';
+
+export const BLOOD_GROUPS_LIST: BloodGroup[] = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
+
+export type BloodDonorAvailability = 'available' | 'on_cooldown' | 'unavailable';
+
+export type BloodAlertPreference = 'all_urgent' | 'same_area_only' | 'critical_only' | 'paused';
+
+export type BloodEmergencyLevel = 'critical' | 'urgent' | 'standard';
+
+export type BloodRequestStatus =
+  | 'Pending Verification'
+  | 'Active'
+  | 'Donor Found'
+  | 'Donation Confirmed'
+  | 'Fulfilled'
+  | 'Cancelled'
+  | 'Expired';
+
+export type BloodContactMethod =
+  | 'Portal Secure Coordination'
+  | 'Hospital Blood Bank Desk'
+  | 'Batch Coordinator Relay'
+  | 'Attendant Emergency Line';
+
+export interface BloodDonationHistoryItem {
+  id: string;
+  date: string;
+  hospital: string;
+  location?: string;
+  units?: number;
+  notes?: string;
+}
+
+export interface BloodDonorProfile {
+  userId: number;
+  fullName: string;
+  avatarUrl: string;
+  batchYear: number;
+  profession?: string;
+  institution?: string;
+  phone?: string;
+  whatsapp?: string;
+  email?: string;
+  verificationStatus?: 'verified' | 'pending_vouch' | 'unverified';
+  bloodGroup: BloodGroup;
+  isRegisteredDonor: boolean;
+  availability: BloodDonorAvailability;
+  preferredArea: string;
+  city: string;
+  lastDonationDate?: string;
+  emergencyAlertPreference: BloodAlertPreference;
+  donationHistory: BloodDonationHistoryItem[];
+  updatedAt: string;
+}
+
+export interface BloodDonorResponse {
+  id: string;
+  requestId: string;
+  donorUserId: number;
+  donorName: string;
+  donorAvatar: string;
+  donorBatchYear: number;
+  donorBloodGroup: BloodGroup;
+  donorPreferredArea: string;
+  donorPhone?: string;
+  respondedAt: string;
+  status: 'offered' | 'accepted' | 'confirmed_donated' | 'declined';
+  note?: string;
+}
+
+export interface BloodEmergencyRequest {
+  id: string;
+  bloodGroup: BloodGroup;
+  unitsRequired: number;
+  unitsFulfilled: number;
+  hospitalName: string;
+  hospitalArea: string;
+  city: string;
+  requiredDateTime: string;
+  emergencyLevel: BloodEmergencyLevel;
+  contactMethod: BloodContactMethod;
+  contactPhone?: string;
+  coordinationRef?: string;
+  description: string;
+  patientRelation?: string;
+  requesterId: number;
+  requesterName: string;
+  requesterAvatar: string;
+  requesterBatch: number;
+  requesterVerified?: boolean;
+  status: BloodRequestStatus;
+  createdAt: string;
+  updatedAt: string;
+  expiresAt?: string;
+  responses: BloodDonorResponse[];
+  moderationNote?: string;
+  verifiedByAdmin?: string;
+}
+2. src/utils/bloodMatching.ts
+Donor ranking, 90-day cooldown interval calculation, hospital zone cluster proximity, and multi-criteria scoring engine.
+code
+TypeScript
+import {
+  BloodDonorProfile,
+  BloodEmergencyRequest,
+  BloodGroup,
+} from '../types/blood';
+
+export const HOSPITAL_ELIGIBILITY_DISCLAIMER =
+  'Coordination match only. The hospital or licensed blood bank must perform cross-matching and confirm donor medical eligibility and blood compatibility prior to any transfusion.';
+
+export const STANDARD_DONATION_INTERVAL_DAYS = 90;
+
+export interface DonorIntervalInfo {
+  daysSince: number | null;
+  meetsStandardInterval: boolean;
+  daysUntilStandardWindow: number;
+  label: string;
+}
+
+export interface MatchedDonorResult {
+  donor: BloodDonorProfile;
+  matchScore: number;
+  isExactBloodGroup: boolean;
+  isSameArea: boolean;
+  isSameCity: boolean;
+  isAvailableNow: boolean;
+  meetsDonationInterval: boolean;
+  matchesAlertPreference: boolean;
+  matchReasons: string[];
+  intervalInfo: DonorIntervalInfo;
+}
+
+export function getDaysSinceLastDonation(lastDonationDate?: string): number | null {
+  if (!lastDonationDate || !lastDonationDate.trim()) return null;
+  const parsed = new Date(lastDonationDate);
+  if (isNaN(parsed.getTime())) return null;
+  const now = new Date();
+  const diffMs = now.getTime() - parsed.getTime();
+  if (diffMs < 0) return 0;
+  return Math.floor(diffMs / (1000 * 60 * 60 * 24));
+}
+
+export function getDonorIntervalInfo(lastDonationDate?: string): DonorIntervalInfo {
+  const daysSince = getDaysSinceLastDonation(lastDonationDate);
+  if (daysSince === null) {
+    return {
+      daysSince: null,
+      meetsStandardInterval: true,
+      daysUntilStandardWindow: 0,
+      label: 'No recent donation logged (Interval Ready)',
+    };
+  }
+
+  if (daysSince >= STANDARD_DONATION_INTERVAL_DAYS) {
+    return {
+      daysSince,
+      meetsStandardInterval: true,
+      daysUntilStandardWindow: 0,
+      label: `${daysSince} days since last donation (90+ day interval met)`,
+    };
+  }
+
+  const remaining = Math.max(1, STANDARD_DONATION_INTERVAL_DAYS - daysSince);
+  return {
+    daysSince,
+    meetsStandardInterval: false,
+    daysUntilStandardWindow: remaining,
+    label: `Donated ${daysSince}d ago (${remaining}d left in 90-day rest window)`,
+  };
+}
+
+const DHAKA_ZONE_CLUSTERS: string[][] = [
+  ['motijheel', 'shahbagh', 'ramna', 'paltan', 'kakrail', 'mugda', 'dmc', 'bsmmu', 'birdem'],
+  ['dhanmondi', 'panthapath', 'kalabagan', 'green road', 'mohammadpur', 'lalmatia', 'shyamoli', 'square'],
+  ['gulshan', 'banani', 'baridhara', 'bashundhara', 'badda', 'evercare', 'united'],
+  ['uttara', 'airport', 'tongi', 'kurmitola', 'nikunja'],
+  ['mirpur', 'agargaon', 'sher-e-bangla', 'kazipara', 'pallabi', 'nicvd', 'nikdu'],
+];
+
+export function evaluateAreaMatch(
+  donorArea: string,
+  donorCity: string,
+  requestArea: string,
+  requestCity: string
+): { isSameArea: boolean; isAdjacentZone: boolean; isSameCity: boolean } {
+  const dArea = (donorArea || '').toLowerCase();
+  const rArea = (requestArea || '').toLowerCase();
+  const dCity = (donorCity || '').toLowerCase().trim();
+  const rCity = (requestCity || '').toLowerCase().trim();
+
+  const isSameCity = Boolean(dCity && rCity && (dCity === rCity || dCity.includes(rCity) || rCity.includes(dCity)));
+
+  const rTokens = rArea
+    .split(/[,/\-\s]+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 3 && t !== 'dhaka' && t !== 'area' && t !== 'hospital');
+
+  const isSameArea = rTokens.some((tok) => dArea.includes(tok));
+  if (isSameArea) {
+    return { isSameArea: true, isAdjacentZone: true, isSameCity: true };
+  }
+
+  const isAdjacentZone = DHAKA_ZONE_CLUSTERS.some(
+    (cluster) =>
+      cluster.some((z) => dArea.includes(z)) && cluster.some((z) => rArea.includes(z))
+  );
+
+  return { isSameArea: false, isAdjacentZone, isSameCity };
+}
+
+export function matchDonorsForRequest(
+  request: BloodEmergencyRequest,
+  donors: BloodDonorProfile[],
+  options?: { includeCooldownDonors?: boolean; exactBloodGroupOnly?: boolean }
+): MatchedDonorResult[] {
+  const includeCooldown = options?.includeCooldownDonors ?? false;
+  const exactOnly = options?.exactBloodGroupOnly ?? true;
+  const results: MatchedDonorResult[] = [];
+
+  for (const donor of donors) {
+    if (!donor.isRegisteredDonor) continue;
+    if (donor.userId === request.requesterId) continue;
+
+    const isExactBloodGroup = donor.bloodGroup === request.bloodGroup;
+    if (exactOnly && !isExactBloodGroup) continue;
+
+    const intervalInfo = getDonorIntervalInfo(donor.lastDonationDate);
+    const isAvailableNow = donor.availability === 'available' && intervalInfo.meetsStandardInterval;
+
+    if (!includeCooldown && donor.availability === 'unavailable') {
+      continue;
+    }
+
+    const { isSameArea, isAdjacentZone, isSameCity } = evaluateAreaMatch(
+      donor.preferredArea,
+      donor.city,
+      `${request.hospitalArea} ${request.hospitalName}`,
+      request.city
+    );
+
+    let matchesAlertPreference = true;
+    if (donor.emergencyAlertPreference === 'paused') {
+      matchesAlertPreference = false;
+    } else if (donor.emergencyAlertPreference === 'critical_only') {
+      matchesAlertPreference = request.emergencyLevel === 'critical';
+    } else if (donor.emergencyAlertPreference === 'same_area_only') {
+      matchesAlertPreference = isSameArea || isAdjacentZone;
+    }
+
+    let score = 0;
+    const matchReasons: string[] = [];
+
+    if (isExactBloodGroup) {
+      score += 50;
+      matchReasons.push(`Exact ${request.bloodGroup} Group`);
+    }
+
+    if (isAvailableNow) {
+      score += 25;
+      matchReasons.push('Available Now');
+    } else if (donor.availability === 'on_cooldown' || !intervalInfo.meetsStandardInterval) {
+      score += 5;
+      matchReasons.push('In Cooldown Window');
+    }
+
+    if (isSameArea) {
+      score += 20;
+      matchReasons.push(`Same Area (${donor.preferredArea})`);
+    } else if (isAdjacentZone) {
+      score += 14;
+      matchReasons.push('Nearby Hospital Corridor');
+    } else if (isSameCity) {
+      score += 8;
+      matchReasons.push(`Same City (${donor.city})`);
+    }
+
+    if (intervalInfo.meetsStandardInterval) {
+      score += 10;
+      matchReasons.push('90+ Day Interval Ready');
+    }
+
+    if (request.emergencyLevel === 'critical' && matchesAlertPreference) {
+      score += 10;
+      matchReasons.push('Critical Alert Opt-In');
+    }
+
+    results.push({
+      donor,
+      matchScore: score,
+      isExactBloodGroup,
+      isSameArea: isSameArea || isAdjacentZone,
+      isSameCity,
+      isAvailableNow,
+      meetsDonationInterval: intervalInfo.meetsStandardInterval,
+      matchesAlertPreference,
+      matchReasons,
+      intervalInfo,
+    });
+  }
+
+  return results.sort((a, b) => b.matchScore - a.matchScore);
+}
+
+export function getBloodGroupOverviewStats(
+  donors: BloodDonorProfile[],
+  requests: BloodEmergencyRequest[]
+): {
+  bloodGroup: BloodGroup;
+  totalDonors: number;
+  availableDonors: number;
+  activeRequests: number;
+  unitsNeeded: number;
+}[] {
+  const groups: BloodGroup[] = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
+  return groups.map((bg) => {
+    const groupDonors = donors.filter((d) => d.isRegisteredDonor && d.bloodGroup === bg);
+    const availableDonors = groupDonors.filter(
+      (d) => d.availability === 'available' && getDonorIntervalInfo(d.lastDonationDate).meetsStandardInterval
+    ).length;
+    const activeGroupReqs = requests.filter(
+      (r) => (r.status === 'Active' || r.status === 'Donor Found') && r.bloodGroup === bg
+    );
+    const unitsNeeded = activeGroupReqs.reduce(
+      (sum, r) => sum + Math.max(0, r.unitsRequired - (r.unitsFulfilled || 0)),
+      0
+    );
+
+    return {
+      bloodGroup: bg,
+      totalDonors: groupDonors.length,
+      availableDonors,
+      activeRequests: activeGroupReqs.length,
+      unitsNeeded,
+    };
+  });
+}
+3. src/utils/bloodDonationService.ts
+Full state persistence with localStorage caching, real-time custom event triggers, donor registration, response logging, and post/notification dispatching.
+code
+TypeScript
+import {
+  BloodAlertPreference,
+  BloodContactMethod,
+  BloodDonorAvailability,
+  BloodDonorProfile,
+  BloodDonorResponse,
+  BloodEmergencyLevel,
+  BloodEmergencyRequest,
+  BloodGroup,
+  BloodRequestStatus,
+} from '../types/blood';
+import { matchDonorsForRequest } from './bloodMatching';
+
+export const BLOOD_REQUESTS_STORAGE_KEY = 'blood_requests_v1';
+export const BLOOD_DONORS_STORAGE_KEY = 'blood_donors_v1';
+
+export const DONATION_AREAS_LIST: string[] = [
+  'Shahbagh / Motijheel / Ramna (DMCH, BSMMU, BIRDEM)',
+  'Dhanmondi / Panthapath / Green Road (Square, Labaid)',
+  'Gulshan / Banani / Bashundhara (Evercare, United)',
+  'Mirpur / Agargaon / Shyamoli (NICVD, NIKDU, Heart Foundation)',
+  'Uttara / Kurmitola / Airport Corridor',
+  'Mugda / Khilgaon / Malibagh',
+  'Chattogram Metropolitan Area',
+  'Sylhet / Rajshahi / Khulna Regional Hub',
+];
+
+export function sanitizeInputText(value: string, maxLength = 300): string {
+  if (!value || typeof value !== 'string') return '';
+  return value
+    .replace(/<[^>]*>?/gm, '')
+    .replace(/javascript:/gi, '')
+    .trim()
+    .slice(0, maxLength);
+}
+
+export function loadBloodDonors(): BloodDonorProfile[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(BLOOD_DONORS_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (err) {
+    console.warn('Failed to load blood donors from localStorage:', err);
+  }
+  return [];
+}
+
+export function saveBloodDonors(donors: BloodDonorProfile[]): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(BLOOD_DONORS_STORAGE_KEY, JSON.stringify(donors));
+    window.dispatchEvent(new CustomEvent('blood_donors_changed', { detail: donors }));
+  } catch (err) {
+    console.error('Failed to save blood donors:', err);
+  }
+}
+
+export function loadBloodRequests(): BloodEmergencyRequest[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(BLOOD_REQUESTS_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (err) {
+    console.warn('Failed to load blood requests from localStorage:', err);
+  }
+  return [];
+}
+
+export function saveBloodRequests(requests: BloodEmergencyRequest[]): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(BLOOD_REQUESTS_STORAGE_KEY, JSON.stringify(requests));
+    window.dispatchEvent(new CustomEvent('blood_requests_changed', { detail: requests }));
+  } catch (err) {
+    console.error('Failed to save blood requests:', err);
+  }
+}
+
+export function registerOrUpdateBloodDonor(profile: BloodDonorProfile): BloodDonorProfile {
+  const existing = loadBloodDonors();
+  const index = existing.findIndex((d) => d.userId === profile.userId);
+  const updatedProfile: BloodDonorProfile = {
+    ...profile,
+    updatedAt: new Date().toISOString(),
+  };
+
+  if (index >= 0) {
+    existing[index] = updatedProfile;
+  } else {
+    existing.unshift(updatedProfile);
+  }
+
+  saveBloodDonors(existing);
+  return updatedProfile;
+}
+
+export function getDonorProfileByUserId(userId: number): BloodDonorProfile | null {
+  const donors = loadBloodDonors();
+  return donors.find((d) => d.userId === userId) || null;
+}
+
+export function createBloodRequest(params: {
+  bloodGroup: BloodGroup;
+  unitsRequired: number;
+  hospitalName: string;
+  hospitalArea: string;
+  city: string;
+  requiredDateTime: string;
+  emergencyLevel: BloodEmergencyLevel;
+  contactMethod: BloodContactMethod;
+  contactPhone?: string;
+  description: string;
+  patientRelation?: string;
+  requesterId: number;
+  requesterName: string;
+  requesterAvatar: string;
+  requesterBatch: number;
+}): BloodEmergencyRequest {
+  const newRequest: BloodEmergencyRequest = {
+    id: `req_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+    bloodGroup: params.bloodGroup,
+    unitsRequired: Math.max(1, params.unitsRequired),
+    unitsFulfilled: 0,
+    hospitalName: sanitizeInputText(params.hospitalName, 120),
+    hospitalArea: sanitizeInputText(params.hospitalArea, 120),
+    city: sanitizeInputText(params.city || 'Dhaka', 60),
+    requiredDateTime: params.requiredDateTime,
+    emergencyLevel: params.emergencyLevel,
+    contactMethod: params.contactMethod,
+    contactPhone: sanitizeInputText(params.contactPhone || '', 30),
+    description: sanitizeInputText(params.description, 500),
+    patientRelation: sanitizeInputText(params.patientRelation || 'Alumnus / Relative', 50),
+    requesterId: params.requesterId,
+    requesterName: params.requesterName,
+    requesterAvatar: params.requesterAvatar,
+    requesterBatch: params.requesterBatch,
+    status: 'Active',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    responses: [],
+  };
+
+  const requests = loadBloodRequests();
+  requests.unshift(newRequest);
+  saveBloodRequests(requests);
+
+  return newRequest;
+}
+
+export function respondToBloodRequest(params: {
+  requestId: string;
+  donorUserId: number;
+  donorName: string;
+  donorAvatar: string;
+  donorBatchYear: number;
+  donorBloodGroup: BloodGroup;
+  donorPreferredArea: string;
+  donorPhone?: string;
+  note?: string;
+}): boolean {
+  const requests = loadBloodRequests();
+  const req = requests.find((r) => r.id === params.requestId);
+  if (!req) return false;
+
+  const existingResponse = req.responses.find((r) => r.donorUserId === params.donorUserId);
+  if (existingResponse) return false;
+
+  const responseItem: BloodDonorResponse = {
+    id: `resp_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+    requestId: params.requestId,
+    donorUserId: params.donorUserId,
+    donorName: params.donorName,
+    donorAvatar: params.donorAvatar,
+    donorBatchYear: params.donorBatchYear,
+    donorBloodGroup: params.donorBloodGroup,
+    donorPreferredArea: params.donorPreferredArea,
+    donorPhone: params.donorPhone,
+    respondedAt: new Date().toISOString(),
+    status: 'offered',
+    note: sanitizeInputText(params.note || '', 200),
+  };
+
+  req.responses.push(responseItem);
+  if (req.status === 'Active') {
+    req.status = 'Donor Found';
+  }
+  req.updatedAt = new Date().toISOString();
+
+  saveBloodRequests(requests);
+  return true;
+}
+
+export function updateBloodRequestStatus(
+  requestId: string,
+  newStatus: BloodRequestStatus,
+  fulfilledUnits?: number
+): boolean {
+  const requests = loadBloodRequests();
+  const req = requests.find((r) => r.id === requestId);
+  if (!req) return false;
+
+  req.status = newStatus;
+  if (fulfilledUnits !== undefined) {
+    req.unitsFulfilled = Math.min(req.unitsRequired, fulfilledUnits);
+  }
+  req.updatedAt = new Date().toISOString();
+
+  saveBloodRequests(requests);
+  return true;
+}
+4. src/components/BloodRequestModal.tsx
+Full modal with urgency pill selectors, hospital zone presets, automatic donor ranking preview, and instant validation.
+code
+Tsx
+import React, { useState } from 'react';
+import {
+  X,
+  AlertCircle,
+  Clock,
+  Heart,
+  Hospital,
+  MapPin,
+  Phone,
+  ShieldCheck,
+  Users,
+} from 'lucide-react';
+import {
+  BloodEmergencyLevel,
+  BloodGroup,
+  BLOOD_GROUPS_LIST,
+} from '../types/blood';
+import {
+  createBloodRequest,
+  DONATION_AREAS_LIST,
+  loadBloodDonors,
+} from '../utils/bloodDonationService';
+import { matchDonorsForRequest } from '../utils/bloodMatching';
+
+interface BloodRequestModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  currentUser: {
+    id: number;
+    fullName: string;
+    avatarUrl: string;
+    batchYear: number;
+    phone?: string;
+  };
+  onSuccess: (requestId: string) => void;
+}
+
+export const BloodRequestModal: React.FC<BloodRequestModalProps> = ({
+  isOpen,
+  onClose,
+  currentUser,
+  onSuccess,
+}) => {
+  const [bloodGroup, setBloodGroup] = useState<BloodGroup>('O+');
+  const [unitsRequired, setUnitsRequired] = useState(1);
+  const [hospitalName, setHospitalName] = useState('');
+  const [hospitalArea, setHospitalArea] = useState(DONATION_AREAS_LIST[0]);
+  const [city, setCity] = useState('Dhaka');
+  const [requiredDateTime, setRequiredDateTime] = useState('');
+  const [emergencyLevel, setEmergencyLevel] = useState<BloodEmergencyLevel>('critical');
+  const [contactPhone, setContactPhone] = useState(currentUser.phone || '');
+  const [description, setDescription] = useState('');
+  const [patientRelation, setPatientRelation] = useState('Brother / Classmate');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  if (!isOpen) return null;
+
+  // Real-time matched donor count preview
+  const allDonors = loadBloodDonors();
+  const mockTempReq = {
+    id: 'temp',
+    bloodGroup,
+    unitsRequired,
+    unitsFulfilled: 0,
+    hospitalName,
+    hospitalArea,
+    city,
+    requiredDateTime,
+    emergencyLevel,
+    contactMethod: 'Portal Secure Coordination' as const,
+    description,
+    requesterId: currentUser.id,
+    requesterName: currentUser.fullName,
+    requesterAvatar: currentUser.avatarUrl,
+    requesterBatch: currentUser.batchYear,
+    status: 'Active' as const,
+    createdAt: '',
+    updatedAt: '',
+    responses: [],
+  };
+  const matchedDonors = matchDonorsForRequest(mockTempReq, allDonors);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!hospitalName.trim()) {
+      setError('Hospital name is required.');
+      return;
+    }
+    if (!contactPhone.trim()) {
+      setError('Contact phone number is required.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    setError(null);
+
+    try {
+      const created = createBloodRequest({
+        bloodGroup,
+        unitsRequired,
+        hospitalName,
+        hospitalArea,
+        city,
+        requiredDateTime: requiredDateTime || new Date(Date.now() + 6 * 3600000).toISOString(),
+        emergencyLevel,
+        contactMethod: 'Attendant Emergency Line',
+        contactPhone,
+        description,
+        patientRelation,
+        requesterId: currentUser.id,
+        requesterName: currentUser.fullName,
+        requesterAvatar: currentUser.avatarUrl,
+        requesterBatch: currentUser.batchYear,
+      });
+
+      onSuccess(created.id);
+      onClose();
+    } catch (err: any) {
+      setError(err?.message || 'Failed to submit blood emergency request.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl w-full max-w-xl max-h-[90vh] overflow-y-auto shadow-2xl">
+        <div className="sticky top-0 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md px-6 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between z-10">
+          <div className="flex items-center gap-2 text-rose-600 dark:text-rose-500">
+            <Heart className="w-5 h-5 fill-rose-600 dark:fill-rose-500" />
+            <h2 className="text-lg font-black text-slate-900 dark:text-white">
+              Create Emergency Blood Request
+            </h2>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 transition-colors"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          {error && (
+            <div className="p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 text-xs text-rose-700 dark:text-rose-400 flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{error}</span>
+            </div>
+          )}
+
+          {/* Blood Group Picker */}
+          <div>
+            <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-2 uppercase">
+              Blood Group Required *
+            </label>
+            <div className="grid grid-cols-4 gap-2">
+              {BLOOD_GROUPS_LIST.map((bg) => (
+                <button
+                  type="button"
+                  key={bg}
+                  onClick={() => setBloodGroup(bg)}
+                  className={`py-2 rounded-xl text-sm font-black transition-all ${
+                    bloodGroup === bg
+                      ? 'bg-rose-600 text-white shadow-md shadow-rose-600/30 ring-2 ring-rose-600 ring-offset-2 dark:ring-offset-slate-900'
+                      : 'bg-slate-50 dark:bg-slate-800/80 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  {bg}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Units & Emergency Level */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                Units Required
+              </label>
+              <input
+                type="number"
+                min={1}
+                max={10}
+                value={unitsRequired}
+                onChange={(e) => setUnitsRequired(parseInt(e.target.value, 10) || 1)}
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                Urgency Level
+              </label>
+              <div className="flex gap-2">
+                {(['critical', 'urgent', 'standard'] as BloodEmergencyLevel[]).map((lvl) => (
+                  <button
+                    type="button"
+                    key={lvl}
+                    onClick={() => setEmergencyLevel(lvl)}
+                    className={`flex-1 py-2 text-xs font-bold rounded-xl capitalize transition-all ${
+                      emergencyLevel === lvl
+                        ? lvl === 'critical'
+                          ? 'bg-red-600 text-white'
+                          : lvl === 'urgent'
+                          ? 'bg-amber-600 text-white'
+                          : 'bg-blue-600 text-white'
+                        : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
+                    }`}
+                  >
+                    {lvl}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Hospital & Area */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                Hospital / Clinic Name *
+              </label>
+              <div className="relative">
+                <Hospital className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. DMCH, Square, Evercare"
+                  value={hospitalName}
+                  onChange={(e) => setHospitalName(e.target.value)}
+                  className="w-full pl-9 pr-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                Hospital Zone / Cluster
+              </label>
+              <select
+                value={hospitalArea}
+                onChange={(e) => setHospitalArea(e.target.value)}
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-xs truncate"
+              >
+                {DONATION_AREAS_LIST.map((zone) => (
+                  <option key={zone} value={zone}>
+                    {zone}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Phone & Relation */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                Emergency Contact Phone *
+              </label>
+              <div className="relative">
+                <Phone className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+                <input
+                  type="tel"
+                  required
+                  placeholder="+880 17..."
+                  value={contactPhone}
+                  onChange={(e) => setContactPhone(e.target.value)}
+                  className="w-full pl-9 pr-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                Patient / Relation
+              </label>
+              <input
+                type="text"
+                placeholder="e.g. Mother, Classmate, Self"
+                value={patientRelation}
+                onChange={(e) => setPatientRelation(e.target.value)}
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm"
+              />
+            </div>
+          </div>
+
+          {/* Clinical note */}
+          <div>
+            <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+              Case Summary / Required Time
+            </label>
+            <textarea
+              rows={2}
+              placeholder="e.g. Scheduled CABG surgery tomorrow morning at 9:00 AM. Cross-matching sample ready."
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm"
+            />
+          </div>
+
+          {/* Dynamic Match Count Indicator */}
+          <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/60 flex items-center justify-between text-xs">
+            <span className="flex items-center gap-2 text-slate-600 dark:text-slate-400 font-medium">
+              <Users className="w-4 h-4 text-rose-500" />
+              Eligible {bloodGroup} Donors in Network:
+            </span>
+            <span className="font-bold text-rose-600 dark:text-rose-400">
+              {matchedDonors.length} registered brother{matchedDonors.length === 1 ? '' : 's'}
+            </span>
+          </div>
+
+          <div className="pt-2 flex items-center justify-end gap-3">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-bold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              className="px-6 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow-md shadow-rose-600/30 flex items-center gap-2 cursor-pointer transition-all disabled:opacity-50"
+            >
+              <Heart className="w-4 h-4" />
+              <span>{isSubmitting ? 'Broadcasting...' : 'Broadcast Emergency'}</span>
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+};
+5. src/components/BloodDonorRegistration.tsx
+Self-service donor registration modal with 90-day cooldown calculation, contact permissions, and alert preferences.
+code
+Tsx
+import React, { useState } from 'react';
+import {
+  X,
+  Heart,
+  Calendar,
+  MapPin,
+  Bell,
+  Phone,
+  ShieldCheck,
+  CheckCircle2,
+} from 'lucide-react';
+import {
+  BloodAlertPreference,
+  BloodDonorAvailability,
+  BloodDonorProfile,
+  BloodGroup,
+  BLOOD_GROUPS_LIST,
+} from '../types/blood';
+import {
+  DONATION_AREAS_LIST,
+  getDonorProfileByUserId,
+  registerOrUpdateBloodDonor,
+} from '../utils/bloodDonationService';
+import { getDonorIntervalInfo } from '../utils/bloodMatching';
+
+interface BloodDonorRegistrationProps {
+  isOpen: boolean;
+  onClose: () => void;
+  currentUser: {
+    id: number;
+    fullName: string;
+    avatarUrl: string;
+    batchYear: number;
+    profession?: string;
+    institution?: string;
+    phone?: string;
+    whatsapp?: string;
+    email?: string;
+    city?: string;
+  };
+  onSuccess: (profile: BloodDonorProfile) => void;
+}
+
+export const BloodDonorRegistration: React.FC<BloodDonorRegistrationProps> = ({
+  isOpen,
+  onClose,
+  currentUser,
+  onSuccess,
+}) => {
+  const existing = getDonorProfileByUserId(currentUser.id);
+
+  const [bloodGroup, setBloodGroup] = useState<BloodGroup>(existing?.bloodGroup || 'O+');
+  const [preferredArea, setPreferredArea] = useState(existing?.preferredArea || DONATION_AREAS_LIST[0]);
+  const [city, setCity] = useState(existing?.city || currentUser.city || 'Dhaka');
+  const [lastDonationDate, setLastDonationDate] = useState(existing?.lastDonationDate || '');
+  const [availability, setAvailability] = useState<BloodDonorAvailability>(
+    existing?.availability || 'available'
+  );
+  const [alertPreference, setAlertPreference] = useState<BloodAlertPreference>(
+    existing?.emergencyAlertPreference || 'all_urgent'
+  );
+  const [phone, setPhone] = useState(existing?.phone || currentUser.phone || '');
+  const [whatsapp, setWhatsapp] = useState(existing?.whatsapp || currentUser.whatsapp || '');
+
+  if (!isOpen) return null;
+
+  const intervalInfo = getDonorIntervalInfo(lastDonationDate);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+
+    const profile: BloodDonorProfile = {
+      userId: currentUser.id,
+      fullName: currentUser.fullName,
+      avatarUrl: currentUser.avatarUrl,
+      batchYear: currentUser.batchYear,
+      profession: currentUser.profession,
+      institution: currentUser.institution,
+      phone,
+      whatsapp: whatsapp || phone,
+      email: currentUser.email,
+      bloodGroup,
+      isRegisteredDonor: true,
+      availability: !intervalInfo.meetsStandardInterval ? 'on_cooldown' : availability,
+      preferredArea,
+      city,
+      lastDonationDate: lastDonationDate || undefined,
+      emergencyAlertPreference: alertPreference,
+      donationHistory: existing?.donationHistory || [],
+      updatedAt: new Date().toISOString(),
+    };
+
+    const saved = registerOrUpdateBloodDonor(profile);
+    onSuccess(saved);
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl w-full max-w-lg max-h-[90vh] overflow-y-auto shadow-2xl">
+        <div className="sticky top-0 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md px-6 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between z-10">
+          <div className="flex items-center gap-2 text-rose-600 dark:text-rose-500">
+            <Heart className="w-5 h-5 fill-rose-600 dark:fill-rose-500" />
+            <h2 className="text-lg font-black text-slate-900 dark:text-white">
+              {existing ? 'Update Donor Profile' : 'Enroll as Blood Donor'}
+            </h2>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 transition-colors"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          {/* Blood Group */}
+          <div>
+            <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-2 uppercase">
+              Select Your Blood Group *
+            </label>
+            <div className="grid grid-cols-4 gap-2">
+              {BLOOD_GROUPS_LIST.map((bg) => (
+                <button
+                  type="button"
+                  key={bg}
+                  onClick={() => setBloodGroup(bg)}
+                  className={`py-2 rounded-xl text-sm font-black transition-all ${
+                    bloodGroup === bg
+                      ? 'bg-rose-600 text-white shadow-md shadow-rose-600/30'
+                      : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-100'
+                  }`}
+                >
+                  {bg}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Area & City */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                Preferred Area / Corridor
+              </label>
+              <select
+                value={preferredArea}
+                onChange={(e) => setPreferredArea(e.target.value)}
+                className="w-full px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-xs truncate"
+              >
+                {DONATION_AREAS_LIST.map((a) => (
+                  <option key={a} value={a}>
+                    {a}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                Base City
+              </label>
+              <input
+                type="text"
+                value={city}
+                onChange={(e) => setCity(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm"
+              />
+            </div>
+          </div>
+
+          {/* Last Donation Date */}
+          <div>
+            <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+              Last Blood Donation Date (Optional)
+            </label>
+            <div className="relative">
+              <Calendar className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+              <input
+                type="date"
+                value={lastDonationDate}
+                onChange={(e) => setLastDonationDate(e.target.value)}
+                className="w-full pl-9 pr-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm"
+              />
+            </div>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+              {intervalInfo.label}
+            </p>
+          </div>
+
+          {/* Direct Phone / WhatsApp */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                Emergency Phone *
+              </label>
+              <input
+                type="tel"
+                required
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                placeholder="+880 17..."
+                className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                WhatsApp Number
+              </label>
+              <input
+                type="tel"
+                value={whatsapp}
+                onChange={(e) => setWhatsapp(e.target.value)}
+                placeholder="+880 17..."
+                className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm"
+              />
+            </div>
+          </div>
+
+          {/* Alert Preference */}
+          <div>
+            <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+              Emergency Broadcast Alerts
+            </label>
+            <select
+              value={alertPreference}
+              onChange={(e) => setAlertPreference(e.target.value as BloodAlertPreference)}
+              className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-xs"
+            >
+              <option value="all_urgent">All urgent & critical requests in my city</option>
+              <option value="same_area_only">Only requests in my hospital corridor / zone</option>
+              <option value="critical_only">Critical life-support emergencies only</option>
+              <option value="paused">Pause alert notifications temporarily</option>
+            </select>
+          </div>
+
+          <div className="pt-2 flex items-center justify-end gap-3">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-bold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="px-6 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow-md shadow-rose-600/30 flex items-center gap-2 cursor-pointer transition-all"
+            >
+              <CheckCircle2 className="w-4 h-4" />
+              <span>{existing ? 'Save Updates' : 'Complete Enrollment'}</span>
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+};
+6. src/components/BloodNetworkView.tsx
+The full interactive Blood Network portal page featuring live overview metrics, emergency broadcast cards, donor search filters, and direct contact buttons.
+code
+Tsx
+import React, { useState, useEffect, useMemo } from 'react';
+import {
+  Heart,
+  Plus,
+  Search,
+  Phone,
+  MessageSquare,
+  Hospital,
+  MapPin,
+  Calendar,
+  AlertCircle,
+  Users,
+  ShieldCheck,
+  CheckCircle2,
+  Clock,
+  Share2,
+} from 'lucide-react';
+import {
+  BloodEmergencyRequest,
+  BloodDonorProfile,
+  BloodGroup,
+  BLOOD_GROUPS_LIST,
+} from '../types/blood';
+import {
+  loadBloodDonors,
+  loadBloodRequests,
+  respondToBloodRequest,
+  getDonorProfileByUserId,
+} from '../utils/bloodDonationService';
+import {
+  getBloodGroupOverviewStats,
+  getDonorIntervalInfo,
+} from '../utils/bloodMatching';
+import { BloodRequestModal } from './BloodRequestModal';
+import { BloodDonorRegistration } from './BloodDonorRegistration';
+
+interface BloodNetworkViewProps {
+  currentUser: {
+    id: number;
+    fullName: string;
+    avatarUrl: string;
+    batchYear: number;
+    phone?: string;
+    city?: string;
+  };
+}
+
+export const BloodNetworkView: React.FC<BloodNetworkViewProps> = ({ currentUser }) => {
+  const [requests, setRequests] = useState<BloodEmergencyRequest[]>(() => loadBloodRequests());
+  const [donors, setDonors] = useState<BloodDonorProfile[]>(() => loadBloodDonors());
+
+  const [selectedGroup, setSelectedGroup] = useState<string>('All');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [availableOnly, setAvailableOnly] = useState(false);
+
+  const [isRequestModalOpen, setIsRequestModalOpen] = useState(false);
+  const [isRegisterModalOpen, setIsRegisterModalOpen] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    const handleReqChange = (e: any) => setRequests(e.detail || loadBloodRequests());
+    const handleDonorChange = (e: any) => setDonors(e.detail || loadBloodDonors());
+
+    window.addEventListener('blood_requests_changed', handleReqChange);
+    window.addEventListener('blood_donors_changed', handleDonorChange);
+
+    return () => {
+      window.removeEventListener('blood_requests_changed', handleReqChange);
+      window.removeEventListener('blood_donors_changed', handleDonorChange);
+    };
+  }, []);
+
+  const stats = useMemo(() => getBloodGroupOverviewStats(donors, requests), [donors, requests]);
+
+  const activeEmergencyRequests = useMemo(() => {
+    return requests.filter((r) => r.status === 'Active' || r.status === 'Donor Found');
+  }, [requests]);
+
+  const filteredDonors = useMemo(() => {
+    return donors.filter((d) => {
+      if (selectedGroup !== 'All' && d.bloodGroup !== selectedGroup) return false;
+      if (availableOnly && d.availability !== 'available') return false;
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        const matchName = d.fullName.toLowerCase().includes(q);
+        const matchArea = d.preferredArea.toLowerCase().includes(q) || d.city.toLowerCase().includes(q);
+        const matchBatch = d.batchYear.toString().includes(q);
+        if (!matchName && !matchArea && !matchBatch) return false;
+      }
+      return true;
+    });
+  }, [donors, selectedGroup, availableOnly, searchQuery]);
+
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(null), 3500);
+  };
+
+  const handleRespondAsDonor = (req: BloodEmergencyRequest) => {
+    const myDonorProfile = getDonorProfileByUserId(currentUser.id);
+    if (!myDonorProfile) {
+      setIsRegisterModalOpen(true);
+      return;
+    }
+
+    const success = respondToBloodRequest({
+      requestId: req.id,
+      donorUserId: currentUser.id,
+      donorName: currentUser.fullName,
+      donorAvatar: currentUser.avatarUrl,
+      donorBatchYear: currentUser.batchYear,
+      donorBloodGroup: myDonorProfile.bloodGroup,
+      donorPreferredArea: myDonorProfile.preferredArea,
+      donorPhone: myDonorProfile.phone,
+    });
+
+    if (success) {
+      showToast('Thank you Brother! Your offer has been recorded and the family has been alerted.');
+    } else {
+      showToast('You have already offered to donate for this request.');
+    }
+  };
+
+  return (
+    <div className="max-w-7xl mx-auto px-4 py-8 space-y-8 animate-fade-in">
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div className="fixed bottom-6 right-6 z-50 bg-slate-900 text-white px-5 py-3 rounded-2xl shadow-xl border border-slate-700 text-xs font-bold flex items-center gap-2">
+          <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+          <span>{toastMessage}</span>
+        </div>
+      )}
+
+      {/* Header Banner */}
+      <div className="rounded-3xl bg-gradient-to-r from-rose-600 via-red-600 to-rose-700 text-white p-6 sm:p-10 shadow-xl relative overflow-hidden">
+        <div className="relative z-10 max-w-2xl space-y-4">
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/20 backdrop-blur-md text-xs font-bold uppercase tracking-widest">
+            <Heart className="w-3.5 h-3.5 fill-current" />
+            <span>Alumni Life-Support Network</span>
+          </div>
+          <h1 className="text-2xl sm:text-4xl font-black tracking-tight leading-tight">
+            Notre Dame Alumni Blood Donation Hub
+          </h1>
+          <p className="text-rose-100 text-sm sm:text-base leading-relaxed">
+            Direct peer-to-peer blood discovery across batches and hospitals. Coordinate fast, transparent transfusions for brothers and their immediate family members.
+          </p>
+          <div className="flex flex-wrap items-center gap-3 pt-2">
+            <button
+              onClick={() => setIsRequestModalOpen(true)}
+              className="px-5 py-3 rounded-2xl bg-white text-rose-600 hover:bg-rose-50 text-xs sm:text-sm font-bold shadow-lg flex items-center gap-2 cursor-pointer transition-transform hover:scale-105"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Request Blood Now</span>
+            </button>
+            <button
+              onClick={() => setIsRegisterModalOpen(true)}
+              className="px-5 py-3 rounded-2xl bg-rose-800/80 hover:bg-rose-800 text-white text-xs sm:text-sm font-bold border border-white/20 flex items-center gap-2 cursor-pointer transition-all"
+            >
+              <Heart className="w-4 h-4" />
+              <span>Enroll / Update as Donor</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Blood Group Matrix Cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
+        {stats.map((s) => (
+          <button
+            key={s.bloodGroup}
+            onClick={() => setSelectedGroup(selectedGroup === s.bloodGroup ? 'All' : s.bloodGroup)}
+            className={`p-4 rounded-2xl border text-center transition-all cursor-pointer ${
+              selectedGroup === s.bloodGroup
+                ? 'bg-rose-600 text-white border-rose-600 shadow-md ring-2 ring-rose-600/30'
+                : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-rose-400'
+            }`}
+          >
+            <div className={`text-xl font-black ${selectedGroup === s.bloodGroup ? 'text-white' : 'text-rose-600 dark:text-rose-400'}`}>
+              {s.bloodGroup}
+            </div>
+            <div className="text-[11px] font-bold mt-1 opacity-90">
+              {s.availableDonors} Available
+            </div>
+            {s.unitsNeeded > 0 && (
+              <div className="mt-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-rose-500/20 text-rose-200">
+                {s.unitsNeeded} needed
+              </div>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {/* Active Emergencies Section */}
+      {activeEmergencyRequests.length > 0 && (
+        <div className="space-y-4">
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-rose-600 animate-ping" />
+            <h2 className="text-lg font-black text-slate-900 dark:text-white">
+              Active Emergency Requests ({activeEmergencyRequests.length})
+            </h2>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {activeEmergencyRequests.map((req) => (
+              <div
+                key={req.id}
+                className="p-5 rounded-3xl bg-white dark:bg-slate-900 border-2 border-rose-500/40 dark:border-rose-600/30 shadow-md space-y-4"
+              >
+                <div className="flex items-start justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-12 h-12 rounded-2xl bg-rose-600 text-white font-black text-lg flex items-center justify-center shadow-md">
+                      {req.bloodGroup}
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-slate-900 dark:text-white text-base">
+                        {req.hospitalName}
+                      </h3>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1">
+                        <MapPin className="w-3.5 h-3.5" />
+                        {req.hospitalArea}, {req.city}
+                      </p>
+                    </div>
+                  </div>
+                  <span className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider ${
+                    req.emergencyLevel === 'critical'
+                      ? 'bg-red-100 text-red-700 dark:bg-red-950/60 dark:text-red-400'
+                      : 'bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-400'
+                  }`}>
+                    {req.emergencyLevel}
+                  </span>
+                </div>
+
+                <p className="text-xs text-slate-600 dark:text-slate-300">
+                  {req.description}
+                </p>
+
+                <div className="grid grid-cols-2 gap-2 text-xs bg-slate-50 dark:bg-slate-800/50 p-3 rounded-2xl">
+                  <div>
+                    <span className="text-slate-400 text-[10px] uppercase font-bold block">Units Required</span>
+                    <span className="font-black text-slate-900 dark:text-white">
+                      {req.unitsRequired} Bag{req.unitsRequired > 1 ? 's' : ''} ({req.unitsFulfilled} filled)
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 text-[10px] uppercase font-bold block">Requester</span>
+                    <span className="font-bold text-slate-900 dark:text-white truncate block">
+                      {req.requesterName} (HSC '{req.requesterBatch})
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between gap-3 pt-1">
+                  {req.contactPhone && (
+                    <a
+                      href={`tel:${req.contactPhone}`}
+                      className="flex-1 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-900 dark:text-white text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
+                    >
+                      <Phone className="w-3.5 h-3.5" />
+                      <span>Direct Call</span>
+                    </a>
+                  )}
+                  <button
+                    onClick={() => handleRespondAsDonor(req)}
+                    className="flex-1 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold flex items-center justify-center gap-1.5 transition-colors shadow-sm"
+                  >
+                    <Heart className="w-3.5 h-3.5 fill-current" />
+                    <span>Offer to Donate</span>
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Donor Directory Filter & Table */}
+      <div className="space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <h2 className="text-lg font-black text-slate-900 dark:text-white">
+            Registered Alumni Donors ({filteredDonors.length})
+          </h2>
+
+          <div className="flex items-center gap-2">
+            <div className="relative">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+              <input
+                type="text"
+                placeholder="Search name, area, batch..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-9 pr-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white w-48 sm:w-64"
+              />
+            </div>
+            <button
+              onClick={() => setAvailableOnly(!availableOnly)}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors ${
+                availableOnly
+                  ? 'bg-emerald-600 text-white border-emerald-600'
+                  : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-800'
+              }`}
+            >
+              Available Only
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {filteredDonors.map((donor) => {
+            const interval = getDonorIntervalInfo(donor.lastDonationDate);
+            return (
+              <div
+                key={donor.userId}
+                className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-sm space-y-3"
+              >
+                <div className="flex items-start justify-between">
+                  <div className="flex items-center gap-3">
+                    <img
+                      src={donor.avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&h=100&fit=crop&crop=faces'}
+                      alt={donor.fullName}
+                      className="w-10 h-10 rounded-full object-cover border border-slate-200 dark:border-slate-700"
+                    />
+                    <div>
+                      <h4 className="font-bold text-sm text-slate-900 dark:text-white">
+                        {donor.fullName}
+                      </h4>
+                      <p className="text-[11px] text-slate-500">
+                        Batch '{donor.batchYear} • {donor.profession || 'Alumnus'}
+                      </p>
+                    </div>
+                  </div>
+                  <span className="w-8 h-8 rounded-lg bg-rose-50 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 font-black text-sm flex items-center justify-center">
+                    {donor.bloodGroup}
+                  </span>
+                </div>
+
+                <div className="text-xs text-slate-600 dark:text-slate-400 space-y-1">
+                  <div className="flex items-center gap-1.5">
+                    <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                    <span className="truncate">{donor.preferredArea}</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                    <span>{interval.label}</span>
+                  </div>
+                </div>
+
+                <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
+                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                    donor.availability === 'available' && interval.meetsStandardInterval
+                      ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/40 dark:text-emerald-400'
+                      : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400'
+                  }`}>
+                    <span className="w-1.5 h-1.5 rounded-full bg-current" />
+                    {donor.availability === 'available' && interval.meetsStandardInterval ? 'Ready to Donate' : 'Cooldown / Rest'}
+                  </span>
+
+                  <div className="flex items-center gap-1.5">
+                    {donor.phone && (
+                      <a
+                        href={`tel:${donor.phone}`}
+                        className="p-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-rose-50 text-slate-600 dark:text-slate-300 hover:text-rose-600 transition-colors"
+                        title="Direct Call"
+                      >
+                        <Phone className="w-3.5 h-3.5" />
+                      </a>
+                    )}
+                    {donor.whatsapp && (
+                      <a
+                        href={`https://wa.me/${donor.whatsapp.replace(/[^0-9]/g, '')}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="p-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-emerald-50 text-slate-600 dark:text-slate-300 hover:text-emerald-600 transition-colors"
+                        title="WhatsApp Message"
+                      >
+                        <MessageSquare className="w-3.5 h-3.5" />
+                      </a>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Modals */}
+      <BloodRequestModal
+        isOpen={isRequestModalOpen}
+        onClose={() => setIsRequestModalOpen(false)}
+        currentUser={currentUser}
+        onSuccess={() => showToast('Emergency request broadcast live to alumni network!')}
+      />
+
+      <BloodDonorRegistration
+        isOpen={isRegisterModalOpen}
+        onClose={() => setIsRegisterModalOpen(false)}
+        currentUser={currentUser}
+        onSuccess={() => showToast('Donor profile updated successfully!')}
+      />
+    </div>
+  );
+};
