@@ -1,10 +1,12 @@
-// Synthesized audio effects matching the original Alumni Connect Web Audio API
+// Synthesized audio effects matching the Alumni Connect Web Audio API
 let audioCtx: AudioContext | null = null;
 
 function getAudioContext(): AudioContext | null {
   if (typeof window === 'undefined') return null;
   if (!audioCtx) {
-    const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    const AudioContextClass =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     if (AudioContextClass) {
       audioCtx = new AudioContextClass();
     }
@@ -12,7 +14,9 @@ function getAudioContext(): AudioContext | null {
   return audioCtx;
 }
 
-export function playSound(kind: 'like' | 'comment' | 'post' | 'pop' | 'theme' | 'tap') {
+export function playSound(
+  kind: 'notification' | 'like' | 'comment' | 'post' | 'pop' | 'tap' | 'theme'
+): void {
   try {
     const ctx = getAudioContext();
     if (!ctx) return;
@@ -31,11 +35,12 @@ export function playSound(kind: 'like' | 'comment' | 'post' | 'pop' | 'theme' | 
       comment: [440, 660],
       post: [440, 660, 880],
       pop: [600],
-      theme: [523.25, 659.25, 783.99, 1046.5], // C-E-G-C chime
       tap: [720],
+      theme: [523.25, 659.25, 783.99, 1046.5],
+      notification: [587.33, 880], // Facebook-style gentle double chime
     };
 
-    const seq = freqs[kind] || freqs.pop;
+    const seq = freqs[kind] || freqs.notification;
     osc.type = 'sine';
     gain.gain.setValueAtTime(0.0001, now);
 
@@ -49,6 +54,6 @@ export function playSound(kind: 'like' | 'comment' | 'post' | 'pop' | 'theme' | 
     osc.start(now);
     osc.stop(now + seq.length * 0.05 + 0.1);
   } catch {
-    // Audio may be blocked by autoplay policies
+    // Audio autoplay policy fallback
   }
 }

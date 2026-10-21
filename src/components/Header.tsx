@@ -1,18 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Menu, Search, Bell, Mail, ChevronDown, CheckCheck, User, LogOut, ShieldCheck, Clock, X, Settings } from 'lucide-react';
+import { Menu, Search, Mail, ChevronDown, User, LogOut, ShieldCheck, ShieldAlert, Clock, X, Settings } from 'lucide-react';
 import { ThemeToggle } from './ThemeToggle';
 import { NDCLogo } from './NDCLogo';
-import { NotificationItem } from '../types';
+import { NotificationDropdown } from './NotificationDropdown';
 import { useAuth } from '../context/AuthContext';
 import { loadVouchRequests } from '../utils/verificationService';
-import {
-  loadPortalNotifications,
-  savePortalNotifications,
-} from '../utils/bloodDonationService';
-import {
-  fetchNotificationsFromDb,
-  markNotificationReadInDb,
-} from '../services/supabaseService';
 
 interface HeaderProps {
   onToggleSidebar: () => void;
@@ -30,10 +22,6 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenVerificationCenter,
 }) => {
   const { currentUser, logout } = useAuth();
-  const [notifications, setNotifications] = useState<NotificationItem[]>(() =>
-    loadPortalNotifications()
-  );
-  const [showNotifications, setShowNotifications] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [pendingVouchRequestsCount, setPendingVouchRequestsCount] = useState<number>(() =>
     loadVouchRequests().filter((r) => r.status === 'pending').length
@@ -48,47 +36,16 @@ export const Header: React.FC<HeaderProps> = ({
         loadVouchRequests().filter((r) => r.status === 'pending').length
       );
     };
-    const syncNotifications = () => {
-      const local = loadPortalNotifications();
-      setNotifications(local);
-      if (currentUser?.id) {
-        fetchNotificationsFromDb(currentUser.id)
-          .then((dbNotifs) => {
-            if (dbNotifs && dbNotifs.length > 0) {
-              setNotifications((prev) => {
-                const map = new Map<string | number, NotificationItem>();
-                dbNotifs.forEach((n) => map.set(n.id, n));
-                prev.forEach((n) => {
-                  if (!map.has(n.id)) map.set(n.id, n);
-                });
-                return Array.from(map.values());
-              });
-            }
-          })
-          .catch(() => {});
-      }
-    };
-    syncNotifications();
     window.addEventListener('ndc_vouch_requests_updated', syncVouches);
-    window.addEventListener('ndc_notifications_updated', syncNotifications);
-    window.addEventListener('storage', syncNotifications);
     return () => {
       window.removeEventListener('ndc_vouch_requests_updated', syncVouches);
-      window.removeEventListener('ndc_notifications_updated', syncNotifications);
-      window.removeEventListener('storage', syncNotifications);
     };
-  }, [currentUser?.id]);
+  }, []);
 
-  const notifRef = useRef<HTMLDivElement>(null);
   const profileRef = useRef<HTMLDivElement>(null);
-
-  const unreadCount = notifications.filter((n) => n.unread).length;
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
-      if (notifRef.current && !notifRef.current.contains(e.target as Node)) {
-        setShowNotifications(false);
-      }
       if (profileRef.current && !profileRef.current.contains(e.target as Node)) {
         setShowProfileMenu(false);
       }
@@ -96,33 +53,6 @@ export const Header: React.FC<HeaderProps> = ({
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
-
-  const markAllAsRead = () => {
-    const next = notifications.map((n) => {
-      markNotificationReadInDb(String(n.id)).catch(() => {});
-      return { ...n, unread: false };
-    });
-    setNotifications(next);
-    savePortalNotifications(next);
-  };
-
-  const markItemAsRead = (id: number, targetRoute?: string) => {
-    markNotificationReadInDb(String(id)).catch(() => {});
-    const next = notifications.map((n) => (n.id === id ? { ...n, unread: false } : n));
-    setNotifications(next);
-    savePortalNotifications(next);
-    if (targetRoute) {
-      setShowNotifications(false);
-      onNavigate(targetRoute);
-    }
-  };
-
-  const dismissNotificationItem = (e: React.MouseEvent, id: number) => {
-    e.stopPropagation();
-    const next = notifications.filter((n) => n.id !== id);
-    setNotifications(next);
-    savePortalNotifications(next);
-  };
 
   return (
     <header className="sticky top-0 z-40 h-18 bg-white/75 dark:bg-slate-900/75 backdrop-blur-xl border-b border-slate-200/60 dark:border-white/10 shadow-xs transition-colors duration-200">
@@ -167,98 +97,11 @@ export const Header: React.FC<HeaderProps> = ({
             <ThemeToggle />
           </div>
 
-          {/* Notifications Dropdown */}
-          <div className="relative" ref={notifRef}>
-            <button
-              type="button"
-              onClick={() => {
-                setShowNotifications(!showNotifications);
-                setShowProfileMenu(false);
-              }}
-              className="relative p-1.5 sm:p-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
-              aria-label="Notifications"
-            >
-              <Bell className="w-4.5 h-4.5 sm:w-5 sm:h-5" />
-              {unreadCount > 0 && (
-                <span className="absolute top-1 right-1 min-w-[16px] sm:min-w-[18px] h-4 sm:h-[18px] px-1 bg-rose-600 text-white text-[9px] sm:text-[10px] font-bold rounded-full flex items-center justify-center border-2 border-white dark:border-slate-900 animate-pulse">
-                  {unreadCount}
-                </span>
-              )}
-            </button>
-
-            {showNotifications && (
-              <div className="fixed inset-x-3 top-16 sm:absolute sm:inset-auto sm:right-0 sm:top-full sm:mt-2 w-auto sm:w-96 max-w-sm sm:max-w-none bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 py-3 z-50 animate-in fade-in slide-in-from-top-2 duration-150 mx-auto sm:mx-0">
-                <div className="flex items-center justify-between px-4 pb-2 border-b border-slate-100 dark:border-slate-800">
-                  <div className="flex items-center gap-2">
-                    <span className="font-bold text-slate-900 dark:text-slate-100 text-sm">
-                      Notifications
-                    </span>
-                    {unreadCount > 0 && (
-                      <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
-                        {unreadCount} new
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {unreadCount > 0 && (
-                      <button
-                        type="button"
-                        onClick={markAllAsRead}
-                        className="text-xs text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1 font-medium cursor-pointer"
-                      >
-                        <CheckCheck className="w-3.5 h-3.5" />
-                        Mark all as read
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => setShowNotifications(false)}
-                      aria-label="Close notifications"
-                      title="Close notifications"
-                      className="p-1 rounded-full text-slate-400 hover:text-rose-600 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-
-                <div className="max-h-[360px] overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800/60">
-                  {notifications.map((item) => (
-                    <div
-                      key={item.id}
-                      onClick={() => markItemAsRead(item.id, item.targetRoute)}
-                      className={`px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800/50 cursor-pointer transition-colors relative group ${
-                        item.unread
-                          ? 'bg-blue-50/50 dark:bg-blue-950/20'
-                          : ''
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-2 pr-6">
-                        <p className="text-xs font-semibold text-slate-800 dark:text-slate-200">
-                          {item.title}
-                        </p>
-                        <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap">
-                          {item.unread ? item.timeAgo : `Seen · ${item.timeAgo}`}
-                        </span>
-                      </div>
-                      <p className="text-xs text-slate-600 dark:text-slate-400 mt-1 leading-relaxed pr-5">
-                        {item.message}
-                      </p>
-                      <button
-                        type="button"
-                        onClick={(e) => dismissNotificationItem(e, item.id)}
-                        aria-label="Close notification"
-                        title="Dismiss notification"
-                        className="absolute top-2.5 right-2.5 p-1 rounded-full text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/50 transition-colors cursor-pointer"
-                      >
-                        <X className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
+          {/* Facebook-Style Notifications Bell & Dropdown */}
+          <NotificationDropdown
+            currentUserId={currentUser.id}
+            onNavigate={onNavigate}
+          />
 
           {/* Messages Button (Placeholder / Teaser) */}
           <button
@@ -277,7 +120,6 @@ export const Header: React.FC<HeaderProps> = ({
               type="button"
               onClick={() => {
                 setShowProfileMenu(!showProfileMenu);
-                setShowNotifications(false);
               }}
               className="flex items-center gap-2.5 p-1 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors text-left"
             >
@@ -361,6 +203,23 @@ export const Header: React.FC<HeaderProps> = ({
                       </span>
                     </button>
                   )}
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onNavigate('admin');
+                      setShowProfileMenu(false);
+                    }}
+                    className="w-full flex items-center justify-between gap-2 px-3 py-2 text-xs font-medium text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 rounded-lg transition-colors text-left"
+                  >
+                    <span className="flex items-center gap-2.5">
+                      <ShieldAlert className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                      <span className="font-bold">Admin Hub</span>
+                    </span>
+                    <span className="text-[10px] font-black uppercase px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-600 dark:text-indigo-400">
+                      ADMIN
+                    </span>
+                  </button>
 
                   <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
 

@@ -28,8 +28,7 @@ AS $$
   LIMIT 1;
 $$;
 
-REVOKE ALL ON FUNCTION public.current_profile_id() FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.current_profile_id() TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.current_profile_id() TO anon, authenticated, service_role;
 
 -- 1.2 Returns the server-enforced role of the currently authenticated user
 CREATE OR REPLACE FUNCTION public.current_user_role()
@@ -45,8 +44,7 @@ AS $$
   LIMIT 1;
 $$;
 
-REVOKE ALL ON FUNCTION public.current_user_role() FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.current_user_role() TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.current_user_role() TO anon, authenticated, service_role;
 
 -- 1.3 Returns TRUE iff the current user has role = 'admin'
 CREATE OR REPLACE FUNCTION public.is_admin()
@@ -64,8 +62,7 @@ AS $$
   );
 $$;
 
-REVOKE ALL ON FUNCTION public.is_admin() FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.is_admin() TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.is_admin() TO anon, authenticated, service_role;
 
 -- 1.4 Returns TRUE iff the current user has role IN ('admin', 'moderator')
 CREATE OR REPLACE FUNCTION public.is_admin_or_mod()
@@ -83,8 +80,7 @@ AS $$
   );
 $$;
 
-REVOKE ALL ON FUNCTION public.is_admin_or_mod() FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.is_admin_or_mod() TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.is_admin_or_mod() TO anon, authenticated, service_role;
 
 -- 1.5 Returns TRUE iff the current user has verification_status = 'verified'
 CREATE OR REPLACE FUNCTION public.is_verified_alumnus()
@@ -102,8 +98,7 @@ AS $$
   );
 $$;
 
-REVOKE ALL ON FUNCTION public.is_verified_alumnus() FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.is_verified_alumnus() TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.is_verified_alumnus() TO anon, authenticated, service_role;
 
 -- 1.6 Returns the batch_year of the currently authenticated user
 CREATE OR REPLACE FUNCTION public.current_user_batch_year()
@@ -119,8 +114,7 @@ AS $$
   LIMIT 1;
 $$;
 
-REVOKE ALL ON FUNCTION public.current_user_batch_year() FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.current_user_batch_year() TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.current_user_batch_year() TO anon, authenticated, service_role;
 
 -- 1.7 Returns TRUE iff executing inside a trusted nested trigger or service_role context.
 -- Requires pg_trigger_depth() > 1 whenever relying on `app.internal_trigger = 'true'`.

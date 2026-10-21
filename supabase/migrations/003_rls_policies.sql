@@ -381,8 +381,7 @@ CREATE POLICY "posts_select_visible"
   TO anon, authenticated
   USING (
     is_deleted = FALSE
-    OR author_id = public.current_profile_id()
-    OR public.is_admin_or_mod()
+    OR (auth.uid() IS NOT NULL AND (author_id = public.current_profile_id() OR public.is_admin_or_mod()))
   );
 
 DROP POLICY IF EXISTS "posts_insert_own" ON public.posts;

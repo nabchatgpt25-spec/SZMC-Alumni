@@ -30,6 +30,7 @@ import { BloodNetworkView } from './components/BloodNetworkView';
 import { ensureVouchRequestFromUrlParams } from './utils/verificationService';
 import { CursorSpotlight } from './components/motion/CinematicMotion';
 import { NDCLogo } from './components/NDCLogo';
+import { AdminPage } from './components/admin/AdminPage';
 
 function AlumniAppContent() {
   const { isLoggedIn, currentUser, isAuthInitializing, authInitializationError } = useAuth();
@@ -333,6 +334,13 @@ function AlumniAppContent() {
                   backLabel={getBackLabel()}
                   onOpenVerificationCenter={openVerificationCenter}
                   onNavigate={navigateTo}
+                />
+              )}
+
+              {(route === 'admin' || route === 'admin-center' || route === 'admin-hub' || route === 'admin-command-center') && (
+                <AdminPage
+                  onNavigate={navigateTo}
+                  onViewProfile={handleViewProfile}
                 />
               )}
             </motion.div>

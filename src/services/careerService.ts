@@ -4,6 +4,8 @@
  * Works seamlessly with localStorage and syncs with Supabase if configured.
  */
 
+import { notifyCareerApplication } from '../utils/notificationService';
+
 export type CareerType = 'job' | 'internship' | 'referral';
 
 export interface CareerApplicant {
@@ -200,6 +202,19 @@ export const applyToCareerOpportunity = (
 
   currentList[index] = updatedTarget;
   saveCareerOpportunities(currentList);
+
+  if (target.posterId && target.posterId > 0) {
+    notifyCareerApplication({
+      posterId: target.posterId,
+      jobTitle: target.title,
+      company: target.company,
+      actor: {
+        id: applicant.applicantId,
+        fullName: applicant.applicantName,
+        avatarUrl: applicant.applicantAvatar,
+      },
+    });
+  }
 
   return { success: true, message: 'আপনার আবেদন সফলভাবে গৃহীত হয়েছে!', opportunity: updatedTarget };
 };

@@ -6,9 +6,15 @@ import {
   VerificationStatus,
 } from '../../types';
 
+export type { UserRole };
+
 export type AdminSectionId =
   | 'overview'
   | 'verifications'
+  | 'users'
+  | 'moderation'
+  | 'audit'
+  | 'small_admins'
   | 'documents'
   | 'alumni'
   | 'batches'
@@ -321,3 +327,85 @@ export interface AuditLogRow {
   reason: string | null;
   created_at: string;
 }
+
+export interface AdminOverviewStats {
+  totalUsers: number;
+  verifiedUsers: number;
+  unverifiedUsers: number;
+  pendingDocReviews: number;
+  approvedDocReviews: number;
+  rejectedDocReviews: number;
+  totalPosts: number;
+  adminCount: number;
+  modCount: number;
+}
+
+export interface AdminDocSubmission {
+  id: string;
+  userId: number;
+  fullName: string;
+  avatarUrl: string;
+  batchYear: number;
+  collegeRoll: string;
+  group: string;
+  docType: 'id_card' | 'nid_card' | 'hsc_slip' | 'souvenir';
+  docTypeLabel: string;
+  documentUrl: string;
+  submittedAt: string;
+  status: 'pending' | 'approved' | 'rejected';
+  reviewedBy?: string;
+  reviewedAt?: string;
+  adminNote?: string;
+}
+
+export interface AlumniAdminListItem {
+  id: number;
+  userId: number;
+  fullName: string;
+  avatarUrl: string;
+  batchYear: number;
+  collegeRoll?: string;
+  academicStream?: string;
+  academicGroup?: string;
+  role: UserRole;
+  verificationStatus: string;
+  profession?: string;
+  institution?: string;
+  city?: string;
+  country?: string;
+  createdAt?: string;
+}
+
+export interface ModerationPostItem {
+  id: number;
+  authorId: number;
+  authorName: string;
+  authorAvatar: string;
+  authorBatch: number;
+  content: string;
+  category: string;
+  images: string[];
+  videos: string[];
+  likesCount: number;
+  commentsCount: number;
+  isPinned: boolean;
+  isDeleted: boolean;
+  isEdited: boolean;
+  createdAt: string;
+}
+
+export interface SystemAuditLogItem {
+  id: number;
+  actorProfileId?: number | null;
+  actorAuthId?: string | null;
+  actorRole?: string | null;
+  actorName?: string;
+  action: string;
+  entityTable: string;
+  entityId: string;
+  oldValues?: any;
+  newValues?: any;
+  reason?: string | null;
+  createdAt: string;
+}
+

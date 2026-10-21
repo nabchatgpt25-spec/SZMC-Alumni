@@ -75,7 +75,7 @@ export interface VouchRequest {
   message?: string;
 }
 
-export type UserRole = 'member' | 'moderator' | 'admin';
+export type UserRole = 'member' | 'batch_representative' | 'moderator' | 'admin';
 export type AcademicStreamType = 'MBBS' | 'Science' | 'Humanities' | 'Business Studies';
 
 export interface AlumniProfile {
@@ -271,16 +271,7 @@ export interface PostItem {
   isSaved?: boolean;
 }
 
-export interface NotificationItem {
-  id: number;
-  title: string;
-  message: string;
-  timeAgo: string;
-  unread: boolean;
-  type: 'like' | 'comment' | 'post' | 'system' | 'blood';
-  targetRoute?: string;
-  bloodRequestId?: string;
-}
+export type { NotificationItem, UserPreferences } from './types/notification.types';
 
 export interface BatchSummary {
   batchYear: number;

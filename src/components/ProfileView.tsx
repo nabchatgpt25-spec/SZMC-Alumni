@@ -1249,46 +1249,18 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
             </button>
 
             {isMine && (
-              <>
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('blood')}
-                  className={`pb-3 border-b-2 transition-colors flex items-center gap-1.5 cursor-pointer shrink-0 ${
-                    activeTab === 'blood'
-                      ? 'border-rose-600 text-rose-600 dark:text-rose-400'
-                      : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
-                  }`}
-                >
-                  <Heart className="w-3.5 h-3.5 text-rose-500" />
-                  <span>Blood Donor Settings</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('edit')}
-                  className={`pb-3 border-b-2 transition-colors flex items-center gap-1.5 cursor-pointer shrink-0 ${
-                    activeTab === 'edit'
-                      ? 'border-blue-600 text-blue-600 dark:text-blue-400'
-                      : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
-                  }`}
-                >
-                  <Edit className="w-3.5 h-3.5" />
-                  <span>Edit Profile</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setActiveTab('settings')}
-                  className={`pb-3 border-b-2 transition-colors flex items-center gap-1.5 cursor-pointer shrink-0 ${
-                    activeTab === 'settings'
-                      ? 'border-red-600 text-red-600 dark:text-red-400'
-                      : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
-                  }`}
-                >
-                  <Settings className="w-3.5 h-3.5" />
-                  <span>Settings & Privacy</span>
-                </button>
-              </>
+              <button
+                type="button"
+                onClick={() => setActiveTab('edit')}
+                className={`pb-3 border-b-2 transition-colors flex items-center gap-1.5 cursor-pointer shrink-0 ${
+                  activeTab === 'edit'
+                    ? 'border-blue-600 text-blue-600 dark:text-blue-400'
+                    : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                }`}
+              >
+                <Edit className="w-3.5 h-3.5" />
+                <span>Edit Profile</span>
+              </button>
             )}
           </div>
         </div>

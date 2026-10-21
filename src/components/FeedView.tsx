@@ -67,8 +67,8 @@ import {
   toggleSavePostInDb,
   editFeedPostInDb,
   deleteFeedPostInDb,
-  createNotificationInDb,
 } from '../services/supabaseService';
+import { notifyPostLike, notifyPostComment } from '../utils/notificationService';
 
 interface FeedViewProps {
   onViewProfile?: (userId: number) => void;
@@ -129,7 +129,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
         }
       })
       .catch((err) => {
-        console.error('FeedView: failed to fetch Supabase posts:', err);
+        console.warn('FeedView: failed to fetch Supabase posts, rendering current feed:', err?.message || err);
         if (isMounted) {
           setIsLoadingPosts(false);
         }
@@ -608,15 +608,11 @@ export const FeedView: React.FC<FeedViewProps> = ({
 
     const targetPost = posts.find((p) => p.id === postId);
     if (targetPost && !targetPost.likedByMe && targetPost.userId !== currentUser.id) {
-      createNotificationInDb({
-        recipientId: targetPost.userId,
-        actorId: currentUser.id,
-        type: 'like',
-        title: `${currentUser.fullName} liked your post`,
-        message: targetPost.content.slice(0, 80),
-        postId: targetPost.id,
-        targetRoute: 'feed',
-      }).catch(() => {});
+      notifyPostLike(targetPost, {
+        id: currentUser.id,
+        fullName: currentUser.fullName,
+        avatarUrl: currentUser.avatarUrl,
+      });
     }
 
     setPosts((prev) =>
@@ -854,15 +850,11 @@ export const FeedView: React.FC<FeedViewProps> = ({
 
     const targetPost = posts.find((p) => p.id === postId);
     if (targetPost && targetPost.userId !== currentUser.id) {
-      createNotificationInDb({
-        recipientId: targetPost.userId,
-        actorId: currentUser.id,
-        type: 'comment',
-        title: `${currentUser.fullName} commented on your post`,
-        message: text.slice(0, 100),
-        postId: targetPost.id,
-        targetRoute: 'feed',
-      }).catch(() => {});
+      notifyPostComment(targetPost, text, {
+        id: currentUser.id,
+        fullName: currentUser.fullName,
+        avatarUrl: currentUser.avatarUrl,
+      });
     }
 
     const newComment: PostComment = {

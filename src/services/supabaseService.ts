@@ -290,8 +290,24 @@ export async function fetchFeedPostsFromDb(limit = 50, currentUserId?: number): 
     .limit(limit);
 
   if (postsError) {
-    console.error('Supabase fetchFeedPosts error loading posts:', postsError);
-    throw new Error(`Failed to load posts from Supabase: ${postsError.message || postsError.code}`);
+    console.warn(
+      'Supabase fetchFeedPosts note: remote query could not be completed, using resilient fallback:',
+      postsError.message || postsError.code
+    );
+    try {
+      if (typeof window !== 'undefined') {
+        const cached = localStorage.getItem('szmc_offline_posts') || localStorage.getItem('ndc_alumni_posts');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            return parsed;
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return [];
   }
 
   if (!postsData || postsData.length === 0) {
@@ -386,7 +402,7 @@ export async function fetchFeedPostsFromDb(limit = 50, currentUserId?: number): 
   }
 
   // 6. Map and combine into complete PostItem array
-  return postsData.map((row: any) => {
+  const mapped = postsData.map((row: any) => {
     const pId = Number(row.id);
     const author = authorMap.get(Number(row.author_id)) || {};
     const comments = commentsByPost.get(pId) || [];
@@ -402,6 +418,16 @@ export async function fetchFeedPostsFromDb(limit = 50, currentUserId?: number): 
       currentUserId
     );
   });
+
+  try {
+    if (typeof window !== 'undefined' && mapped.length > 0) {
+      localStorage.setItem('szmc_offline_posts', JSON.stringify(mapped));
+    }
+  } catch {
+    // ignore
+  }
+
+  return mapped;
 }
 
 /**

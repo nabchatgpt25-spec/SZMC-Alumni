@@ -1,4 +1,5 @@
 import { MentorshipCategory, MentorshipRequest, MentorOffer, MentorshipAnswer } from '../types/mentorship';
+import { notifyMentorshipQuestion, notifyMentorshipAnswer } from '../utils/notificationService';
 
 const REQUESTS_STORAGE_KEY = 'mentorship_requests_v1';
 const MENTORS_STORAGE_KEY = 'mentorship_mentors_v1';
@@ -158,6 +159,7 @@ export const createMentorshipRequest = (
 ): MentorshipRequest => {
   const current = loadMentorshipRequests();
   const tempId = `req-${Date.now()}`;
+  const targetIdNum = typeof targetMentor?.id === 'number' ? targetMentor.id : Number(targetMentor?.id);
   const newReq: MentorshipRequest = {
     id: tempId,
     userId: user.id,
@@ -167,7 +169,7 @@ export const createMentorshipRequest = (
     topic,
     question: question.trim(),
     contactInfo: user.contact?.trim() || undefined,
-    targetMentorId: typeof targetMentor?.id === 'number' ? targetMentor.id : undefined,
+    targetMentorId: !Number.isNaN(targetIdNum) && targetIdNum > 0 ? targetIdNum : undefined,
     targetMentorName: targetMentor?.name,
     createdAt: 'Just now',
     status: 'open',
@@ -176,6 +178,21 @@ export const createMentorshipRequest = (
 
   const updated = [newReq, ...current];
   saveMentorshipRequests(updated);
+
+  if (!Number.isNaN(targetIdNum) && targetIdNum > 0) {
+    notifyMentorshipQuestion({
+      mentorId: targetIdNum,
+      mentorName: targetMentor?.name || 'Mentor',
+      questionText: question.trim(),
+      topic,
+      actor: {
+        id: user.id,
+        fullName: user.name || 'Alumnus',
+        avatarUrl: user.avatar,
+      },
+    });
+  }
+
   return newReq;
 };
 
@@ -185,6 +202,7 @@ export const addMentorshipAnswer = (
   mentor: { id: number; name: string; batch?: number | null; avatar?: string; profession?: string }
 ): MentorshipAnswer => {
   const current = loadMentorshipRequests();
+  const targetReq = current.find((r) => r.id === requestId);
   const tempAnsId = `ans-${Date.now()}`;
   const newAns: MentorshipAnswer = {
     id: tempAnsId,
@@ -209,6 +227,19 @@ export const addMentorshipAnswer = (
   });
 
   saveMentorshipRequests(updated);
+
+  if (targetReq && targetReq.userId) {
+    notifyMentorshipAnswer({
+      requesterId: targetReq.userId,
+      answerText: answerText.trim(),
+      actor: {
+        id: mentor.id,
+        fullName: mentor.name,
+        avatarUrl: mentor.avatar,
+      },
+    });
+  }
+
   return newAns;
 };
 

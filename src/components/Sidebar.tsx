@@ -19,6 +19,7 @@ import {
   Sun,
   Moon,
   ShieldCheck,
+  ShieldAlert,
   Settings,
   Sparkles,
 } from 'lucide-react';
@@ -103,6 +104,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     if (id === 'alumni' && activeTab === 'directory') return true;
     if (id === 'batches' && activeTab.startsWith('batch:')) return true;
     if (id === 'emergency' && (activeTab === 'blood' || activeTab === 'blood-network')) return true;
+    if (id === 'admin' && (activeTab === 'admin' || activeTab === 'admin-center' || activeTab === 'admin-hub' || activeTab === 'admin-command-center')) return true;
     return false;
   };
 
@@ -310,6 +312,32 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   </span>
                 </button>
               )}
+
+              {/* Admin Command Hub */}
+              <button
+                type="button"
+                onClick={() => {
+                  onSelectTab('admin');
+                  onClose();
+                }}
+                className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-xl font-medium text-xs sm:text-[13px] transition-all text-left cursor-pointer group ${
+                  isItemActive('admin')
+                    ? 'bg-indigo-600 text-white font-bold shadow-md shadow-indigo-600/25'
+                    : 'text-indigo-700 dark:text-indigo-300 hover:text-indigo-950 dark:hover:text-white hover:bg-indigo-100/60 dark:hover:bg-indigo-950/50'
+                }`}
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <ShieldAlert
+                    className={`w-4 h-4 shrink-0 transition-colors ${
+                      isItemActive('admin') ? 'text-white' : 'text-indigo-600 dark:text-indigo-400'
+                    }`}
+                  />
+                  <span className="truncate font-bold">Admin Hub</span>
+                </div>
+                <span className="shrink-0 text-[9px] font-black uppercase px-1.5 py-0.5 rounded-md border tracking-wider bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 border-indigo-500/30">
+                  ADMIN
+                </span>
+              </button>
 
               {/* Quick Light / Dark Mode Toggle */}
               <button
