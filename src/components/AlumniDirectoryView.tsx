@@ -25,6 +25,7 @@ import { VerificationStatusBadge } from './verification/VerificationStatusBadge'
 import { vouchForAlumniProfile } from '../utils/verificationService';
 import { Tilt3DCard } from './motion/CinematicMotion';
 import { fetchAlumniProfilesFromDb } from '../services/supabaseService';
+import { realtimeManager } from '../services/supabaseRealtimeService';
 
 interface AlumniDirectoryViewProps {
   onViewProfile: (profileId: number) => void;
@@ -61,28 +62,36 @@ export const AlumniDirectoryView: React.FC<AlumniDirectoryViewProps> = ({
     );
     setProfiles(initialCombined);
 
-    // Fetch live profiles from Supabase database
-    fetchAlumniProfilesFromDb()
-      .then((dbProfiles) => {
-        if (isMounted && dbProfiles && dbProfiles.length > 0) {
-          setProfiles((prev) => {
-            const map = new Map<number, AlumniProfile>();
-            // Live Supabase profiles take highest priority
-            dbProfiles.forEach((p) => map.set(p.id, p));
-            // Keep local/cached profiles as fallback
-            prev.forEach((p) => {
-              if (!map.has(p.id)) map.set(p.id, p);
+    const syncFromSupabase = () => {
+      fetchAlumniProfilesFromDb()
+        .then((dbProfiles) => {
+          if (isMounted && dbProfiles && dbProfiles.length > 0) {
+            setProfiles((prev) => {
+              const map = new Map<number, AlumniProfile>();
+              dbProfiles.forEach((p) => map.set(p.id, p));
+              prev.forEach((p) => {
+                if (!map.has(p.id)) map.set(p.id, p);
+              });
+              return Array.from(map.values());
             });
-            return Array.from(map.values());
-          });
-        }
-      })
-      .catch((err) => {
-        console.warn('Could not load live profiles from Supabase, keeping cached fallback:', err);
-      });
+          }
+        })
+        .catch((err) => {
+          console.warn('Could not load live profiles from Supabase, keeping cached fallback:', err);
+        });
+    };
+
+    // Initial fetch
+    syncFromSupabase();
+
+    // Subscribe to live WebSocket realtime updates on alumni_profiles
+    const unsubscribeAlumni = realtimeManager.subscribeToAlumni(() => {
+      syncFromSupabase();
+    });
 
     return () => {
       isMounted = false;
+      unsubscribeAlumni();
     };
   }, []);
 

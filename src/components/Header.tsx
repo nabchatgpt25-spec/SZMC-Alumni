@@ -102,6 +102,15 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Right Actions: Theme Toggle, Notifications, Messages, Profile */}
         <div className="flex items-center gap-1 sm:gap-2.5 shrink-0">
+          {/* Supabase Realtime Live Sync Badge */}
+          <div
+            className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 dark:bg-emerald-400/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-[11px] font-bold select-none cursor-default"
+            title="Supabase WebSocket Realtime Synchronization Active"
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+            <span className="tracking-tight">Live Sync</span>
+          </div>
+
           <div className="flex items-center">
             <ThemeToggle />
           </div>

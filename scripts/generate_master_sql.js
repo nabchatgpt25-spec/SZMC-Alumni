@@ -258,11 +258,13 @@ CREATE TABLE IF NOT EXISTS public.posts (
   content TEXT NOT NULL CHECK (char_length(trim(content)) >= 1),
   image_url TEXT NULL,
   media_urls TEXT[] NOT NULL DEFAULT '{}',
-  external_link TEXT NULL,
-  external_metadata JSONB NULL,
+  images TEXT[] NOT NULL DEFAULT '{}',
+  videos TEXT[] NOT NULL DEFAULT '{}',
   likes_count INTEGER NOT NULL DEFAULT 0 CHECK (likes_count >= 0),
   comments_count INTEGER NOT NULL DEFAULT 0 CHECK (comments_count >= 0),
   is_pinned BOOLEAN NOT NULL DEFAULT FALSE,
+  is_edited BOOLEAN NOT NULL DEFAULT FALSE,
+  is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
   search_vector TSVECTOR NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -905,6 +907,80 @@ ON CONFLICT (ref_no) DO UPDATE SET
   signatory_organization = EXCLUDED.signatory_organization,
   is_published = EXCLUDED.is_published,
   updated_at = now();
+
+-- -----------------------------------------------------------------------------
+-- 10. REALTIME ENABLEMENT & PERFORMANCE TUNING
+-- -----------------------------------------------------------------------------
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'supabase_realtime') THEN
+    CREATE PUBLICATION supabase_realtime;
+  END IF;
+END $$;
+
+ALTER TABLE IF EXISTS public.posts REPLICA IDENTITY FULL;
+ALTER TABLE IF EXISTS public.post_comments REPLICA IDENTITY FULL;
+ALTER TABLE IF EXISTS public.post_likes REPLICA IDENTITY FULL;
+ALTER TABLE IF EXISTS public.saved_posts REPLICA IDENTITY FULL;
+ALTER TABLE IF EXISTS public.notifications REPLICA IDENTITY FULL;
+ALTER TABLE IF EXISTS public.blood_requests REPLICA IDENTITY FULL;
+ALTER TABLE IF EXISTS public.blood_request_responses REPLICA IDENTITY FULL;
+ALTER TABLE IF EXISTS public.blood_donors REPLICA IDENTITY FULL;
+ALTER TABLE IF EXISTS public.alumni_profiles REPLICA IDENTITY FULL;
+ALTER TABLE IF EXISTS public.official_notices REPLICA IDENTITY FULL;
+ALTER TABLE IF EXISTS public.peer_vouches REPLICA IDENTITY FULL;
+ALTER TABLE IF EXISTS public.verification_requests REPLICA IDENTITY FULL;
+ALTER TABLE IF EXISTS public.gallery_albums REPLICA IDENTITY FULL;
+ALTER TABLE IF EXISTS public.gallery_photos REPLICA IDENTITY FULL;
+ALTER TABLE IF EXISTS public.batches REPLICA IDENTITY FULL;
+
+DO $$
+DECLARE
+  tbl text;
+  tables text[] := ARRAY[
+    'posts',
+    'post_comments',
+    'post_likes',
+    'saved_posts',
+    'notifications',
+    'blood_requests',
+    'blood_request_responses',
+    'blood_donors',
+    'alumni_profiles',
+    'official_notices',
+    'peer_vouches',
+    'verification_requests',
+    'gallery_albums',
+    'gallery_photos',
+    'batches'
+  ];
+BEGIN
+  FOREACH tbl IN ARRAY tables LOOP
+    IF EXISTS (
+      SELECT 1 FROM information_schema.tables 
+      WHERE table_schema = 'public' AND table_name = tbl
+    ) THEN
+      BEGIN
+        EXECUTE format('ALTER PUBLICATION supabase_realtime ADD TABLE public.%I', tbl);
+      EXCEPTION
+        WHEN duplicate_object THEN NULL;
+        WHEN others THEN NULL;
+      END;
+    END IF;
+  END LOOP;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_posts_created_at_desc ON public.posts(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_posts_author_id ON public.posts(author_id);
+CREATE INDEX IF NOT EXISTS idx_posts_category ON public.posts(category);
+CREATE INDEX IF NOT EXISTS idx_post_comments_post_id ON public.post_comments(post_id);
+CREATE INDEX IF NOT EXISTS idx_post_likes_composite ON public.post_likes(post_id, user_id);
+CREATE INDEX IF NOT EXISTS idx_saved_posts_composite ON public.saved_posts(user_id, post_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_recipient_unread ON public.notifications(recipient_id, unread);
+CREATE INDEX IF NOT EXISTS idx_blood_requests_status_created ON public.blood_requests(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_blood_donors_availability ON public.blood_donors(availability);
+CREATE INDEX IF NOT EXISTS idx_alumni_profiles_batch_year ON public.alumni_profiles(batch_year);
+CREATE INDEX IF NOT EXISTS idx_alumni_profiles_auth_user ON public.alumni_profiles(auth_user_id);
 
 COMMIT;
 `;

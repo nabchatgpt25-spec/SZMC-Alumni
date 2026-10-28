@@ -23,7 +23,9 @@ import {
   loadBloodRequests,
   respondToBloodRequest,
   getDonorProfileByUserId,
+  syncBloodDataFromSupabase,
 } from '../utils/bloodDonationService';
+import { realtimeManager } from '../services/supabaseRealtimeService';
 import { BloodRequestModal } from './BloodRequestModal';
 import { BloodDonorRegistration } from './BloodDonorRegistration';
 import { useAuth } from '../context/AuthContext';
@@ -70,15 +72,24 @@ export const BloodNetworkView: React.FC<BloodNetworkViewProps> = ({
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   useEffect(() => {
+    // Initial fetch from Supabase to ensure fresh data
+    syncBloodDataFromSupabase();
+
     const handleReqChange = (e: any) => setRequests(e.detail || loadBloodRequests());
     const handleDonorChange = (e: any) => setDonors(e.detail || loadBloodDonors());
 
     window.addEventListener('blood_requests_changed', handleReqChange);
     window.addEventListener('blood_donors_changed', handleDonorChange);
 
+    // Subscribe to live Supabase WebSocket realtime changes
+    const unsubscribeRealtime = realtimeManager.subscribeToBloodNetwork(() => {
+      syncBloodDataFromSupabase();
+    });
+
     return () => {
       window.removeEventListener('blood_requests_changed', handleReqChange);
       window.removeEventListener('blood_donors_changed', handleDonorChange);
+      unsubscribeRealtime();
     };
   }, []);
 

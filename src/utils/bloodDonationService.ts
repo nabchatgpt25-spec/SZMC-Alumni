@@ -10,6 +10,14 @@ import {
   BloodRequestStatus,
 } from '../types/blood';
 import { matchDonorsForRequest } from './bloodMatching';
+import {
+  createBloodRequestInDb,
+  registerBloodDonorInDb,
+  respondToBloodRequestInDb,
+  fetchBloodRequestsFromDb,
+  fetchBloodDonorsFromDb,
+} from '../services/supabaseService';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
 
 export const BLOOD_REQUESTS_STORAGE_KEY = 'blood_requests_v1';
 export const BLOOD_DONORS_STORAGE_KEY = 'blood_donors_v1';
@@ -319,6 +327,20 @@ export function registerOrUpdateBloodDonor(profile: BloodDonorProfile): BloodDon
   }
 
   saveBloodDonors(existing);
+
+  // Asynchronously persist to Supabase Database
+  registerBloodDonorInDb({
+    userId: profile.userId,
+    bloodGroup: profile.bloodGroup,
+    isRegisteredDonor: profile.isRegisteredDonor,
+    availability: profile.availability,
+    preferredArea: profile.preferredArea || profile.city || 'Bogura',
+    city: profile.city || 'Bogura',
+    lastDonationDate: profile.lastDonationDate,
+    emergencyAlertPreference: profile.emergencyAlertPreference || 'all_urgent',
+    donationHistory: profile.donationHistory || [],
+  }).catch((err) => console.warn('Supabase donor registration sync warning:', err));
+
   return updatedProfile;
 }
 
@@ -344,14 +366,15 @@ export function createBloodRequest(params: {
   requesterAvatar: string;
   requesterBatch: number;
 }): BloodEmergencyRequest {
+  const tempId = `req_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
   const newRequest: BloodEmergencyRequest = {
-    id: `req_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+    id: tempId,
     bloodGroup: params.bloodGroup,
     unitsRequired: Math.max(1, params.unitsRequired),
     unitsFulfilled: 0,
     hospitalName: sanitizeInputText(params.hospitalName, 120),
     hospitalArea: sanitizeInputText(params.hospitalArea, 120),
-    city: sanitizeInputText(params.city || 'Dhaka', 60),
+    city: sanitizeInputText(params.city || 'Bogura', 60),
     requiredDateTime: params.requiredDateTime,
     emergencyLevel: params.emergencyLevel,
     contactMethod: params.contactMethod,
@@ -371,6 +394,32 @@ export function createBloodRequest(params: {
   const requests = loadBloodRequests();
   requests.unshift(newRequest);
   saveBloodRequests(requests);
+
+  // Asynchronously persist to Supabase Database
+  createBloodRequestInDb({
+    requesterId: params.requesterId,
+    bloodGroup: params.bloodGroup,
+    unitsRequired: params.unitsRequired,
+    hospitalName: params.hospitalName,
+    hospitalArea: params.hospitalArea,
+    city: params.city || 'Bogura',
+    requiredDateTime: params.requiredDateTime,
+    emergencyLevel: params.emergencyLevel,
+    contactMethod: params.contactMethod,
+    description: params.description,
+    status: 'Active',
+    patientRelation: params.patientRelation,
+  }).then((supabaseId) => {
+    if (supabaseId) {
+      // Reconcile temporary optimistic ID with permanent Supabase ID
+      const currentList = loadBloodRequests();
+      const target = currentList.find((r) => r.id === tempId);
+      if (target) {
+        target.id = supabaseId;
+        saveBloodRequests(currentList);
+      }
+    }
+  }).catch((err) => console.warn('Supabase blood request sync warning:', err));
 
   return newRequest;
 }
@@ -419,6 +468,13 @@ export function respondToBloodRequest(
       if (req.status === 'Active') req.status = 'Donor Found';
       req.updatedAt = new Date().toISOString();
       saveBloodRequests(requests);
+
+      respondToBloodRequestInDb({
+        requestId,
+        donorUserId: actor.id,
+        status: 'offered',
+        note: sanitizeInputText(note || '', 200),
+      }).catch((e) => console.warn('Supabase donor response sync warning:', e));
     }
     return req;
   } else {
@@ -452,6 +508,14 @@ export function respondToBloodRequest(
     req.updatedAt = new Date().toISOString();
 
     saveBloodRequests(requests);
+
+    respondToBloodRequestInDb({
+      requestId: params.requestId,
+      donorUserId: params.donorUserId,
+      status: 'offered',
+      note: sanitizeInputText(params.note || '', 200),
+    }).catch((e) => console.warn('Supabase donor response sync warning:', e));
+
     return true;
   }
 }
@@ -478,7 +542,41 @@ export function updateBloodRequestStatus(
   req.updatedAt = new Date().toISOString();
 
   saveBloodRequests(requests);
+
+  if (isSupabaseConfigured) {
+    supabase
+      .from('blood_requests')
+      .update({
+        status: newStatus,
+        units_fulfilled: req.unitsFulfilled,
+        moderation_note: req.moderationNote || null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', requestId)
+      .then(({ error }) => {
+        if (error) console.warn('Supabase updateBloodRequestStatus error:', error.message);
+      });
+  }
+
   return typeof fulfilledUnitsOrActor === 'number' ? true : req;
+}
+
+export async function syncBloodDataFromSupabase(): Promise<void> {
+  if (!isSupabaseConfigured) return;
+  try {
+    const [dbRequests, dbDonors] = await Promise.all([
+      fetchBloodRequestsFromDb(),
+      fetchBloodDonorsFromDb(),
+    ]);
+    if (dbRequests && dbRequests.length > 0) {
+      saveBloodRequests(dbRequests);
+    }
+    if (dbDonors && dbDonors.length > 0) {
+      saveBloodDonors(dbDonors);
+    }
+  } catch (err) {
+    console.warn('Failed to sync blood data from Supabase:', err);
+  }
 }
 
 export function canModifyBloodRequest(

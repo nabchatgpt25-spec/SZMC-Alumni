@@ -68,6 +68,7 @@ import {
   editFeedPostInDb,
   deleteFeedPostInDb,
 } from '../services/supabaseService';
+import { realtimeManager } from '../services/supabaseRealtimeService';
 import { notifyPostLike, notifyPostComment } from '../utils/notificationService';
 
 interface FeedViewProps {
@@ -135,8 +136,83 @@ export const FeedView: React.FC<FeedViewProps> = ({
         }
       });
 
+    // Live Supabase Realtime channel subscription
+    const unsubscribeFeed = realtimeManager.subscribeToFeed((event) => {
+      if (!isMounted) return;
+
+      if (event.table === 'posts') {
+        if (event.eventType === 'INSERT') {
+          const newPostRow = event.newRecord;
+          if (newPostRow && Number(newPostRow.author_id) !== currentUser.id) {
+            // Re-fetch fresh posts in background to populate rich author info & comments
+            fetchFeedPostsFromDb(50, currentUser.id).then((freshPosts) => {
+              if (isMounted && freshPosts && freshPosts.length > 0) {
+                setPosts(freshPosts);
+                setHasNewPosts(true);
+                showToast('✨ New post published by batchmate in real-time!');
+              }
+            });
+          }
+        } else if (event.eventType === 'DELETE') {
+          const deletedId = Number(event.oldRecord?.id);
+          if (deletedId) {
+            setPosts((prev) => prev.filter((p) => p.id !== deletedId));
+          }
+        } else if (event.eventType === 'UPDATE') {
+          const updatedRow = event.newRecord;
+          if (updatedRow) {
+            const uId = Number(updatedRow.id);
+            setPosts((prev) =>
+              prev.map((p) =>
+                p.id === uId
+                  ? {
+                      ...p,
+                      content: updatedRow.content ?? p.content,
+                      isEdited: Boolean(updatedRow.is_edited),
+                      pinned: Boolean(updatedRow.is_pinned),
+                      likesCount: updatedRow.likes_count ?? p.likesCount,
+                      commentsCount: updatedRow.comments_count ?? p.commentsCount,
+                    }
+                  : p
+              )
+            );
+          }
+        }
+      } else if (event.table === 'post_likes') {
+        const pId = Number(event.newRecord?.post_id || event.oldRecord?.post_id);
+        const lUserId = Number(event.newRecord?.user_id || event.oldRecord?.user_id);
+        if (pId && lUserId !== currentUser.id) {
+          const delta = event.eventType === 'INSERT' ? 1 : -1;
+          setPosts((prev) =>
+            prev.map((p) =>
+              p.id === pId ? { ...p, likesCount: Math.max(0, p.likesCount + delta) } : p
+            )
+          );
+        }
+      } else if (event.table === 'post_comments') {
+        if (event.eventType === 'INSERT') {
+          const newCommentRow = event.newRecord;
+          const pId = Number(newCommentRow?.post_id);
+          const cUserId = Number(newCommentRow?.user_id);
+          if (pId && cUserId !== currentUser.id) {
+            setPosts((prev) =>
+              prev.map((p) =>
+                p.id === pId
+                  ? {
+                      ...p,
+                      commentsCount: p.commentsCount + 1,
+                    }
+                  : p
+              )
+            );
+          }
+        }
+      }
+    });
+
     return () => {
       isMounted = false;
+      unsubscribeFeed();
     };
   }, [currentUser.id]);
 

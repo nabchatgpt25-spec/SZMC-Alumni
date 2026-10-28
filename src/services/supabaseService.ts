@@ -1,5 +1,7 @@
 import { supabase, isSupabaseConfigured, ALUMNI_PUBLIC_COLUMNS } from '../lib/supabase';
 import { mapSupabaseRowToAlumniProfile, getOrCreateSupabaseProfile } from '../lib/supabase-auth';
+export { realtimeManager } from './supabaseRealtimeService';
+export type { RealtimeStatus, RealtimeFeedEvent, RealtimeBloodEvent, RealtimeAlumniEvent } from './supabaseRealtimeService';
 import {
   AlumniProfile,
   BatchSummary,
@@ -1019,9 +1021,9 @@ export async function createBloodRequestInDb(params: {
 }): Promise<string | null> {
   if (!isSupabaseConfigured) return null;
 
-  const requiredDate = new Date(params.requiredDateTime);
-  if (Number.isNaN(requiredDate.getTime()) || requiredDate.getTime() <= Date.now()) {
-    return null;
+  let requiredDate = new Date(params.requiredDateTime);
+  if (Number.isNaN(requiredDate.getTime())) {
+    requiredDate = new Date();
   }
 
   const validEmergencyLevels = ['critical', 'urgent', 'standard'];

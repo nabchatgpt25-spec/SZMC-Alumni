@@ -21,6 +21,7 @@ import { BATCH_LIST, loadStoredAlumniProfiles } from '../data/mockData';
 import { BatchSummary, AlumniProfile, SPECIALTIES_LIST } from '../types';
 import { NDCLogo } from './NDCLogo';
 import { fetchBatchesFromDb, fetchBatchAlumniProfilesFromDb } from '../services/supabaseService';
+import { realtimeManager } from '../services/supabaseRealtimeService';
 import { FAMOUS_SZMC_ALUMNI } from './landing/FeaturedAlumniSection';
 
 interface BatchesViewProps {
@@ -39,30 +40,39 @@ export const BatchesView: React.FC<BatchesViewProps> = ({ onSelectBatch, onViewP
 
   useEffect(() => {
     let isMounted = true;
-    fetchBatchesFromDb()
-      .then((dbBatches) => {
-        if (isMounted && dbBatches && dbBatches.length > 0) {
-          const szmcDbBatches = dbBatches.filter(
-            (b) => b && b.batchYear >= 1 && b.batchYear <= 35
-          );
-          setBatchesList((prev) => {
-            const map = new Map<number, BatchSummary>();
-            szmcDbBatches.forEach((b) => map.set(b.batchYear, b));
-            prev.forEach((b) => {
-              if (b.batchYear >= 1 && b.batchYear <= 35 && !map.has(b.batchYear)) {
-                map.set(b.batchYear, b);
-              }
+    const syncBatches = () => {
+      fetchBatchesFromDb()
+        .then((dbBatches) => {
+          if (isMounted && dbBatches && dbBatches.length > 0) {
+            const szmcDbBatches = dbBatches.filter(
+              (b) => b && b.batchYear >= 1 && b.batchYear <= 35
+            );
+            setBatchesList((prev) => {
+              const map = new Map<number, BatchSummary>();
+              szmcDbBatches.forEach((b) => map.set(b.batchYear, b));
+              prev.forEach((b) => {
+                if (b.batchYear >= 1 && b.batchYear <= 35 && !map.has(b.batchYear)) {
+                  map.set(b.batchYear, b);
+                }
+              });
+              return Array.from(map.values()).sort((a, b) => a.batchYear - b.batchYear);
             });
-            return Array.from(map.values()).sort((a, b) => a.batchYear - b.batchYear);
-          });
-        }
-      })
-      .catch((err) => {
-        console.warn('BatchesView: could not load batches from Supabase:', err);
-      });
+          }
+        })
+        .catch((err) => {
+          console.warn('BatchesView: could not load batches from Supabase:', err);
+        });
+    };
+
+    syncBatches();
+
+    const unsubscribeAlumni = realtimeManager.subscribeToAlumni(() => {
+      syncBatches();
+    });
 
     return () => {
       isMounted = false;
+      unsubscribeAlumni();
     };
   }, []);
 

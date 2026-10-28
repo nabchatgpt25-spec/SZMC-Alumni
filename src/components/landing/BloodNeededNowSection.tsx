@@ -10,7 +10,9 @@ import {
   loadBloodRequests,
   isBloodBannerDismissed,
   dismissBloodBanner,
+  syncBloodDataFromSupabase,
 } from '../../utils/bloodDonationService';
+import { realtimeManager } from '../../services/supabaseRealtimeService';
 import {
   MagneticWrap,
   ScrollReveal,
@@ -39,19 +41,28 @@ export const BloodNeededNowSection: React.FC<BloodNeededNowSectionProps> = ({
   );
 
   useEffect(() => {
+    syncBloodDataFromSupabase();
+
     const sync = () => {
       setRequests(loadBloodRequests());
       setIsDismissed(isBloodBannerDismissed());
     };
 
     window.addEventListener('ndc_blood_network_updated', sync);
+    window.addEventListener('blood_requests_changed', sync);
     window.addEventListener('ndc_blood_banner_dismissed', sync);
     window.addEventListener('storage', sync);
 
+    const unsubscribeRealtime = realtimeManager.subscribeToBloodNetwork(() => {
+      syncBloodDataFromSupabase().then(sync);
+    });
+
     return () => {
       window.removeEventListener('ndc_blood_network_updated', sync);
+      window.removeEventListener('blood_requests_changed', sync);
       window.removeEventListener('ndc_blood_banner_dismissed', sync);
       window.removeEventListener('storage', sync);
+      unsubscribeRealtime();
     };
   }, []);
 

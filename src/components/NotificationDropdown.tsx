@@ -19,6 +19,8 @@ import {
   saveLocalNotifications,
 } from '../utils/notificationService';
 import { markNotificationReadInDb } from '../services/supabaseNotificationService';
+import { realtimeManager } from '../services/supabaseRealtimeService';
+import { playSound } from '../utils/audio';
 
 interface NotificationDropdownProps {
   currentUserId: number;
@@ -50,9 +52,22 @@ export const NotificationDropdown: React.FC<NotificationDropdownProps> = ({
     syncNotifications();
     window.addEventListener('ndc_notifications_updated', syncNotifications);
     window.addEventListener('storage', syncNotifications);
+
+    // Live WebSocket push subscription for instant notifications
+    const unsubscribeRealtime = realtimeManager.subscribeToUserNotifications(
+      currentUserId,
+      (newNotif) => {
+        try {
+          playSound('notification');
+        } catch {}
+        syncNotifications();
+      }
+    );
+
     return () => {
       window.removeEventListener('ndc_notifications_updated', syncNotifications);
       window.removeEventListener('storage', syncNotifications);
+      unsubscribeRealtime();
     };
   }, [currentUserId]);
 
