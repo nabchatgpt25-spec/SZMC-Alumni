@@ -53,6 +53,8 @@ export default defineConfig(() => {
       VitePWA({
         registerType: 'autoUpdate',
         includeAssets: [
+          'szmc-logo.png',
+          'szmc-logo.svg',
           'ndc-logo.svg',
           'ndc-logo.png',
           'ndc-logo.jpg',

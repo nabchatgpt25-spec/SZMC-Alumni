@@ -12,20 +12,20 @@ async function main() {
   const srcAssetsDir = path.resolve(process.cwd(), 'src/assets');
   const distDir = path.resolve(process.cwd(), 'dist');
 
-  const svgPath = path.join(publicDir, 'ndc-logo.svg');
-  const svgBuffer = fs.readFileSync(svgPath);
+  const sourcePath = path.join(publicDir, 'szmc-logo.png');
+  const sourceBuffer = fs.readFileSync(sourcePath);
 
-  // Sync unmodified SVG to src/assets/ndc-logo.svg
-  fs.writeFileSync(path.join(srcAssetsDir, 'ndc-logo.svg'), svgBuffer);
+  // Sync PNG to src/assets/szmc-logo.png
+  fs.writeFileSync(path.join(srcAssetsDir, 'szmc-logo.png'), sourceBuffer);
 
-  // Render high-resolution PNGs from the unmodified SVG
-  const png512 = await sharp(svgBuffer, { density: 400 })
-    .resize(512, 512, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+  // Render high-resolution PNGs from the authentic SZMC emblem
+  const png512 = await sharp(sourceBuffer)
+    .resize(512, 512, { fit: 'contain', background: { r: 255, g: 255, b: 255, alpha: 0 } })
     .png()
     .toBuffer();
 
-  const png192 = await sharp(svgBuffer, { density: 400 })
-    .resize(192, 192, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+  const png192 = await sharp(sourceBuffer)
+    .resize(192, 192, { fit: 'contain', background: { r: 255, g: 255, b: 255, alpha: 0 } })
     .png()
     .toBuffer();
 
@@ -37,11 +37,11 @@ async function main() {
   fs.writeFileSync(path.join(publicDir, 'apple-touch-icon.png'), png192);
 
   if (fs.existsSync(distDir)) {
-    fs.writeFileSync(path.join(distDir, 'ndc-logo.svg'), svgBuffer);
-    fs.writeFileSync(path.join(distDir, 'ndc-logo.png'), png512);
+    fs.writeFileSync(path.join(distDir, 'szmc-logo.png'), sourceBuffer);
+    fs.writeFileSync(path.join(distDir, 'apple-touch-icon.png'), png192);
   }
 
-  console.log('Synced all PNG and PWA icons from unmodified public/ndc-logo.svg');
+  console.log('Synced all PNG and PWA icons from authentic SZMC logo');
 }
 
 main().catch((err) => {

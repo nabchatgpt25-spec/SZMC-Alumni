@@ -32,10 +32,26 @@ import { CursorSpotlight } from './components/motion/CinematicMotion';
 import { NDCLogo } from './components/NDCLogo';
 import { AdminPage } from './components/admin/AdminPage';
 import { SettingsView } from './components/SettingsView';
+import { OutstandingLoadingScreen } from './components/OutstandingLoadingScreen';
 
 function AlumniAppContent() {
   const { isLoggedIn, currentUser, isAuthInitializing, authInitializationError } = useAuth();
   const prefersReducedMotion = useReducedMotion();
+
+  // Outstanding Institutional Splash / Loading Screen state
+  const [showSplash, setShowSplash] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('splash') === '0') return false;
+    }
+    return true;
+  });
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      (window as any).szmcReplaySplash = () => setShowSplash(true);
+    }
+  }, []);
 
   // Route state: 'landing' | 'feed' | 'alumni' | 'directory' | 'find' | 'batches' | 'map' | 'gallery' | 'profile' | `batch:${number}` | `post-${number}`
   const [route, setRoute] = useState<string>(() => {
@@ -61,7 +77,8 @@ function AlumniAppContent() {
   const wasLoggedInRef = useRef(isLoggedIn);
   useEffect(() => {
     if (!wasLoggedInRef.current && isLoggedIn) {
-      // User just logged in — clear any stale #profile/#alumni hash and always default to feed/dashboard
+      // User just logged in — show the outstanding loading screen and navigate to central feed
+      setShowSplash(true);
       setRoute('feed');
       window.location.hash = 'feed';
       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -158,10 +175,18 @@ function AlumniAppContent() {
   if (!isLoggedIn || route === 'landing') {
     return (
       <>
+        {showSplash && (
+          <OutstandingLoadingScreen
+            onComplete={() => setShowSplash(false)}
+            minDuration={2400}
+          />
+        )}
+
         <LandingPage
           onOpenLogin={() => setAuthModalMode('login')}
           onOpenRegister={() => setAuthModalMode('register')}
           isAuthModalOpen={authModalMode !== null}
+          onReplaySplash={() => setShowSplash(true)}
           onNavigate={(target) => {
             if (target === 'landing') {
               navigateTo(target);
@@ -180,6 +205,7 @@ function AlumniAppContent() {
             onClose={() => setAuthModalMode(null)}
             onSuccess={() => {
               setAuthModalMode(null);
+              setShowSplash(true);
               navigateTo('feed');
             }}
           />
@@ -202,6 +228,14 @@ function AlumniAppContent() {
 
       {/* Global Cursor-Following Institutional Spotlight */}
       <CursorSpotlight />
+
+      {/* Outstanding Institutional Splash / Loading Screen */}
+      {showSplash && (
+        <OutstandingLoadingScreen
+          onComplete={() => setShowSplash(false)}
+          minDuration={2400}
+        />
+      )}
 
       {/* Sidebar Navigation */}
       <Sidebar

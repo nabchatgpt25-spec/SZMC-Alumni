@@ -17,7 +17,10 @@ export const NDCLogo: React.FC<NDCLogoProps> = ({
   alt = 'SZMC Logo',
 }) => {
   const { config } = useSiteConfig();
-  const currentLogo = config.logoUrl || '/assets/aistudio/images__1__2778177d.png';
+  const currentLogo =
+    config.logoUrl && !config.logoUrl.includes('ndc-logo') && !config.logoUrl.includes('images__1__')
+      ? config.logoUrl
+      : '/szmc-logo.png';
 
   return (
     <img

@@ -1586,6 +1586,28 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       </button>
                     </div>
                   </div>
+
+                  {/* Institutional Splash & Loading Screen Preview */}
+                  <div className="pt-4 border-t border-slate-100 dark:border-slate-800">
+                    <div className="text-xs font-bold text-slate-900 dark:text-white mb-1">
+                      Institutional Loading Screen
+                    </div>
+                    <div className="text-[11px] text-slate-500 dark:text-slate-400 mb-3">
+                      Replay the cinematic loading screen with the authentic SZMC emblem, Google glowing border, and motto.
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (typeof window !== 'undefined' && (window as any).szmcReplaySplash) {
+                          (window as any).szmcReplaySplash();
+                        }
+                      }}
+                      className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-bold text-xs flex items-center gap-2 shadow-sm transition-all cursor-pointer"
+                    >
+                      <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                      Preview Loading Page
+                    </button>
+                  </div>
                 </div>
               </div>
             )}

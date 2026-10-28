@@ -33,6 +33,7 @@ import { formatToE164Phone } from '../utils/phone';
 import { normalizeAcademicStreamAndGroup } from '../utils/academicGroupMapping';
 import { uploadVerificationDocumentToStorage, submitAdminDocSubmissionInDb } from '../services/supabaseService';
 import { supabase } from '../lib/supabase';
+import { OutstandingLoadingScreen } from './OutstandingLoadingScreen';
 
 interface AuthModalProps {
   initialMode: 'login' | 'register' | 'forgot';
@@ -592,10 +593,22 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   };
 
   return (
-    <div
-      onClick={onClose}
-      className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 md:p-6 overflow-y-auto bg-slate-900/40 dark:bg-slate-950/60 backdrop-blur-md animate-in fade-in duration-200"
-    >
+    <>
+      {loading && (
+        <OutstandingLoadingScreen
+          minDuration={1800}
+          message={
+            mode === 'register'
+              ? 'Creating Verified SZMC Alumni Profile...'
+              : 'Authenticating Credentials & Entering Portal...'
+          }
+          subtitle="AUTHENTICATING SZMC ALUMNI PORTAL"
+        />
+      )}
+      <div
+        onClick={onClose}
+        className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 md:p-6 overflow-y-auto bg-slate-900/40 dark:bg-slate-950/60 backdrop-blur-md animate-in fade-in duration-200"
+      >
       <div
         className="relative w-full max-w-2xl my-auto bg-white/40 dark:bg-slate-900/50 backdrop-blur-2xl backdrop-saturate-180 rounded-2xl sm:rounded-3xl shadow-[0_24px_64px_-12px_rgba(15,23,42,0.35),inset_0_1px_1px_rgba(255,255,255,0.75)] dark:shadow-[0_24px_64px_-12px_rgba(0,0,0,0.65),inset_0_1px_1px_rgba(255,255,255,0.2)] border border-white/60 dark:border-white/15 ring-1 ring-white/35 dark:ring-white/10 overflow-hidden flex flex-col max-h-[94vh] sm:max-h-[92vh]"
         onClick={(e) => e.stopPropagation()}
@@ -1285,5 +1298,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         </div>
       </div>
     </div>
+  </>
   );
 };

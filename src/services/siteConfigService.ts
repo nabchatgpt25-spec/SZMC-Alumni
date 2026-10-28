@@ -118,8 +118,8 @@ export interface SiteConfig {
 export const FACTORY_DEFAULT_SITE_CONFIG: SiteConfig = {
   siteTitle: 'SZMC Alumni Portal',
   siteTagline: 'Shaheed Ziaur Rahman Medical College Alumni Association',
-  logoUrl: '/assets/aistudio/images__1__2778177d.png',
-  faviconUrl: '/assets/aistudio/images__1__2778177d.png',
+  logoUrl: '/szmc-logo.png',
+  faviconUrl: '/szmc-logo.png',
   establishedYear: 1992,
   collegeMotto: 'Once a SZMCian, Always a SZMCian.',
   mottoSubtext: '35 MBBS Batches • One Lifelong Medical Fraternity • Silimpur, Bogura',
@@ -269,6 +269,20 @@ export function getSiteConfig(): SiteConfig {
       const stored = localStorage.getItem(SITE_CONFIG_STORAGE_KEY);
       if (stored) {
         const parsed = JSON.parse(stored);
+        if (
+          !parsed.logoUrl ||
+          parsed.logoUrl.includes('images__1__2778177d.png') ||
+          parsed.logoUrl.includes('ndc-logo')
+        ) {
+          parsed.logoUrl = '/szmc-logo.png';
+        }
+        if (
+          !parsed.faviconUrl ||
+          parsed.faviconUrl.includes('images__1__2778177d.png') ||
+          parsed.faviconUrl.includes('ndc-logo')
+        ) {
+          parsed.faviconUrl = '/szmc-logo.png';
+        }
         return { ...FACTORY_DEFAULT_SITE_CONFIG, ...parsed };
       }
     }

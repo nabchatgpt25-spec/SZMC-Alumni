@@ -42,6 +42,7 @@ interface LandingPageProps {
   onOpenRegister: () => void;
   onNavigate: (route: string) => void;
   isAuthModalOpen?: boolean;
+  onReplaySplash?: () => void;
 }
 
 export const LandingPage: React.FC<LandingPageProps> = ({
@@ -49,6 +50,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   onOpenRegister,
   onNavigate,
   isAuthModalOpen = false,
+  onReplaySplash,
 }) => {
   // Modal states for interactive preview
   const [previewAlumnus, setPreviewAlumnus] = useState<AlumniProfile | null>(null);
@@ -320,6 +322,20 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               >
                 Contact
               </button>
+              {onReplaySplash && (
+                <>
+                  <span className="text-slate-300 dark:text-slate-700">·</span>
+                  <button
+                    type="button"
+                    onClick={onReplaySplash}
+                    className="hover:text-blue-600 dark:hover:text-blue-400 transition-colors cursor-pointer inline-flex items-center gap-1 font-semibold text-amber-600 dark:text-amber-400"
+                    title="Preview Outstanding Loading / Splash Screen"
+                  >
+                    <Sparkles className="w-3 h-3" />
+                    Splash Screen
+                  </button>
+                </>
+              )}
             </div>
           </div>
 
