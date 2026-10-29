@@ -23,6 +23,7 @@ import { NDCLogo } from './NDCLogo';
 import { fetchBatchesFromDb, fetchBatchAlumniProfilesFromDb } from '../services/supabaseService';
 import { realtimeManager } from '../services/supabaseRealtimeService';
 import { FAMOUS_SZMC_ALUMNI } from './landing/FeaturedAlumniSection';
+import { useVerificationVisibility } from '../hooks/useVerificationVisibility';
 
 interface BatchesViewProps {
   onSelectBatch: (batchYear: number) => void;
@@ -34,6 +35,7 @@ export const BatchesView: React.FC<BatchesViewProps> = ({ onSelectBatch, onViewP
   const [batchAlumniProfiles, setBatchAlumniProfiles] = useState<AlumniProfile[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [rangeFilter, setRangeFilter] = useState<'all' | '1-10' | '11-20' | '21-30' | '31-35'>('all');
+  const { memberPortalVisible } = useVerificationVisibility();
   const [activeBatchYear, setActiveBatchYear] = useState<number | null>(null);
   const [selectedSpecialty, setSelectedSpecialty] = useState<string>('');
   const [memberSearch, setMemberSearch] = useState<string>('');
@@ -388,19 +390,14 @@ export const BatchesView: React.FC<BatchesViewProps> = ({ onSelectBatch, onViewP
             </div>
 
             {/* Batch Metrics Summary Cards */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               <div className="rounded-2xl p-3.5 border border-blue-200/70 dark:border-blue-900/50 bg-blue-50/40 dark:bg-blue-950/20">
                 <div className="text-[11px] font-bold text-slate-500 dark:text-slate-400">Batch Census</div>
                 <div className="text-xl font-black text-blue-600 dark:text-blue-400 mt-0.5">
                   {activeBatchMetrics.total} Alumni
                 </div>
               </div>
-              <div className="rounded-2xl p-3.5 border border-emerald-200/70 dark:border-emerald-900/50 bg-emerald-50/40 dark:bg-emerald-950/20">
-                <div className="text-[11px] font-bold text-slate-500 dark:text-slate-400">Verified Doctors</div>
-                <div className="text-xl font-black text-emerald-600 dark:text-emerald-400 mt-0.5">
-                  {activeBatchMetrics.verified} Verified
-                </div>
-              </div>
+
               <div className="rounded-2xl p-3.5 border border-rose-200/70 dark:border-rose-900/50 bg-rose-50/40 dark:bg-rose-950/20">
                 <div className="text-[11px] font-bold text-slate-500 dark:text-slate-400">Blood Donors</div>
                 <div className="text-xl font-black text-rose-600 dark:text-rose-400 mt-0.5">
@@ -526,7 +523,7 @@ export const BatchesView: React.FC<BatchesViewProps> = ({ onSelectBatch, onViewP
                           <h5 className="text-xs font-extrabold text-slate-900 dark:text-slate-100 truncate group-hover:text-blue-600 dark:group-hover:text-blue-400">
                             {alumnus.fullName}
                           </h5>
-                          {alumnus.verificationStatus === 'verified' && (
+                          {memberPortalVisible && alumnus.verificationStatus === 'verified' && (
                             <ShieldCheck className="w-3.5 h-3.5 text-emerald-500 shrink-0" aria-label="Verified SZMC Alumnus" />
                           )}
                         </div>

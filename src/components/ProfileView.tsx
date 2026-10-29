@@ -48,6 +48,7 @@ import {
   SharedEmbedCard
 } from './SmartPostMediaAndEmbeds';
 import { VerificationStatusBadge } from './verification/VerificationStatusBadge';
+import { useVerificationVisibility } from '../hooks/useVerificationVisibility';
 import {
   vouchForAlumniProfile,
   getVouchShareLink,
@@ -78,6 +79,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   initialTab,
 }) => {
   const { isLoggedIn, currentUser, updateProfile, deleteAccount } = useAuth();
+  const { memberPortalVisible } = useVerificationVisibility();
 
   // All feed posts loaded from localStorage so we can display and manage this user's posts in the "Posts" tab
   const [allPosts, setAllPosts] = useState<PostItem[]>(() => {
@@ -931,11 +933,13 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                   <h1 className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white tracking-tight">
                     {profile.fullName}
                   </h1>
-                  <VerificationStatusBadge
-                    profile={profile}
-                    onClick={() => onOpenVerificationCenter?.(isMine ? 'status' : 'vouch_classmates')}
-                    size="md"
-                  />
+                  {memberPortalVisible && (
+                    <VerificationStatusBadge
+                      profile={profile}
+                      onClick={() => onOpenVerificationCenter?.(isMine ? 'status' : 'vouch_classmates')}
+                      size="md"
+                    />
+                  )}
                 </div>
 
                 <div className="text-xs sm:text-sm font-bold text-blue-600 dark:text-blue-400 flex flex-wrap items-center justify-center sm:justify-start gap-2 mt-2">
@@ -1095,7 +1099,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
           )}
 
           {/* Active Verification & Peer Vouch Card (Dismissible with simple Cross button) */}
-          {!isVerificationCardClosed && (
+          {/* Hidden entirely unless the administrator enables the member verification portal */}
+          {memberPortalVisible && !isVerificationCardClosed && (
             <div
               className={`relative mt-4 p-4 pr-11 rounded-2xl border ${
                 (profile.verificationStatus || 'verified') === 'verified'
@@ -2457,6 +2462,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                 </button>
               </div>
 
+              {memberPortalVisible && (
               <div className="p-4 rounded-2xl bg-slate-50/80 dark:bg-slate-800/50 border border-slate-200/80 dark:border-slate-700/60 flex items-center justify-between gap-3">
                 <div>
                   <div className="text-xs font-bold text-slate-900 dark:text-white">
@@ -2478,6 +2484,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                   </button>
                 )}
               </div>
+              )}
             </div>
           </div>
 

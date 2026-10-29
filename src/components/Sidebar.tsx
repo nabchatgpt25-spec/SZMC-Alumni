@@ -26,6 +26,7 @@ import {
 import { PWAInstallButton } from './PWAInstallButton';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
+import { useVerificationVisibility } from '../hooks/useVerificationVisibility';
 import { NDCLogo } from './NDCLogo';
 import { loadVouchRequests } from '../utils/verificationService';
 import { isUserSuperAdmin, isUserGeneralAdmin, isUserSubAdmin } from '../types';
@@ -63,6 +64,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const { isDark, toggleTheme } = useTheme();
   const { currentUser } = useAuth();
+  const { memberPortalVisible } = useVerificationVisibility();
   const isVerified = (currentUser.verificationStatus || 'verified') === 'verified';
   const pendingCount = loadVouchRequests().filter((r) => r.status === 'pending').length;
   const isSuperAdmin = isUserSuperAdmin(currentUser);
@@ -291,8 +293,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <span className="truncate">Settings</span>
               </button>
 
-              {/* Verification Center */}
-              {onOpenVerificationCenter && (
+              {/* Verification Center — hidden unless the admin enables the member verification portal */}
+              {memberPortalVisible && onOpenVerificationCenter && (
                 <button
                   type="button"
                   onClick={() => {

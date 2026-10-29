@@ -98,6 +98,7 @@ import {
   FeaturedAlumnus,
   BatchMetadata,
 } from '../../services/siteConfigService';
+import { useVerificationVisibility } from '../../hooks/useVerificationVisibility';
 import { NDCLogo } from '../NDCLogo';
 import { compressImageFileToDataUrl } from '../../utils/mediaStorage';
 import { loadStoredAlumniProfiles } from '../../data/mockData';
@@ -137,6 +138,11 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
   const isSubAdmin = !isSuperAdmin && !isGeneralAdmin;
 
   const { config, updateConfig, resetConfig, exportJson, importJson } = useSiteConfig();
+  // Server-backed flag (app_feature_flags) — controls the member verification UI for everyone.
+  const {
+    rawMemberPortalVisible,
+    setMemberPortalVisible,
+  } = useVerificationVisibility();
   const [activeTab, setActiveTab] = useState<AdminTab>('overview');
   const [stats, setStats] = useState<AdminOverviewStats | null>(null);
   const [loadingStats, setLoadingStats] = useState(false);
@@ -637,6 +643,36 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
               </button>
             </div>
 
+            <div className="flex flex-col items-end">
+              <span className="text-[10px] uppercase font-black tracking-wider text-slate-400">
+                Member Verification UI
+              </span>
+              <button
+                type="button"
+                onClick={async () => {
+                  const next = !rawMemberPortalVisible;
+                  const res = await setMemberPortalVisible(next);
+                  showToast(
+                    res.success
+                      ? (next
+                          ? 'Member verification portal is now VISIBLE to all alumni.'
+                          : 'Member verification portal is now HIDDEN — verification is admin-panel only.')
+                      : (res.error || 'Could not save the verification switch.'),
+                    res.success ? (next ? 'info' : 'success') : 'error'
+                  );
+                }}
+                className={`flex items-center gap-2 px-3.5 py-2 rounded-2xl text-xs font-black tracking-wide transition-all shadow-md cursor-pointer border ${
+                  rawMemberPortalVisible
+                    ? 'bg-slate-900 text-white border-slate-700'
+                    : 'bg-sky-600 hover:bg-sky-700 text-white border-sky-500/30 shadow-sky-600/25'
+                }`}
+                title="Show or hide the entire member-facing verification system (saved to the database)"
+              >
+                <span className={`w-2.5 h-2.5 rounded-full ${rawMemberPortalVisible ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}`} />
+                <span>Member Portal: {rawMemberPortalVisible ? 'VISIBLE' : 'HIDDEN'}</span>
+              </button>
+            </div>
+
             {/* Quick Refresh */}
             <button
               type="button"
@@ -878,7 +914,42 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
                       </button>
                     </div>
 
-                    {/* 3. Maintenance Mode */}
+                    {/* 3. Member-Facing Verification Portal (hide/show the whole member verification UI) */}
+                    <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/80 flex flex-col justify-between gap-3">
+                      <div>
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-xs text-slate-900 dark:text-white">Member Verification Portal</span>
+                          <span className={`text-[10px] font-black px-2 py-0.5 rounded-md ${rawMemberPortalVisible ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400' : 'bg-slate-500/20 text-slate-600 dark:text-slate-400'}`}>
+                            {rawMemberPortalVisible ? 'VISIBLE' : 'HIDDEN'}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-500 mt-1">
+                          When HIDDEN, alumni never see any verification UI (Verification Center, peer vouches, verification badges and settings). Only this Admin Panel can verify alumni.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const next = !rawMemberPortalVisible;
+                          const res = await setMemberPortalVisible(next);
+                          showToast(
+                            res.success
+                              ? (next
+                                  ? 'Member verification portal is now VISIBLE to all alumni.'
+                                  : 'Member verification portal is now HIDDEN. Admin-only verification is active.')
+                              : (res.error || 'Could not save the verification switch.'),
+                            res.success ? 'success' : 'error'
+                          );
+                        }}
+                        className={`w-full py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                          rawMemberPortalVisible ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900' : 'bg-blue-600 text-white'
+                        }`}
+                      >
+                        {rawMemberPortalVisible ? 'Hide from Members' : 'Show to Members'}
+                      </button>
+                    </div>
+
+                    {/* 4. Maintenance Mode */}
                     <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/80 flex flex-col justify-between gap-3">
                       <div>
                         <div className="flex items-center justify-between">

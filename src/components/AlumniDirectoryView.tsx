@@ -19,6 +19,7 @@ import { WhatsAppIcon, FacebookIcon } from './SocialIcons';
 import { getCachedDirectory } from '../utils/offlineStorage';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { useAuth } from '../context/AuthContext';
+import { useVerificationVisibility } from '../hooks/useVerificationVisibility';
 import { AlumniProfile } from '../types';
 import { matchesUniversalSearch, UNIVERSAL_DIRECTORY_PROFILES } from './DirectoryView';
 import { VerificationStatusBadge } from './verification/VerificationStatusBadge';
@@ -40,6 +41,7 @@ export const AlumniDirectoryView: React.FC<AlumniDirectoryViewProps> = ({
 }) => {
   const isOnline = useOnlineStatus();
   const { currentUser, updateProfile } = useAuth();
+  const { memberPortalVisible } = useVerificationVisibility();
   const [vouchNotice, setVouchNotice] = useState<string | null>(null);
   const [profiles, setProfiles] = useState<AlumniProfile[]>(() => {
     const cached = getCachedDirectory();
@@ -144,7 +146,7 @@ export const AlumniDirectoryView: React.FC<AlumniDirectoryViewProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
-          {onOpenVerificationCenter && (
+          {memberPortalVisible && onOpenVerificationCenter && (
             <button
               type="button"
               onClick={() => onOpenVerificationCenter('vouch_others')}
@@ -346,13 +348,15 @@ export const AlumniDirectoryView: React.FC<AlumniDirectoryViewProps> = ({
                       >
                         {profile.fullName}
                       </h3>
-                      <VerificationStatusBadge
-                        status={profile.verificationStatus || 'verified'}
-                        vouchesCount={profile.vouchesCount ?? 2}
-                        size="sm"
-                        showLabel={false}
-                        onClick={() => onViewProfile(profile.id)}
-                      />
+                      {memberPortalVisible && (
+                        <VerificationStatusBadge
+                          status={profile.verificationStatus || 'verified'}
+                          vouchesCount={profile.vouchesCount ?? 2}
+                          size="sm"
+                          showLabel={false}
+                          onClick={() => onViewProfile(profile.id)}
+                        />
+                      )}
                     </div>
 
                     <div className="text-xs font-semibold text-blue-600 dark:text-blue-400 mt-0.5">

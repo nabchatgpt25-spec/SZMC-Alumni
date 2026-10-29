@@ -28,6 +28,7 @@ import { OfflineIndicator } from './components/OfflineIndicator';
 import { VerificationCenterModal } from './components/verification/VerificationCenterModal';
 import { BloodNetworkView } from './components/BloodNetworkView';
 import { ensureVouchRequestFromUrlParams } from './utils/verificationService';
+import { useVerificationVisibility } from './hooks/useVerificationVisibility';
 import { CursorSpotlight } from './components/motion/CinematicMotion';
 import { NDCLogo } from './components/NDCLogo';
 import { AdminPage } from './components/admin/AdminPage';
@@ -108,14 +109,23 @@ function AlumniAppContent() {
     initialTab: 'status',
   });
 
+  // Member-facing verification UI is fully controlled from the Admin Panel.
+  const { memberPortalVisible } = useVerificationVisibility();
+
   const openVerificationCenter = (
     initialTab: 'status' | 'vouch_classmates' | 'vouch_others' | 'upload_id' | 'policy' = 'status'
   ) => {
+    // Silently ignore while the admin has the member verification portal hidden.
+    if (!memberPortalVisible) return;
     setVerificationModalState({ isOpen: true, initialTab });
   };
 
+  // Undefined hides every "Verification Center" / "Vouch" control in the member UI.
+  const verificationCenterHandler = memberPortalVisible ? openVerificationCenter : undefined;
+
   // Handle ?vouch_for=... shared peer vouch link
   useEffect(() => {
+    if (!memberPortalVisible) return;
     const req = ensureVouchRequestFromUrlParams();
     if (req) {
       if (isLoggedIn) {
@@ -124,7 +134,7 @@ function AlumniAppContent() {
         setAuthModalMode('login');
       }
     }
-  }, [isLoggedIn]);
+  }, [isLoggedIn, memberPortalVisible]);
 
   // Sync route with window location hash
   useEffect(() => {
@@ -243,7 +253,7 @@ function AlumniAppContent() {
         onSelectTab={navigateTo}
         isOpen={isSidebarOpen}
         onClose={() => setIsSidebarOpen(false)}
-        onOpenVerificationCenter={openVerificationCenter}
+        onOpenVerificationCenter={verificationCenterHandler}
       />
 
       {/* Main Content Area */}
@@ -259,7 +269,7 @@ function AlumniAppContent() {
           }}
           searchQuery={globalSearch}
           onSearchChange={handleGlobalSearchChange}
-          onOpenVerificationCenter={openVerificationCenter}
+          onOpenVerificationCenter={verificationCenterHandler}
         />
 
         {/* View Router with Smooth Cinematic Page Transitions */}
@@ -275,7 +285,7 @@ function AlumniAppContent() {
               {(route === 'feed' || route === 'dashboard') && (
                 <FeedView
                   onViewProfile={handleViewProfile}
-                  onOpenVerificationCenter={openVerificationCenter}
+                  onOpenVerificationCenter={verificationCenterHandler}
                   onNavigate={navigateTo}
                 />
               )}
@@ -284,7 +294,7 @@ function AlumniAppContent() {
                 <AlumniDirectoryView
                   onViewProfile={handleViewProfile}
                   onNavigateToFind={() => navigateTo('find')}
-                  onOpenVerificationCenter={openVerificationCenter}
+                  onOpenVerificationCenter={verificationCenterHandler}
                 />
               )}
 
@@ -293,7 +303,7 @@ function AlumniAppContent() {
                   onViewProfile={handleViewProfile}
                   initialSearch={globalSearch}
                   initialBatch={selectedBatchFilter}
-                  onOpenVerificationCenter={openVerificationCenter}
+                  onOpenVerificationCenter={verificationCenterHandler}
                 />
               )}
 
@@ -364,7 +374,7 @@ function AlumniAppContent() {
               {(route === 'settings' || route === 'profile-settings') && (
                 <SettingsView
                   onNavigate={navigateTo}
-                  onOpenVerificationCenter={openVerificationCenter}
+                  onOpenVerificationCenter={verificationCenterHandler}
                   onBack={() => navigateTo('profile')}
                 />
               )}
@@ -374,7 +384,7 @@ function AlumniAppContent() {
                   profileId={selectedProfileId || currentUser.id}
                   onBack={() => navigateTo(previousRoute || 'alumni')}
                   backLabel={getBackLabel()}
-                  onOpenVerificationCenter={openVerificationCenter}
+                  onOpenVerificationCenter={verificationCenterHandler}
                   onNavigate={navigateTo}
                 />
               )}
@@ -560,7 +570,7 @@ function AlumniAppContent() {
 
       {/* Active SZMC Doctor Verification & Peer Vouch Center Modal */}
       <VerificationCenterModal
-        isOpen={verificationModalState.isOpen}
+        isOpen={memberPortalVisible && verificationModalState.isOpen}
         onClose={() => setVerificationModalState((prev) => ({ ...prev, isOpen: false }))}
         initialTab={verificationModalState.initialTab}
       />

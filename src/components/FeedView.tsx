@@ -53,6 +53,7 @@ import {
 } from '../utils/offlineStorage';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { VerificationStatusBadge } from './verification/VerificationStatusBadge';
+import { useVerificationVisibility } from '../hooks/useVerificationVisibility';
 import {
   loadVouchRequests,
   simulateDemoVouchForUser,
@@ -94,6 +95,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
 }) => {
   const isOnline = useOnlineStatus();
   const { currentUser, updateProfile } = useAuth();
+  const { memberPortalVisible } = useVerificationVisibility();
   const [pendingVouchesCount, setPendingVouchesCount] = useState<number>(() => {
     try {
       return loadVouchRequests().filter((r) => r.status === 'pending').length;
@@ -1055,7 +1057,8 @@ export const FeedView: React.FC<FeedViewProps> = ({
       />
 
       {/* Active Verification & Peer Vouch Banner (Dismissible with simple Cross button) */}
-      {!isVerificationBannerClosed && (
+      {/* Hidden entirely unless the administrator enables the member verification portal */}
+      {memberPortalVisible && !isVerificationBannerClosed && (
         <div
           className={`relative rounded-2xl p-4 pr-11 border shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
             (currentUser.verificationStatus || 'verified') === 'verified'

@@ -26,6 +26,7 @@ import {
   applyToCareerOpportunity,
   deleteCareerOpportunity,
 } from '../services/careerService';
+import { useVerificationVisibility } from '../hooks/useVerificationVisibility';
 
 interface CurrentUser {
   id: number;
@@ -72,6 +73,8 @@ export const CareerView: React.FC<CareerViewProps> = ({
   const [formError, setFormError] = useState<string | null>(null);
   const [formSuccessMessage, setFormSuccessMessage] = useState<string | null>(null);
   const [applyFeedback, setApplyFeedback] = useState<{ id: string; message: string; isError?: boolean } | null>(null);
+
+  const { memberPortalVisible } = useVerificationVisibility();
 
   // Check verified status
   const isVerifiedAlumnus = useMemo(() => {
@@ -565,15 +568,21 @@ export const CareerView: React.FC<CareerViewProps> = ({
               <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 mb-5 leading-relaxed">
                 প্ল্যাটফর্মের নিরাপত্তা ও নির্ভরযোগ্যতা বজায় রাখতে চাকরির সুযোগ ও রেফারেল পোস্ট করার সুবিধাটি ভেরিফাইড প্রোফাইলের জন্য সংরক্ষিত।
               </p>
-              {onNavigate && (
-                <button
-                  type="button"
-                  onClick={() => onNavigate('feed')}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-xs sm:text-sm font-semibold hover:opacity-90 cursor-pointer"
-                >
-                  <span>প্রোফাইল ভেরিফিকেশন দেখুন</span>
-                  <ArrowRight className="w-4 h-4" />
-                </button>
+              {memberPortalVisible ? (
+                onNavigate && (
+                  <button
+                    type="button"
+                    onClick={() => onNavigate('feed')}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-xs sm:text-sm font-semibold hover:opacity-90 cursor-pointer"
+                  >
+                    <span>প্রোফাইল ভেরিফিকেশন দেখুন</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </button>
+                )
+              ) : (
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  আপনার প্রোফাইল অ্যাসোসিয়েশন অ্যাডমিন যাচাই করবেন। অনুমোদনের জন্য অ্যাডমিনের সাথে যোগাযোগ করুন।
+                </p>
               )}
             </div>
           ) : (

@@ -4,6 +4,7 @@ import { ThemeToggle } from './ThemeToggle';
 import { NDCLogo } from './NDCLogo';
 import { NotificationDropdown } from './NotificationDropdown';
 import { useAuth } from '../context/AuthContext';
+import { useVerificationVisibility } from '../hooks/useVerificationVisibility';
 import { loadVouchRequests } from '../utils/verificationService';
 import { isUserSuperAdmin, isUserGeneralAdmin, isUserSubAdmin } from '../types';
 
@@ -23,6 +24,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenVerificationCenter,
 }) => {
   const { currentUser, logout } = useAuth();
+  const { memberPortalVisible } = useVerificationVisibility();
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [pendingVouchRequestsCount, setPendingVouchRequestsCount] = useState<number>(() =>
     loadVouchRequests().filter((r) => r.status === 'pending').length
@@ -197,7 +199,7 @@ export const Header: React.FC<HeaderProps> = ({
                     Settings
                   </button>
 
-                  {onOpenVerificationCenter && (
+                  {memberPortalVisible && onOpenVerificationCenter && (
                     <button
                       type="button"
                       onClick={() => {

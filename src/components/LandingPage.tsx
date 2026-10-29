@@ -36,6 +36,7 @@ import { VerificationExplainerModal } from './landing/VerificationExplainerModal
 import { BloodNeededNowSection } from './landing/BloodNeededNowSection';
 import { LiquidGlassLoginBar } from './landing/LiquidGlassLoginBar';
 import { CursorSpotlight, MagneticWrap } from './motion/CinematicMotion';
+import { useVerificationVisibility } from '../hooks/useVerificationVisibility';
 
 interface LandingPageProps {
   onOpenLogin: () => void;
@@ -52,6 +53,8 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   isAuthModalOpen = false,
   onReplaySplash,
 }) => {
+  const { memberPortalVisible } = useVerificationVisibility();
+
   // Modal states for interactive preview
   const [previewAlumnus, setPreviewAlumnus] = useState<AlumniProfile | null>(null);
   const [previewBatch, setPreviewBatch] = useState<BatchSummary | null>(null);
@@ -221,6 +224,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
 
           {/* Right Action Buttons */}
           <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+            {memberPortalVisible && (
             <button
               type="button"
               onClick={() => setIsVerificationModalOpen(true)}
@@ -230,6 +234,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
               <span>Verification</span>
             </button>
+            )}
           </div>
         </div>
       </header>
@@ -243,7 +248,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
           onOpenRegister={onOpenRegister}
           onSelectAlumnus={(alumnus) => setPreviewAlumnus(alumnus)}
           onScrollToBatches={() => scrollToSection('batches-section')}
-          onOpenVerificationModal={() => setIsVerificationModalOpen(true)}
+          onOpenVerificationModal={memberPortalVisible ? () => setIsVerificationModalOpen(true) : undefined}
         />
 
         {/* 4. Compact Emergency Blood Network Section: "Blood Needed Now" */}
@@ -386,11 +391,13 @@ export const LandingPage: React.FC<LandingPageProps> = ({
       </footer>
 
       {/* Interactive Modals */}
+      {memberPortalVisible && (
       <VerificationExplainerModal
         isOpen={isVerificationModalOpen}
         onClose={() => setIsVerificationModalOpen(false)}
         onOpenRegister={onOpenRegister}
       />
+      )}
 
       <QuickProfileModal
         profile={previewAlumnus}

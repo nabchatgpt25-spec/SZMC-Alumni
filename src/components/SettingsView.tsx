@@ -38,6 +38,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { useVerificationVisibility } from '../hooks/useVerificationVisibility';
 import { useTheme } from '../context/ThemeContext';
 import { AlumniProfile, SPECIALTIES_LIST, DEGREES_LIST } from '../types';
 import { NDCLogo } from './NDCLogo';
@@ -151,6 +152,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onBack,
 }) => {
   const { currentUser, updateProfile, deleteAccount, logout } = useAuth();
+  const { memberPortalVisible } = useVerificationVisibility();
   const { theme, setTheme, isDark } = useTheme();
 
   const [activeSection, setActiveSection] = useState<SettingsSectionId>('personal');
@@ -251,18 +253,25 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     }, 2800);
   };
 
+  // Sections visible to this viewer. The member-facing verification section is hidden
+  // unless an administrator enables it from the Admin Panel.
+  const visibleSections = useMemo(
+    () => SETTINGS_SECTIONS.filter((sec) => sec.id !== 'verification' || memberPortalVisible),
+    [memberPortalVisible]
+  );
+
   // Filter sections by search query
   const filteredSections = useMemo(() => {
-    if (!searchQuery.trim()) return SETTINGS_SECTIONS;
+    if (!searchQuery.trim()) return visibleSections;
     const q = searchQuery.toLowerCase().trim();
-    return SETTINGS_SECTIONS.filter(
+    return visibleSections.filter(
       (sec) =>
         sec.title.toLowerCase().includes(q) ||
         sec.shortTitle.toLowerCase().includes(q) ||
         sec.description.toLowerCase().includes(q) ||
         sec.keywords.some((kw) => kw.includes(q))
     );
-  }, [searchQuery]);
+  }, [searchQuery, visibleSections]);
 
   // Handle Personal Details Save
   const handleSavePersonal = (e: React.FormEvent) => {
@@ -496,7 +505,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </div>
               </div>
 
-              {/* Status Pills */}
+              {/* Status Pills — verification pill hidden unless the admin enables the member portal */}
+              {memberPortalVisible && (
               <div className="pt-2 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between text-[11px]">
                 <span className="text-slate-500 dark:text-slate-400 font-medium">Verification</span>
                 <span
@@ -510,6 +520,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <span>{isVerified ? 'Verified Doctor' : 'Pending Vouch'}</span>
                 </span>
               </div>
+              )}
             </div>
 
             {/* Search Settings Input */}
@@ -1410,7 +1421,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             )}
 
             {/* SECTION 6: Alumni Verification & Badges */}
-            {activeSection === 'verification' && (
+            {memberPortalVisible && activeSection === 'verification' && (
               <div className="space-y-4">
                 <div className="bg-white dark:bg-slate-900 rounded-3xl p-5 sm:p-7 border border-slate-200/80 dark:border-slate-800 shadow-xs space-y-6">
                   <div>

@@ -20,6 +20,7 @@ import { WhatsAppIcon, FacebookIcon } from './SocialIcons';
 import { getCachedDirectory, cacheDirectory, getDirectoryCacheTimestamp } from '../utils/offlineStorage';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { useAuth } from '../context/AuthContext';
+import { useVerificationVisibility } from '../hooks/useVerificationVisibility';
 import { VerificationStatusBadge } from './verification/VerificationStatusBadge';
 import { vouchForAlumniProfile } from '../utils/verificationService';
 import { fetchAlumniProfilesFromDb } from '../services/supabaseService';
@@ -151,6 +152,7 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
 }) => {
   const isOnline = useOnlineStatus();
   const { currentUser, updateProfile } = useAuth();
+  const { memberPortalVisible } = useVerificationVisibility();
   const [profiles, setProfiles] = useState<AlumniProfile[]>(() => {
     const cached = getCachedDirectory();
     const stored = loadStoredAlumniProfiles();
@@ -568,13 +570,15 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
                       >
                         {profile.fullName}
                       </h3>
-                      <VerificationStatusBadge
-                        status={profile.verificationStatus || 'verified'}
-                        vouchesCount={profile.vouchesCount ?? 2}
-                        size="sm"
-                        showLabel={false}
-                        onClick={() => onViewProfile(profile.id)}
-                      />
+                      {memberPortalVisible && (
+                        <VerificationStatusBadge
+                          status={profile.verificationStatus || 'verified'}
+                          vouchesCount={profile.vouchesCount ?? 2}
+                          size="sm"
+                          showLabel={false}
+                          onClick={() => onViewProfile(profile.id)}
+                        />
+                      )}
                     </div>
 
                     <div className="text-xs font-semibold text-blue-600 dark:text-blue-400 mt-0.5">

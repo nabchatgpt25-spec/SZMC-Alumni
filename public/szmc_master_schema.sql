@@ -979,4 +979,53 @@ CREATE INDEX IF NOT EXISTS idx_blood_donors_availability ON public.blood_donors(
 CREATE INDEX IF NOT EXISTS idx_alumni_profiles_batch_year ON public.alumni_profiles(batch_year);
 CREATE INDEX IF NOT EXISTS idx_alumni_profiles_auth_user ON public.alumni_profiles(auth_user_id);
 
+-- -----------------------------------------------------------------------------
+-- 13. ADMIN-CONTROLLED FEATURE FLAGS (verification portal visibility)
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.app_feature_flags (
+  key TEXT PRIMARY KEY CHECK (char_length(trim(key)) BETWEEN 1 AND 64),
+  enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  description TEXT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE public.app_feature_flags ENABLE ROW LEVEL SECURITY;
+
+INSERT INTO public.app_feature_flags (key, enabled, description)
+VALUES
+  ('member_verification_portal', FALSE,
+   'Show the member-facing verification UI (Verification Center, peer vouches, badges, verification settings). When FALSE, verification is admin-panel only.'),
+  ('global_verification_gate', TRUE,
+   'Enforce the verification gate across website auth and gated features.')
+ON CONFLICT (key) DO NOTHING;
+
+REVOKE ALL ON public.app_feature_flags FROM PUBLIC;
+GRANT SELECT ON public.app_feature_flags TO anon, authenticated;
+GRANT INSERT, UPDATE ON public.app_feature_flags TO authenticated;
+GRANT ALL ON public.app_feature_flags TO service_role;
+
+DROP POLICY IF EXISTS "feature_flags_select_public" ON public.app_feature_flags;
+CREATE POLICY "feature_flags_select_public"
+  ON public.app_feature_flags FOR SELECT
+  TO anon, authenticated
+  USING (TRUE);
+
+DROP POLICY IF EXISTS "feature_flags_insert_admin" ON public.app_feature_flags;
+CREATE POLICY "feature_flags_insert_admin"
+  ON public.app_feature_flags FOR INSERT
+  TO authenticated
+  WITH CHECK (public.is_admin_or_mod());
+
+DROP POLICY IF EXISTS "feature_flags_update_admin" ON public.app_feature_flags;
+CREATE POLICY "feature_flags_update_admin"
+  ON public.app_feature_flags FOR UPDATE
+  TO authenticated
+  USING (public.is_admin_or_mod())
+  WITH CHECK (public.is_admin_or_mod());
+
+DROP TRIGGER IF EXISTS trg_app_feature_flags_updated_at ON public.app_feature_flags;
+CREATE TRIGGER trg_app_feature_flags_updated_at
+  BEFORE UPDATE ON public.app_feature_flags
+  FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
+
 COMMIT;
