@@ -474,7 +474,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     }
 
-    if (cleanInput.toLowerCase() === 'nurulanambashir20@gmail.com') {
+    // SECURITY/RELIABILITY: the hardcoded admin profile may only be applied when the
+    // Supabase sign-in above actually produced a real session. Without a session,
+    // auth.uid() is NULL on the server and every RLS-protected write is rejected —
+    // which is exactly the "admin panel shows everything but nothing saves" symptom.
+    const hasRealSupabaseSession = Boolean(authData?.session?.access_token);
+
+    if (hasRealSupabaseSession && cleanInput.toLowerCase() === 'nurulanambashir20@gmail.com') {
       const superAdminProfile: AlumniProfile = {
         ...DEFAULT_BLANK_USER,
         id: 1,
@@ -510,7 +516,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return true;
     }
 
-    if (cleanInput.toLowerCase() === 'firstaidnetworkbd@gmail.com') {
+    if (hasRealSupabaseSession && cleanInput.toLowerCase() === 'firstaidnetworkbd@gmail.com') {
       const generalAdminProfile: AlumniProfile = {
         ...DEFAULT_BLANK_USER,
         id: 2,
@@ -552,58 +558,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         throw new Error('Invalid email or password. Please verify your credentials or reset your password.');
       }
       if (msg.includes('email not confirmed') || msg.includes('not confirmed')) {
-        // Direct Login without Email Confirmation
-        // Since Supabase validated the credentials before returning email not confirmed,
-        // we directly log the user in without requiring any confirmation email!
-        let profile: AlumniProfile | null = null;
-        try {
-          const { data: profileRow } = await supabase
-            .from('alumni_profiles')
-            .select(ALUMNI_PUBLIC_COLUMNS)
-            .ilike('email', cleanInput)
-            .maybeSingle();
-
-          if (profileRow) {
-            profile = mapSupabaseRowToAlumniProfile(profileRow);
-          }
-        } catch (fetchErr) {
-          console.warn('Could not query alumni_profiles during unconfirmed bypass:', fetchErr);
-        }
-
-        if (!profile) {
-          profile = {
-            id: Date.now(),
-            userId: Date.now(),
-            authUserId: 'direct-user-' + Date.now(),
-            fullName: cleanInput.split('@')[0],
-            avatarUrl: '/assets/aistudio/images__1__2778177d.png',
-            batchYear: 25,
-            academicStream: 'MBBS',
-            academicGroup: null,
-            section: 'MBBS',
-            verificationStatus: 'unverified',
-            vouchesCount: 0,
-            vouchTargetCount: 2,
-            profession: 'Medical Doctor / Physician',
-            position: 'Physician',
-            institution: 'Shaheed Ziaur Rahman Medical College Hospital',
-            specialty: ['Internal Medicine'],
-            degree: ['MBBS'],
-            city: 'Bogura',
-            country: 'Bangladesh',
-            email: cleanInput.toLowerCase(),
-            role: 'member',
-            isPublic: true,
-            online: true,
-            badges: ['SZMCian'],
-          };
-        }
-
-        setCurrentUser(profile);
-        setIsAdminUser(profile.role === 'admin');
-        setIsLoggedIn(true);
-        saveDirectAuthUser(profile);
-        return true;
+        // Previously this path silently logged the user in WITHOUT a Supabase session.
+        // The UI then looked logged in (role from localStorage) while every database
+        // write was rejected by RLS, so posts/admin actions never persisted.
+        throw new Error(
+          'Your email address is not confirmed yet, so no real Supabase session can be created. ' +
+            'Fix it in Supabase → Authentication → Providers → Email → turn OFF "Confirm email" ' +
+            '(or confirm this user in Authentication → Users), then log in again.'
+        );
       }
       throw new Error(authError.message || 'Login failed. Please check your credentials.');
     }

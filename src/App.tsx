@@ -26,6 +26,8 @@ import { ContactUsView } from './components/ContactUsView';
 import { SavedPostsView } from './components/SavedPostsView';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { VerificationCenterModal } from './components/verification/VerificationCenterModal';
+import { DiagnosticsPanel } from './components/DiagnosticsPanel';
+import { ConnectionHealthBanner } from './components/ConnectionHealthBanner';
 import { BloodNetworkView } from './components/BloodNetworkView';
 import { ensureVouchRequestFromUrlParams } from './utils/verificationService';
 import { useVerificationVisibility } from './hooks/useVerificationVisibility';
@@ -92,6 +94,18 @@ function AlumniAppContent() {
   const [previousRoute, setPreviousRoute] = useState<string>('alumni');
   const [globalSearch, setGlobalSearch] = useState('');
   const [selectedBatchFilter, setSelectedBatchFilter] = useState<number | null>(null);
+
+  // Diagnostics panel: always available via ?diag=1 or window event
+  const [showDiagnostics, setShowDiagnostics] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return new URLSearchParams(window.location.search).get('diag') === '1';
+  });
+
+  useEffect(() => {
+    const open = () => setShowDiagnostics(true);
+    window.addEventListener('szmc_open_diagnostics', open);
+    return () => window.removeEventListener('szmc_open_diagnostics', open);
+  }, []);
 
   // Auth modal state
   const [authModalMode, setAuthModalMode] = useState<'login' | 'register' | 'forgot' | null>(() => {
@@ -220,6 +234,8 @@ function AlumniAppContent() {
             }}
           />
         )}
+
+        {showDiagnostics && <DiagnosticsPanel onClose={() => setShowDiagnostics(false)} />}
       </>
     );
   }
@@ -567,6 +583,12 @@ function AlumniAppContent() {
 
       {/* Global Offline Mode Status Indicator */}
       <OfflineIndicator onNavigate={navigateTo} />
+
+      {/* Loud warning when the UI is logged in without a real Supabase session */}
+      <ConnectionHealthBanner />
+
+      {/* System Diagnostics (?diag=1) */}
+      {showDiagnostics && <DiagnosticsPanel onClose={() => setShowDiagnostics(false)} />}
 
       {/* Active SZMC Doctor Verification & Peer Vouch Center Modal */}
       <VerificationCenterModal
