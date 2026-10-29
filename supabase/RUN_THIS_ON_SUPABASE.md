@@ -190,17 +190,16 @@ Dashboard -> **Authentication -> Sign In / Providers -> Email** -> **Confirm ema
 **2. Confirm the accounts that already exist** (SQL Editor)
 
 ```sql
+-- Only auth.users needs touching. Do NOT update auth.identities:
+-- on current Supabase versions that table has no email_verified column
+-- (ERROR 42703: column "email_verified" does not exist).
 UPDATE auth.users
    SET email_confirmed_at = COALESCE(email_confirmed_at, now()),
        updated_at         = now()
  WHERE email_confirmed_at IS NULL;
 
-UPDATE auth.identities
-   SET email_verified = TRUE
- WHERE email_verified IS NULL OR email_verified = FALSE;
-
 -- should return 0 rows afterwards
-SELECT id, email, email_confirmed_at
+SELECT id, email, email_confirmed_at, last_sign_in_at
 FROM auth.users
 WHERE email_confirmed_at IS NULL;
 ```

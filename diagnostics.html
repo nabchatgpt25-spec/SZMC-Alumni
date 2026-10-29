@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SZMC Alumni — Supabase Diagnostics</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 20px; font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: #0f172a; color: #e2e8f0; line-height: 1.45;
+  }
+  .wrap { max-width: 820px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p.sub { margin: 0 0 18px; color: #94a3b8; font-size: 13px; }
+  .card { background: #1e293b; border: 1px solid #334155; border-radius: 14px; padding: 16px; margin-bottom: 14px; }
+  label { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: #94a3b8; margin-bottom: 4px; font-weight: 700; }
+  input { width: 100%; padding: 9px 11px; border-radius: 9px; border: 1px solid #475569; background: #0f172a; color: #e2e8f0; font-size: 13px; margin-bottom: 10px; }
+  input:focus { outline: 2px solid #3b82f6; border-color: transparent; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  button {
+    padding: 10px 16px; border-radius: 10px; border: 0; font-weight: 800; font-size: 13px;
+    cursor: pointer; background: #3b82f6; color: #fff;
+  }
+  button.secondary { background: #334155; color: #e2e8f0; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .btns { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+  .check { border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; border: 1px solid; font-size: 13px; }
+  .ok   { background: #052e1a; border-color: #166534; }
+  .warn { background: #3a2a06; border-color: #a16207; }
+  .fail { background: #3b0a12; border-color: #9f1239; }
+  .check b { display: block; font-size: 13px; margin-bottom: 2px; }
+  .detail { color: #cbd5e1; font-size: 12px; word-break: break-word; }
+  .fix { color: #fca5a5; font-size: 12px; margin-top: 4px; font-weight: 700; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; }
+  .summary { font-size: 13px; font-weight: 800; margin-bottom: 10px; }
+  #status { font-size: 12px; color: #94a3b8; margin-left: 6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>SZMC Alumni — Supabase Diagnostics</h1>
+  <p class="sub">
+    Open this file directly in your browser (double-click). It signs in to Supabase, checks your
+    alumni profile, and tries to publish a real post (then deletes it). Nothing is left behind.
+  </p>
+
+  <div class="card">
+    <label>Supabase project URL</label>
+    <input id="url" placeholder="https://xxxxxxxx.supabase.co" value="https://hjuyiqyviohinbhzaipl.supabase.co" />
+    <label>Anon (public) key</label>
+    <input id="key" placeholder="eyJhbGciOi..." value="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhqdXlpcXl2aW9oaW5iaHphaXBsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE2MjQ2NzIsImV4cCI6MjEwNzIwMDY3Mn0.fppNXVPWcsWGsUIBwvirhjEkdDyUCX-SyydNWExbwk8" />
+    <div class="row">
+      <div>
+        <label>Your email</label>
+        <input id="email" type="email" placeholder="you@example.com" autocomplete="username" />
+      </div>
+      <div>
+        <label>Your password</label>
+        <input id="pass" type="password" placeholder="••••••••" autocomplete="current-password" />
+      </div>
+    </div>
+    <div class="btns">
+      <button id="run">Run diagnostics</button>
+      <button id="copy" class="secondary">Copy report</button>
+    </div>
+    <div id="status"></div>
+  </div>
+
+  <div class="card">
+    <div class="summary" id="summary">Not run yet.</div>
+    <div id="out"></div>
+  </div>
+</div>
+
+<script type="module">
+import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
+
+const $ = (id) => document.getElementById(id);
+const out = $('out');
+const summary = $('summary');
+const statusEl = $('status');
+
+let report = [];
+
+function describe(err) {
+  if (!err) return 'Unknown error';
+  const parts = [
+    err.code ? 'code=' + err.code : '',
+    err.message || err.error_description || String(err),
+    err.details ? 'details=' + err.details : '',
+    err.hint ? 'hint=' + err.hint : '',
+  ].filter(Boolean);
+  return parts.join(' | ');
+}
+
+function hint(code, message) {
+  const m = (message || '').toLowerCase();
+  if (m.includes('email not confirmed') || m.includes('not confirmed'))
+    return 'Email is NOT confirmed. Supabase -> Authentication -> Sign In / Providers -> Email -> turn OFF "Confirm email", then run: UPDATE auth.users SET email_confirmed_at = COALESCE(email_confirmed_at, now()) WHERE email_confirmed_at IS NULL;';
+  if (m.includes('invalid login credentials'))
+    return 'Wrong email/password, or this account has no password (created with Google). Reset the password in Authentication -> Users.';
+  if (code === '42501' || m.includes('permission denied'))
+    return 'Missing GRANTs: run the setup SQL blocks (Block C) in the Supabase SQL Editor.';
+  if (code === '42P01' || m.includes('does not exist'))
+    return 'Table/function missing: the full schema was not applied to this project.';
+  if (m.includes('row-level security'))
+    return 'Blocked by RLS => no real session (auth.uid() is NULL). Log in with email+password.';
+  if (code === '23503' || m.includes('foreign key'))
+    return 'Reference data missing: public.batches is empty. Run SQL Block A.';
+  if (m.includes('invalid api key') || m.includes('jwt'))
+    return 'Wrong project URL or anon key.';
+  if (m.includes('failed to fetch') || m.includes('networkerror'))
+    return 'Cannot reach Supabase (network / paused project / wrong URL).';
+  return '';
+}
+
+function add(label, state, detail, fix) {
+  const div = document.createElement('div');
+  div.className = 'check ' + state;
+  const mark = state === 'ok' ? '✓' : state === 'warn' ? '!' : '✗';
+  div.innerHTML =
+    '<b>' + mark + ' ' + label + '</b>' +
+    '<div class="detail mono">' + escapeHtml(detail || '') + '</div>' +
+    (fix ? '<div class="fix">→ ' + escapeHtml(fix) + '</div>' : '');
+  out.appendChild(div);
+  report.push({ label, state, detail: detail || '', fix: fix || '' });
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+async function run() {
+  out.innerHTML = '';
+  report = [];
+  summary.textContent = 'Running…';
+  $('run').disabled = true;
+  statusEl.textContent = '';
+
+  const url = $('url').value.trim();
+  const key = $('key').value.trim();
+  const email = $('email').value.trim();
+  const password = $('pass').value;
+
+  if (!url || !key) {
+    add('Configuration', 'fail', 'URL or anon key is empty.', 'Paste both from Supabase -> Settings -> API.');
+    finish();
+    return;
+  }
+
+  const supabase = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+  add('Configuration', 'ok', 'URL: ' + url);
+
+  // 1. Reachability
+  try {
+    const res = await fetch(url + '/rest/v1/', { headers: { apikey: key } });
+    add('Project reachable', res.ok || res.status === 404 ? 'ok' : 'warn', 'HTTP ' + res.status);
+  } catch (e) {
+    add('Project reachable', 'fail', describe(e), hint(e && e.code, e && e.message));
+  }
+
+  // 2. Sign in
+  if (!email || !password) {
+    add('Sign in', 'fail', 'Enter your email and password above.', 'Needed to test a real session.');
+    finish();
+    return;
+  }
+
+  statusEl.textContent = 'Signing in…';
+  const { data: authData, error: authErr } = await supabase.auth.signInWithPassword({ email, password });
+
+  if (authErr) {
+    add('Sign in with email + password', 'fail', describe(authErr), hint(authErr.code, authErr.message));
+    finish();
+    return;
+  }
+
+  const user = authData.user;
+  add('Sign in with email + password', 'ok', 'Signed in as ' + user.email + ' (uid ' + user.id + ')');
+
+  // 3. Profile row
+  const { data: profile, error: profErr } = await supabase
+    .from('alumni_profiles')
+    .select('id, full_name, role, verification_status, batch_year, phone_ownership_verified')
+    .eq('auth_user_id', user.id)
+    .maybeSingle();
+
+  if (profErr) {
+    add('Alumni profile row', 'fail', describe(profErr), hint(profErr.code, profErr.message));
+  } else if (!profile) {
+    add('Alumni profile row', 'fail', 'No row for this auth user.',
+      'Run Block C SQL (it adds the signup trigger + backfills).');
+  } else {
+    add('Alumni profile row', 'ok',
+      'id=' + profile.id + ' · ' + profile.full_name + ' · role=' + profile.role +
+      ' · ' + profile.verification_status + ' · batch ' + profile.batch_year);
+  }
+
+  // 4. current_profile_id()
+  const { data: rpcId, error: rpcErr } = await supabase.rpc('current_profile_id');
+  add('current_profile_id()', rpcErr ? 'fail' : rpcId ? 'ok' : 'warn',
+    rpcErr ? describe(rpcErr) : 'returns ' + rpcId,
+    rpcErr ? hint(rpcErr.code, rpcErr.message) : rpcId ? '' : 'Profile not linked to auth_user_id — run Block C.');
+
+  // 5. Read posts
+  const { data: posts, error: readErr } = await supabase
+    .from('posts').select('id').eq('is_deleted', false).limit(5);
+  add('Read posts table', readErr ? 'fail' : 'ok',
+    readErr ? describe(readErr) : (posts || []).length + ' post(s) visible',
+    readErr ? hint(readErr.code, readErr.message) : '');
+
+  // 6. Write a post (the real test)
+  if (profile) {
+    const marker = '[diagnostic ' + new Date().toISOString() + ']';
+    const { data: created, error: insErr } = await supabase
+      .from('posts')
+      .insert({ author_id: Number(profile.id), content: marker, category: 'General Update', images: [], videos: [] })
+      .select('id')
+      .single();
+
+    if (insErr) {
+      add('Create a post (WRITE TEST)', 'fail', describe(insErr), hint(insErr.code, insErr.message));
+    } else {
+      add('Create a post (WRITE TEST)', 'ok', 'Inserted post #' + created.id + ' — deleting it again…');
+      const { error: delErr } = await supabase.from('posts').delete().eq('id', created.id);
+      if (delErr) add('Delete test post', 'warn', 'Could not delete #' + created.id + ': ' + describe(delErr),
+        'Delete it manually in the Table Editor (public.posts).');
+    }
+  } else {
+    add('Create a post (WRITE TEST)', 'fail', 'Skipped: no profile row.', 'Fix the profile check first.');
+  }
+
+  // 7. Feature flags
+  const { data: flags, error: flagErr } = await supabase.from('app_feature_flags').select('key, enabled');
+  add('Feature flags table', flagErr ? 'fail' : 'ok',
+    flagErr ? describe(flagErr) : (flags || []).map((f) => f.key + '=' + f.enabled).join(' · '),
+    flagErr ? hint(flagErr.code, flagErr.message) : '');
+
+  // 8. Storage bucket
+  const { error: stoErr } = await supabase.storage.from('post-media').list('', { limit: 1 });
+  add('Storage bucket "post-media"', stoErr ? 'fail' : 'ok',
+    stoErr ? describe(stoErr) : 'bucket reachable',
+    stoErr ? 'Re-run the storage section of APPLY_ALL.sql or create the bucket (public, 20 MB).' : '');
+
+  await supabase.auth.signOut();
+  finish();
+}
+
+function finish() {
+  const fails = report.filter((r) => r.state === 'fail').length;
+  const warns = report.filter((r) => r.state === 'warn').length;
+  summary.textContent = fails === 0 && warns === 0
+    ? '✅ All checks passed — posting should work.'
+    : '✗ ' + fails + ' failing, ' + warns + ' warning(s) — see the red/yellow lines below.';
+  summary.style.color = fails === 0 && warns === 0 ? '#4ade80' : '#f87171';
+  $('run').disabled = false;
+  statusEl.textContent = '';
+}
+
+$('run').addEventListener('click', () => { run().catch((e) => { add('Fatal', 'fail', describe(e)); finish(); }); });
+
+$('copy').addEventListener('click', async () => {
+  const text = 'SZMC diagnostics — ' + new Date().toISOString() + '\n' +
+    report.map((r) => r.state.toUpperCase() + ' | ' + r.label + ': ' + r.detail + (r.fix ? '\n      -> ' + r.fix : '')).join('\n');
+  try { await navigator.clipboard.writeText(text); $('copy').textContent = 'Copied!'; }
+  catch { $('copy').textContent = 'Copy failed'; }
+  setTimeout(() => { $('copy').textContent = 'Copy report'; }, 1800);
+});
+</script>
+</body>
+</html>
