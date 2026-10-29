@@ -170,3 +170,40 @@ If any step fails, open the browser console — the error now carries the real P
 | `new row violates row-level security policy for table "posts"` | profile not linked to `auth_user_id` | run the `ensure_alumni_profile` backfill above |
 | `Only administrators can change this switch` (in the admin panel) | session is not a real Supabase admin session | log in with the admin email after PART 3 |
 | phone login falls back / CORS error | origin not allow-listed | add the domain to `unified-phone-login`, redeploy |
+
+---
+
+## PART 5 — "Waiting for verification" on the Users page
+
+Supabase shows **Waiting for verification** in the *Last sign in at* column when the user has
+**never signed in because their email is not confirmed**. With *Confirm email* ON,
+`signUp()` returns no session and `signInWithPassword()` fails with
+`Email not confirmed`, so the app can never obtain a real session -> `auth.uid()` is NULL ->
+every RLS-protected write (posts, admin switches, profile saves) is rejected.
+
+### Fix in two steps
+
+**1. Turn off email confirmation** (recommended for a members-only portal)
+
+Dashboard -> **Authentication -> Sign In / Providers -> Email** -> **Confirm email = OFF** -> **Save**.
+
+**2. Confirm the accounts that already exist** (SQL Editor)
+
+```sql
+UPDATE auth.users
+   SET email_confirmed_at = COALESCE(email_confirmed_at, now()),
+       updated_at         = now()
+ WHERE email_confirmed_at IS NULL;
+
+UPDATE auth.identities
+   SET email_verified = TRUE
+ WHERE email_verified IS NULL OR email_verified = FALSE;
+
+-- should return 0 rows afterwards
+SELECT id, email, email_confirmed_at
+FROM auth.users
+WHERE email_confirmed_at IS NULL;
+```
+
+**3. Log out and log in again**, then open `https://your-domain/?diag=1` and confirm that
+**Real Supabase login session** and **Create a post (write test)** are both green.
