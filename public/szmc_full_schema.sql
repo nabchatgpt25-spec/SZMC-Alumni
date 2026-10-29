@@ -833,22 +833,7 @@ ON CONFLICT (batch_year) DO UPDATE SET
 
 INSERT INTO public.academic_stream_groups (stream, group_code, expected_group_count, is_active)
 VALUES
-  ('MBBS', NULL, 35, TRUE),
-  ('MBBS', 'Pre-Clinical', 3, TRUE),
-  ('MBBS', 'Para-Clinical', 5, TRUE),
-  ('MBBS', 'Clinical', 8, TRUE),
-  ('Internal Medicine', 'MED', 1, TRUE),
-  ('General Surgery', 'SURG', 1, TRUE),
-  ('Obstetrics & Gynaecology', 'OBGYN', 1, TRUE),
-  ('Pediatrics & Neonatology', 'PED', 1, TRUE),
-  ('Cardiology & Cardiac Surgery', 'CARD', 1, TRUE),
-  ('Orthopedics & Traumatology', 'ORTHO', 1, TRUE),
-  ('Ophthalmology', 'EYE', 1, TRUE),
-  ('Otolaryngology (ENT)', 'ENT', 1, TRUE),
-  ('Anesthesiology & Critical Care', 'ANES', 1, TRUE),
-  ('Radiology & Imaging', 'RAD', 1, TRUE),
-  ('Pathology & Laboratory Medicine', 'PATH', 1, TRUE),
-  ('Community Medicine & Public Health', 'COMM', 1, TRUE),
+  -- public.academic_stream_type only allows Science / Humanities / Business Studies.
   ('Science', NULL, 17, TRUE),
   ('Humanities', 'G', 4, TRUE),
   ('Humanities', 'H', 4, TRUE),
@@ -883,7 +868,7 @@ VALUES
   (
     'SZMC/ALUMNI-2026/002',
     'Emergency Doctor Blood Network 24/7 Activation',
-    'Blood Bank',
+    'General',
     CURRENT_DATE,
     TRUE,
     'Active blood matching network connecting 35 MBBS batches across Bangladesh.',
