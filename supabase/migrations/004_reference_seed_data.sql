@@ -87,7 +87,6 @@ VALUES
   --   invalid input value for enum academic_stream_type: "MBBS"
   -- which aborted this whole transaction, leaving public.batches EMPTY and
   -- breaking every alumni_profiles insert (FK on batch_year).
-  ('Science', NULL, 17, TRUE),
   ('Humanities', 'G', 4, TRUE),
   ('Humanities', 'H', 4, TRUE),
   ('Humanities', 'L', 4, TRUE),
@@ -103,6 +102,14 @@ SET
   expected_group_count = EXCLUDED.expected_group_count,
   is_active = EXCLUDED.is_active,
   updated_at = now();
+
+-- Stream-level metadata row (group_code IS NULL).
+-- It is covered by the partial unique index uq_academic_stream_null_group_metadata,
+-- which a (stream, group_code) conflict target does NOT match — so it needs its own
+-- statement, otherwise re-running this migration raises a duplicate-key error.
+INSERT INTO public.academic_stream_groups (stream, group_code, expected_group_count, is_active)
+VALUES ('Science', NULL, 17, TRUE)
+ON CONFLICT DO NOTHING;
 
 -- -----------------------------------------------------------------------------
 -- 2. OFFICIAL SZMC NOTICES

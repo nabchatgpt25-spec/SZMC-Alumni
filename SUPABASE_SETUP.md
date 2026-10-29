@@ -13,6 +13,7 @@ are required, secrets, storage buckets and diagnostics.
 | Layer | Status in this repo |
 |---|---|
 | Schema (tables, enums, indexes) | `supabase/migrations/001_core_schema.sql` |
+| **Everything in one file** | **`supabase/APPLY_ALL.sql`** (generated, idempotent) |
 | Security (functions + triggers) | `002_security_functions_triggers.sql` |
 | RLS + column grants | `003_rls_policies.sql` |
 | Reference seed (batches, streams, notices) | `004_reference_seed_data.sql` — **was broken, fixed in this branch** |
@@ -26,8 +27,9 @@ are required, secrets, storage buckets and diagnostics.
 | Feature flags (admin verification portal) | `013` |
 | **Fix: alumni cannot post** | `014` |
 
-Fresh install shortcut: **`supabase/master_schema.sql`** (== `full_schema.sql`) contains 001–014 in one
-idempotent file. Existing project: run only the blocks in section 1 that you have not run yet.
+Fresh install shortcut: **`supabase/APPLY_ALL.sql`** — the single idempotent script generated from
+`001…014` (also mirrored to `master_schema.sql` / `full_schema.sql` / the `public/` downloads by
+`node scripts/build_apply_all.js`). Step-by-step run guide: **`supabase/RUN_THIS_ON_SUPABASE.md`**.
 
 ---
 
@@ -143,7 +145,7 @@ phone login silently falls back to the Express `/api/auth/unified-login` endpoin
 
 ## 3. Storage buckets
 
-Created by `001`/`009`/`master_schema.sql` (verify in **Storage**):
+Created by `001`/`009`/`APPLY_ALL.sql` (verify in **Storage**):
 
 | Bucket | Public | Limit | Mime |
 |---|---|---|---|
