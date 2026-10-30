@@ -17,6 +17,7 @@ import { BatchesView } from './components/BatchesView';
 import { MapView } from './components/MapView';
 import { ProfileView } from './components/ProfileView';
 import { GalleryView } from './components/GalleryView';
+import { MessengerView } from './components/messenger/MessengerView';
 import { LandingPage } from './components/LandingPage';
 import { AuthModal } from './components/AuthModal';
 import { UpcomingFeatureView } from './components/UpcomingFeatureView';
@@ -335,6 +336,10 @@ function AlumniAppContent() {
 
               {route === 'gallery' && (
                 <GalleryView />
+              )}
+
+              {route === 'messages' && (
+                <MessengerView />
               )}
 
               {route === 'careers' && (

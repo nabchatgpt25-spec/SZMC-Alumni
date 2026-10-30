@@ -10,6 +10,7 @@ import {
   Newspaper,
   Calendar,
   Image,
+  MessageCircle,
   Briefcase,
   HeartHandshake,
   Mail,
@@ -83,6 +84,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'news', label: 'News & Blog', icon: Newspaper, badge: 'SOON', badgeType: 'soon' },
     { id: 'events', label: 'Events', icon: Calendar, badge: 'SOON', badgeType: 'soon' },
     { id: 'gallery', label: 'Gallery', icon: Image },
+    { id: 'messages', label: 'Messages', icon: MessageCircle },
     { id: 'institutions', label: 'Institutions', icon: Building2, badge: 'SOON', badgeType: 'soon' },
   ];
 

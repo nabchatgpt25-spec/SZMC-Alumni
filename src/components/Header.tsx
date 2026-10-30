@@ -124,7 +124,7 @@ export const Header: React.FC<HeaderProps> = ({
           {/* Messages Button (Placeholder / Teaser) */}
           <button
             type="button"
-            onClick={() => onNavigate('feed')}
+            onClick={() => onNavigate('messages')}
             className="hidden sm:flex p-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
             title="Messages"
             aria-label="Messages"
