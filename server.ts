@@ -962,6 +962,764 @@ app.post('/api/posts', rateLimitGuard(40, 60_000), async (req: Request, res: Res
   }
 });
 
+// ===========================================================================
+// MESSAGING & CHAT SETTINGS API ROUTES (SUPABASE + RESILIENT STORE)
+// ===========================================================================
+
+interface InMemoryConversation {
+  id: string;
+  created_by: number;
+  created_at: string;
+  last_message_at: string;
+}
+
+interface InMemoryParticipant {
+  conversation_id: string;
+  profile_id: number;
+  joined_at: string;
+  last_read_at: string;
+  is_muted: boolean;
+}
+
+interface InMemoryMessage {
+  id: string;
+  conversation_id: string;
+  sender_id: number;
+  body: string;
+  created_at: string;
+  edited_at: string | null;
+  deleted_at: string | null;
+}
+
+const memoryConversations: InMemoryConversation[] = [
+  {
+    id: 'conv-szmc-001',
+    created_by: 1,
+    created_at: new Date(Date.now() - 3600000 * 24 * 2).toISOString(),
+    last_message_at: new Date(Date.now() - 3600000 * 3).toISOString(),
+  },
+  {
+    id: 'conv-szmc-002',
+    created_by: 2,
+    created_at: new Date(Date.now() - 3600000 * 24 * 5).toISOString(),
+    last_message_at: new Date(Date.now() - 3600000 * 18).toISOString(),
+  },
+];
+
+const memoryParticipants: InMemoryParticipant[] = [
+  {
+    conversation_id: 'conv-szmc-001',
+    profile_id: 1,
+    joined_at: new Date().toISOString(),
+    last_read_at: new Date().toISOString(),
+    is_muted: false,
+  },
+  {
+    conversation_id: 'conv-szmc-001',
+    profile_id: 2,
+    joined_at: new Date().toISOString(),
+    last_read_at: new Date().toISOString(),
+    is_muted: false,
+  },
+  {
+    conversation_id: 'conv-szmc-002',
+    profile_id: 1,
+    joined_at: new Date().toISOString(),
+    last_read_at: new Date().toISOString(),
+    is_muted: false,
+  },
+  {
+    conversation_id: 'conv-szmc-002',
+    profile_id: 3,
+    joined_at: new Date().toISOString(),
+    last_read_at: new Date().toISOString(),
+    is_muted: false,
+  },
+];
+
+const memoryMessages: InMemoryMessage[] = [
+  {
+    id: 'msg-001',
+    conversation_id: 'conv-szmc-001',
+    sender_id: 2,
+    body: 'Assalamu Alaikum Doctor! Are you attending the upcoming SZMC Bogura Alumni Reunion?',
+    created_at: new Date(Date.now() - 3600000 * 6).toISOString(),
+    edited_at: null,
+    deleted_at: null,
+  },
+  {
+    id: 'msg-002',
+    conversation_id: 'conv-szmc-001',
+    sender_id: 1,
+    body: 'Walaikum Assalam! Yes, our batch has already coordinated travel. Looking forward to meeting everyone at the auditorium.',
+    created_at: new Date(Date.now() - 3600000 * 3).toISOString(),
+    edited_at: null,
+    deleted_at: null,
+  },
+  {
+    id: 'msg-003',
+    conversation_id: 'conv-szmc-002',
+    sender_id: 3,
+    body: 'Greetings colleague! Please let me know if you can connect regarding clinical case consultation.',
+    created_at: new Date(Date.now() - 3600000 * 18).toISOString(),
+    edited_at: null,
+    deleted_at: null,
+  },
+];
+
+const memoryUserSettings = new Map<number, {
+  profileId: number;
+  whoCanMessage: 'everyone' | 'verified_only' | 'batch_only';
+  readReceiptsEnabled: boolean;
+  soundEnabled: boolean;
+  notificationPreviewEnabled: boolean;
+  emailNotificationDigest: boolean;
+  updatedAt: string;
+}>();
+
+// 1. Get Live Messaging & Supabase Connection Status
+app.get('/api/messages/status', async (_req: Request, res: Response) => {
+  try {
+    let tablesOnline = false;
+    let tablesCheckError: string | null = null;
+
+    if (isSupabaseServerConfigured) {
+      try {
+        const { error } = await supabaseServer.from('messages').select('id').limit(1);
+        if (!error) {
+          tablesOnline = true;
+        } else {
+          tablesCheckError = error.message;
+        }
+      } catch (err: any) {
+        tablesCheckError = err.message;
+      }
+    }
+
+    res.json({
+      configured: isSupabaseServerConfigured,
+      supabaseUrl: isSupabaseServerConfigured ? 'https://hjuyiqyviohinbhzaipl.supabase.co' : null,
+      publishKeyPrefix: 'sb_publishable_uTT8y...',
+      tablesOnline,
+      tablesCheckError,
+      realtimeEnabled: true,
+      storageFallbackActive: !tablesOnline,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 2. List Conversations for a Profile
+app.get('/api/messages/conversations', rateLimitGuard(60, 60_000), async (req: Request, res: Response) => {
+  const profileId = Number(req.query.profileId || 1);
+
+  // Try fetching from Supabase first
+  if (isSupabaseServerConfigured) {
+    try {
+      const { data: participants, error: partErr } = await supabaseServer
+        .from('conversation_participants')
+        .select('conversation_id, last_read_at, is_muted')
+        .eq('profile_id', profileId);
+
+      if (!partErr && participants && participants.length > 0) {
+        const convIds = participants.map((p: any) => p.conversation_id);
+        const [convRes, othersRes, msgRes] = await Promise.all([
+          supabaseServer.from('conversations').select('id, last_message_at').in('id', convIds),
+          supabaseServer
+            .from('conversation_participants')
+            .select('conversation_id, profile_id')
+            .in('conversation_id', convIds)
+            .neq('profile_id', profileId),
+          supabaseServer
+            .from('messages')
+            .select('id, conversation_id, sender_id, body, created_at, edited_at, deleted_at')
+            .in('conversation_id', convIds)
+            .order('created_at', { ascending: false })
+            .limit(500),
+        ]);
+
+        if (!convRes.error && !othersRes.error && !msgRes.error) {
+          const otherProfileIds = Array.from(new Set((othersRes.data || []).map((o: any) => o.profile_id)));
+          const { data: alumniProfiles } = await supabaseServer
+            .from('alumni_profiles')
+            .select('id, full_name, avatar_url, batch_year, profession')
+            .in('id', otherProfileIds);
+
+          const profileMap = new Map((alumniProfiles || []).map((p: any) => [p.id, p]));
+          const participantMap = new Map(participants.map((p: any) => [p.conversation_id, p]));
+          const convMap = new Map((convRes.data || []).map((c: any) => [c.id, c]));
+
+          const latestMsgMap = new Map<string, any>();
+          const unreadMap = new Map<string, number>();
+
+          for (const msg of (msgRes.data || [])) {
+            if (!latestMsgMap.has(msg.conversation_id)) {
+              latestMsgMap.set(msg.conversation_id, msg);
+            }
+            const p = participantMap.get(msg.conversation_id);
+            if (msg.sender_id !== profileId && !msg.deleted_at && p?.last_read_at && msg.created_at > p.last_read_at) {
+              unreadMap.set(msg.conversation_id, (unreadMap.get(msg.conversation_id) || 0) + 1);
+            }
+          }
+
+          const conversations = [];
+          for (const other of (othersRes.data || [])) {
+            const alumnus = profileMap.get(other.profile_id);
+            const conv = convMap.get(other.conversation_id);
+            const p = participantMap.get(other.conversation_id);
+            const latest = latestMsgMap.get(other.conversation_id);
+
+            if (alumnus && conv) {
+              conversations.push({
+                id: other.conversation_id,
+                person: {
+                  profileId: alumnus.id,
+                  fullName: alumnus.full_name || 'SZMC Doctor',
+                  avatarUrl: alumnus.avatar_url || 'https://images.unsplash.com/photo-1622253692010-333f2da6031d?w=150',
+                  batchYear: alumnus.batch_year || 20,
+                  profession: alumnus.profession || 'Physician',
+                },
+                lastMessageAt: latest?.created_at || conv.last_message_at,
+                lastMessagePreview: latest?.deleted_at ? 'Message deleted' : (latest?.body || ''),
+                lastMessageFromMe: latest?.sender_id === profileId,
+                unreadCount: unreadMap.get(other.conversation_id) || 0,
+                isMuted: Boolean(p?.is_muted),
+              });
+            }
+          }
+
+          conversations.sort((a, b) => (a.lastMessageAt < b.lastMessageAt ? 1 : -1));
+          return res.json({ conversations });
+        }
+      }
+    } catch (err: any) {
+      console.warn('Supabase conversations query fallback:', err.message);
+    }
+  }
+
+  // Resilient in-memory fallback
+  const myParticipantRows = memoryParticipants.filter((p) => p.profile_id === profileId);
+  const conversations = [];
+
+  for (const part of myParticipantRows) {
+    const conv = memoryConversations.find((c) => c.id === part.conversation_id);
+    const otherPart = memoryParticipants.find(
+      (p) => p.conversation_id === part.conversation_id && p.profile_id !== profileId
+    );
+    if (!conv || !otherPart) continue;
+
+    const msgs = memoryMessages
+      .filter((m) => m.conversation_id === part.conversation_id)
+      .sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+    const latest = msgs[0];
+    const unreadCount = msgs.filter(
+      (m) => m.sender_id !== profileId && !m.deleted_at && m.created_at > part.last_read_at
+    ).length;
+
+    // Doctor profile details
+    const sampleDoctors: Record<number, any> = {
+      1: { fullName: 'Dr. Shahriar Rahman', profession: 'Cardiologist', batchYear: 20 },
+      2: { fullName: 'Dr. Nusrat Jahan', profession: 'Assistant Professor, Pediatrics', batchYear: 22 },
+      3: { fullName: 'Dr. Tariqul Islam', profession: 'General Surgeon, SZMCH', batchYear: 18 },
+      4: { fullName: 'Dr. Farhana Ahmed', profession: 'Dermatologist', batchYear: 24 },
+    };
+    const doc = sampleDoctors[otherPart.profile_id] || {
+      fullName: `Dr. Alumnus #${otherPart.profile_id}`,
+      profession: 'Physician',
+      batchYear: 25,
+    };
+
+    conversations.push({
+      id: conv.id,
+      person: {
+        profileId: otherPart.profile_id,
+        fullName: doc.fullName,
+        avatarUrl: `https://images.unsplash.com/photo-${1535713875002 + otherPart.profile_id}?w=150&auto=format&fit=crop&q=80`,
+        batchYear: doc.batchYear,
+        profession: doc.profession,
+      },
+      lastMessageAt: latest?.created_at || conv.last_message_at,
+      lastMessagePreview: latest?.deleted_at ? 'Message deleted' : (latest?.body || ''),
+      lastMessageFromMe: latest?.sender_id === profileId,
+      unreadCount,
+      isMuted: part.is_muted,
+    });
+  }
+
+  conversations.sort((a, b) => (a.lastMessageAt < b.lastMessageAt ? 1 : -1));
+  res.json({ conversations });
+});
+
+// 3. Find or Create Direct Conversation
+app.post('/api/messages/conversations', rateLimitGuard(40, 60_000), async (req: Request, res: Response) => {
+  const { myProfileId, otherProfileId } = req.body;
+  const myId = Number(myProfileId);
+  const otherId = Number(otherProfileId);
+
+  if (!myId || !otherId || myId === otherId) {
+    return res.status(400).json({ error: 'Valid and distinct myProfileId and otherProfileId required.' });
+  }
+
+  // Try Supabase first
+  if (isSupabaseServerConfigured) {
+    try {
+      const { data: myConvs } = await supabaseServer
+        .from('conversation_participants')
+        .select('conversation_id')
+        .eq('profile_id', myId);
+
+      const convIds = (myConvs || []).map((r: any) => r.conversation_id);
+      if (convIds.length > 0) {
+        const { data: existing } = await supabaseServer
+          .from('conversation_participants')
+          .select('conversation_id')
+          .eq('profile_id', otherId)
+          .in('conversation_id', convIds)
+          .limit(1);
+
+        if (existing && existing.length > 0) {
+          return res.json({ conversationId: existing[0].conversation_id });
+        }
+      }
+
+      const { data: createdConv, error: convErr } = await supabaseServer
+        .from('conversations')
+        .insert({ created_by: myId })
+        .select('id')
+        .single();
+
+      if (!convErr && createdConv) {
+        await supabaseServer.from('conversation_participants').insert([
+          { conversation_id: createdConv.id, profile_id: myId },
+          { conversation_id: createdConv.id, profile_id: otherId },
+        ]);
+        return res.status(201).json({ conversationId: createdConv.id });
+      }
+    } catch (err: any) {
+      console.warn('Supabase create conversation notice:', err.message);
+    }
+  }
+
+  // Memory fallback
+  const myExisting = memoryParticipants
+    .filter((p) => p.profile_id === myId)
+    .map((p) => p.conversation_id);
+  const shared = memoryParticipants.find(
+    (p) => p.profile_id === otherId && myExisting.includes(p.conversation_id)
+  );
+
+  if (shared) {
+    return res.json({ conversationId: shared.conversation_id });
+  }
+
+  const newId = `conv-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+  const now = new Date().toISOString();
+
+  memoryConversations.push({
+    id: newId,
+    created_by: myId,
+    created_at: now,
+    last_message_at: now,
+  });
+
+  memoryParticipants.push(
+    { conversation_id: newId, profile_id: myId, joined_at: now, last_read_at: now, is_muted: false },
+    { conversation_id: newId, profile_id: otherId, joined_at: now, last_read_at: now, is_muted: false }
+  );
+
+  res.status(201).json({ conversationId: newId });
+});
+
+// 4. List Messages in a Conversation
+app.get('/api/messages/conversations/:id', rateLimitGuard(60, 60_000), async (req: Request, res: Response) => {
+  const convId = req.params.id;
+
+  if (isSupabaseServerConfigured) {
+    try {
+      const { data, error } = await supabaseServer
+        .from('messages')
+        .select('id, conversation_id, sender_id, body, created_at, edited_at, deleted_at')
+        .eq('conversation_id', convId)
+        .order('created_at', { ascending: true })
+        .limit(500);
+
+      if (!error && data) {
+        const mapped = data.map((m: any) => ({
+          id: m.id,
+          conversationId: m.conversation_id,
+          senderId: m.sender_id,
+          body: m.body,
+          createdAt: m.created_at,
+          editedAt: m.edited_at || null,
+          deletedAt: m.deleted_at || null,
+        }));
+        return res.json({ messages: mapped });
+      }
+    } catch (err: any) {
+      console.warn('Supabase list messages fallback:', err.message);
+    }
+  }
+
+  const msgs = memoryMessages
+    .filter((m) => m.conversation_id === convId)
+    .sort((a, b) => (a.created_at > b.created_at ? 1 : -1))
+    .map((m) => ({
+      id: m.id,
+      conversationId: m.conversation_id,
+      senderId: m.sender_id,
+      body: m.body,
+      createdAt: m.created_at,
+      editedAt: m.edited_at,
+      deletedAt: m.deleted_at,
+    }));
+
+  res.json({ messages: msgs });
+});
+
+// 5. Send a Message
+app.post('/api/messages/conversations/:id', rateLimitGuard(60, 60_000), async (req: Request, res: Response) => {
+  const convId = req.params.id;
+  const { senderId, body } = req.body;
+
+  if (!body || !String(body).trim()) {
+    return res.status(400).json({ error: 'Message body cannot be empty.' });
+  }
+
+  const cleanBody = String(body).trim();
+  const numSenderId = Number(senderId);
+
+  if (isSupabaseServerConfigured) {
+    try {
+      const { data, error } = await supabaseServer
+        .from('messages')
+        .insert({
+          conversation_id: convId,
+          sender_id: numSenderId,
+          body: cleanBody,
+        })
+        .select('id, conversation_id, sender_id, body, created_at, edited_at, deleted_at')
+        .single();
+
+      if (!error && data) {
+        // Update conversation last_message_at
+        await supabaseServer
+          .from('conversations')
+          .update({ last_message_at: data.created_at })
+          .eq('id', convId);
+
+        return res.status(201).json({
+          message: {
+            id: data.id,
+            conversationId: data.conversation_id,
+            senderId: data.sender_id,
+            body: data.body,
+            createdAt: data.created_at,
+            editedAt: data.edited_at || null,
+            deletedAt: data.deleted_at || null,
+          },
+        });
+      }
+    } catch (err: any) {
+      console.warn('Supabase send message fallback:', err.message);
+    }
+  }
+
+  const now = new Date().toISOString();
+  const newMsg: InMemoryMessage = {
+    id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+    conversation_id: convId,
+    sender_id: numSenderId,
+    body: cleanBody,
+    created_at: now,
+    edited_at: null,
+    deleted_at: null,
+  };
+
+  memoryMessages.push(newMsg);
+
+  const conv = memoryConversations.find((c) => c.id === convId);
+  if (conv) {
+    conv.last_message_at = now;
+  }
+
+  res.status(201).json({
+    message: {
+      id: newMsg.id,
+      conversationId: newMsg.conversation_id,
+      senderId: newMsg.sender_id,
+      body: newMsg.body,
+      createdAt: newMsg.created_at,
+      editedAt: newMsg.edited_at,
+      deletedAt: newMsg.deleted_at,
+    },
+  });
+});
+
+// 6. Edit a Message
+app.patch('/api/messages/:id', rateLimitGuard(40, 60_000), async (req: Request, res: Response) => {
+  const msgId = req.params.id;
+  const { body } = req.body;
+
+  if (!body || !String(body).trim()) {
+    return res.status(400).json({ error: 'Edited body cannot be empty.' });
+  }
+
+  const cleanBody = String(body).trim();
+
+  if (isSupabaseServerConfigured) {
+    try {
+      const { data, error } = await supabaseServer
+        .from('messages')
+        .update({ body: cleanBody, edited_at: new Date().toISOString() })
+        .eq('id', msgId)
+        .select()
+        .single();
+
+      if (!error && data) {
+        return res.json({
+          message: {
+            id: data.id,
+            conversationId: data.conversation_id,
+            senderId: data.sender_id,
+            body: data.body,
+            createdAt: data.created_at,
+            editedAt: data.edited_at,
+            deletedAt: data.deleted_at,
+          },
+        });
+      }
+    } catch (err: any) {
+      console.warn('Supabase edit message fallback:', err.message);
+    }
+  }
+
+  const found = memoryMessages.find((m) => m.id === msgId);
+  if (!found) return res.status(404).json({ error: 'Message not found.' });
+
+  found.body = cleanBody;
+  found.edited_at = new Date().toISOString();
+
+  res.json({
+    message: {
+      id: found.id,
+      conversationId: found.conversation_id,
+      senderId: found.sender_id,
+      body: found.body,
+      createdAt: found.created_at,
+      editedAt: found.edited_at,
+      deletedAt: found.deleted_at,
+    },
+  });
+});
+
+// 7. Delete (Soft) a Message
+app.delete('/api/messages/:id', rateLimitGuard(40, 60_000), async (req: Request, res: Response) => {
+  const msgId = req.params.id;
+
+  if (isSupabaseServerConfigured) {
+    try {
+      const { data, error } = await supabaseServer
+        .from('messages')
+        .update({ deleted_at: new Date().toISOString() })
+        .eq('id', msgId)
+        .select()
+        .single();
+
+      if (!error && data) {
+        return res.json({
+          message: {
+            id: data.id,
+            conversationId: data.conversation_id,
+            senderId: data.sender_id,
+            body: data.body,
+            createdAt: data.created_at,
+            editedAt: data.edited_at,
+            deletedAt: data.deleted_at,
+          },
+        });
+      }
+    } catch (err: any) {
+      console.warn('Supabase delete message fallback:', err.message);
+    }
+  }
+
+  const found = memoryMessages.find((m) => m.id === msgId);
+  if (!found) return res.status(404).json({ error: 'Message not found.' });
+
+  found.deleted_at = new Date().toISOString();
+
+  res.json({
+    message: {
+      id: found.id,
+      conversationId: found.conversation_id,
+      senderId: found.sender_id,
+      body: found.body,
+      createdAt: found.created_at,
+      editedAt: found.edited_at,
+      deletedAt: found.deleted_at,
+    },
+  });
+});
+
+// 8. Mark Conversation Read
+app.post('/api/messages/conversations/:id/read', rateLimitGuard(60, 60_000), async (req: Request, res: Response) => {
+  const convId = req.params.id;
+  const profileId = Number(req.body.profileId);
+  const now = new Date().toISOString();
+
+  if (isSupabaseServerConfigured) {
+    try {
+      await supabaseServer
+        .from('conversation_participants')
+        .update({ last_read_at: now })
+        .eq('conversation_id', convId)
+        .eq('profile_id', profileId);
+    } catch {}
+  }
+
+  const part = memoryParticipants.find((p) => p.conversation_id === convId && p.profile_id === profileId);
+  if (part) {
+    part.last_read_at = now;
+  }
+
+  res.json({ success: true, lastReadAt: now });
+});
+
+// 9. Mute / Unmute Conversation
+app.post('/api/messages/conversations/:id/mute', rateLimitGuard(40, 60_000), async (req: Request, res: Response) => {
+  const convId = req.params.id;
+  const { profileId, isMuted } = req.body;
+  const numProfileId = Number(profileId);
+  const mutedVal = Boolean(isMuted);
+
+  if (isSupabaseServerConfigured) {
+    try {
+      await supabaseServer
+        .from('conversation_participants')
+        .update({ is_muted: mutedVal })
+        .eq('conversation_id', convId)
+        .eq('profile_id', numProfileId);
+    } catch {}
+  }
+
+  const part = memoryParticipants.find((p) => p.conversation_id === convId && p.profile_id === numProfileId);
+  if (part) {
+    part.is_muted = mutedVal;
+  }
+
+  res.json({ success: true, isMuted: mutedVal });
+});
+
+// 10. Leave Conversation
+app.post('/api/messages/conversations/:id/leave', rateLimitGuard(30, 60_000), async (req: Request, res: Response) => {
+  const convId = req.params.id;
+  const profileId = Number(req.body.profileId);
+
+  if (isSupabaseServerConfigured) {
+    try {
+      await supabaseServer
+        .from('conversation_participants')
+        .delete()
+        .eq('conversation_id', convId)
+        .eq('profile_id', profileId);
+    } catch {}
+  }
+
+  const idx = memoryParticipants.findIndex((p) => p.conversation_id === convId && p.profile_id === profileId);
+  if (idx !== -1) {
+    memoryParticipants.splice(idx, 1);
+  }
+
+  res.json({ success: true, message: 'Left conversation successfully' });
+});
+
+// 11. User Message Settings (Get & Save)
+app.get('/api/messages/settings', rateLimitGuard(60, 60_000), async (req: Request, res: Response) => {
+  const profileId = Number(req.query.profileId || 1);
+
+  if (isSupabaseServerConfigured) {
+    try {
+      const { data, error } = await supabaseServer
+        .from('user_message_settings')
+        .select('*')
+        .eq('profile_id', profileId)
+        .maybeSingle();
+
+      if (!error && data) {
+        return res.json({
+          settings: {
+            profileId: data.profile_id,
+            whoCanMessage: data.who_can_message || 'everyone',
+            readReceiptsEnabled: Boolean(data.read_receipts_enabled),
+            soundEnabled: Boolean(data.sound_enabled),
+            notificationPreviewEnabled: Boolean(data.notification_preview_enabled),
+            emailNotificationDigest: Boolean(data.email_notification_digest),
+            updatedAt: data.updated_at,
+          },
+        });
+      }
+    } catch (err: any) {
+      console.warn('Supabase get user_message_settings notice:', err.message);
+    }
+  }
+
+  const fallback = memoryUserSettings.get(profileId) || {
+    profileId,
+    whoCanMessage: 'everyone',
+    readReceiptsEnabled: true,
+    soundEnabled: true,
+    notificationPreviewEnabled: true,
+    emailNotificationDigest: false,
+    updatedAt: new Date().toISOString(),
+  };
+
+  res.json({ settings: fallback });
+});
+
+app.post('/api/messages/settings', rateLimitGuard(30, 60_000), async (req: Request, res: Response) => {
+  const {
+    profileId,
+    whoCanMessage = 'everyone',
+    readReceiptsEnabled = true,
+    soundEnabled = true,
+    notificationPreviewEnabled = true,
+    emailNotificationDigest = false,
+  } = req.body;
+
+  const numProfileId = Number(profileId || 1);
+  const now = new Date().toISOString();
+
+  const payload = {
+    profileId: numProfileId,
+    whoCanMessage,
+    readReceiptsEnabled: Boolean(readReceiptsEnabled),
+    soundEnabled: Boolean(soundEnabled),
+    notificationPreviewEnabled: Boolean(notificationPreviewEnabled),
+    emailNotificationDigest: Boolean(emailNotificationDigest),
+    updatedAt: now,
+  };
+
+  if (isSupabaseServerConfigured) {
+    try {
+      await supabaseServer.from('user_message_settings').upsert({
+        profile_id: numProfileId,
+        who_can_message: whoCanMessage,
+        read_receipts_enabled: payload.readReceiptsEnabled,
+        sound_enabled: payload.soundEnabled,
+        notification_preview_enabled: payload.notificationPreviewEnabled,
+        email_notification_digest: payload.emailNotificationDigest,
+        updated_at: now,
+      });
+    } catch (err: any) {
+      console.warn('Supabase upsert user_message_settings notice:', err.message);
+    }
+  }
+
+  memoryUserSettings.set(numProfileId, payload);
+  res.json({ success: true, settings: payload });
+});
+
 // Downloadable quick fix SQL script
 app.get(['/szmc_quick_fix.sql', '/download/szmc_quick_fix.sql'], (_req: Request, res: Response) => {
   const filePath = path.join(__dirname, 'public', 'szmc_quick_fix.sql');

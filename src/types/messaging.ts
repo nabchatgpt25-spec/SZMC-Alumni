@@ -25,3 +25,14 @@ export interface ChatMessage {
   editedAt: string | null;
   deletedAt: string | null;
 }
+
+export interface UserMessageSettings {
+  profileId: number;
+  whoCanMessage: 'everyone' | 'verified_only' | 'batch_only';
+  readReceiptsEnabled: boolean;
+  soundEnabled: boolean;
+  notificationPreviewEnabled: boolean;
+  emailNotificationDigest: boolean;
+  updatedAt?: string;
+}
+

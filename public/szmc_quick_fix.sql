@@ -126,5 +126,95 @@ DROP TRIGGER IF EXISTS trg_sync_post_comments ON public.post_comments;
 CREATE TRIGGER trg_sync_post_comments AFTER INSERT OR DELETE ON public.post_comments
 FOR EACH ROW EXECUTE FUNCTION public.sync_post_counters();
 
+-- 8. Messaging & Chat Tables, Permissions, and Realtime Publication
+CREATE TABLE IF NOT EXISTS public.conversations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  created_by BIGINT REFERENCES public.alumni_profiles(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  last_message_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS public.conversation_participants (
+  conversation_id UUID REFERENCES public.conversations(id) ON DELETE CASCADE,
+  profile_id BIGINT REFERENCES public.alumni_profiles(id) ON DELETE CASCADE,
+  joined_at TIMESTAMPTZ DEFAULT NOW(),
+  last_read_at TIMESTAMPTZ DEFAULT NOW(),
+  is_muted BOOLEAN DEFAULT FALSE,
+  PRIMARY KEY (conversation_id, profile_id)
+);
+
+CREATE TABLE IF NOT EXISTS public.messages (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  conversation_id UUID REFERENCES public.conversations(id) ON DELETE CASCADE,
+  sender_id BIGINT REFERENCES public.alumni_profiles(id) ON DELETE CASCADE,
+  body TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  edited_at TIMESTAMPTZ,
+  deleted_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS public.user_message_settings (
+  profile_id BIGINT PRIMARY KEY REFERENCES public.alumni_profiles(id) ON DELETE CASCADE,
+  who_can_message VARCHAR(50) DEFAULT 'everyone',
+  read_receipts_enabled BOOLEAN DEFAULT TRUE,
+  sound_enabled BOOLEAN DEFAULT TRUE,
+  notification_preview_enabled BOOLEAN DEFAULT TRUE,
+  email_notification_digest BOOLEAN DEFAULT FALSE,
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON public.messages(conversation_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_conversation_participants_profile ON public.conversation_participants(profile_id);
+
+CREATE OR REPLACE FUNCTION public.handle_new_chat_message()
+RETURNS TRIGGER AS $$
+BEGIN
+  UPDATE public.conversations
+  SET last_message_at = NEW.created_at
+  WHERE id = NEW.conversation_id;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+DROP TRIGGER IF EXISTS on_chat_message_insert ON public.messages;
+CREATE TRIGGER on_chat_message_insert
+AFTER INSERT ON public.messages
+FOR EACH ROW EXECUTE FUNCTION public.handle_new_chat_message();
+
+ALTER TABLE public.conversations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.conversation_participants ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.messages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.user_message_settings ENABLE ROW LEVEL SECURITY;
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.conversations TO anon, authenticated, service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.conversation_participants TO anon, authenticated, service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.messages TO anon, authenticated, service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.user_message_settings TO anon, authenticated, service_role;
+
+DROP POLICY IF EXISTS "Conversations: Allow All" ON public.conversations;
+CREATE POLICY "Conversations: Allow All" ON public.conversations FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Participants: Allow All" ON public.conversation_participants;
+CREATE POLICY "Participants: Allow All" ON public.conversation_participants FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Messages: Allow All" ON public.messages;
+CREATE POLICY "Messages: Allow All" ON public.messages FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "MessageSettings: Allow All" ON public.user_message_settings;
+CREATE POLICY "MessageSettings: Allow All" ON public.user_message_settings FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
+
+DO $$ BEGIN
+  ALTER PUBLICATION supabase_realtime ADD TABLE public.messages;
+EXCEPTION WHEN duplicate_object THEN NULL; WHEN OTHERS THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER PUBLICATION supabase_realtime ADD TABLE public.conversations;
+EXCEPTION WHEN duplicate_object THEN NULL; WHEN OTHERS THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER PUBLICATION supabase_realtime ADD TABLE public.user_message_settings;
+EXCEPTION WHEN duplicate_object THEN NULL; WHEN OTHERS THEN NULL; END $$;
+
 COMMIT;
+
 
