@@ -70,7 +70,7 @@ export async function listConversations(myProfileId: number): Promise<ChatConver
 
           const otherIds = Array.from(new Set(otherByConversation.values()));
           const { data: profileRows } = otherIds.length
-            ? await supabase.from('alumni_profiles').select(ALUMNI_PUBLIC_COLUMNS.join(',')).in('id', otherIds)
+            ? await supabase.from('alumni_profiles').select(ALUMNI_PUBLIC_COLUMNS).in('id', otherIds)
             : { data: [] };
 
           const peopleById = new Map<number, ChatPerson>();
@@ -532,7 +532,7 @@ export async function searchAlumniForChat(query: string, myProfileId: number): P
     try {
       const { data, error } = await supabase
         .from('alumni_profiles')
-        .select(ALUMNI_PUBLIC_COLUMNS.join(','))
+        .select(ALUMNI_PUBLIC_COLUMNS)
         .ilike('full_name', `%${term}%`)
         .neq('id', myProfileId)
         .order('full_name', { ascending: true })
