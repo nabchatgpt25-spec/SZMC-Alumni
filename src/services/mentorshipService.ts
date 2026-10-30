@@ -43,90 +43,9 @@ export const MENTORSHIP_CATEGORIES: { id: MentorshipCategory; labelBn: string; l
   },
 ];
 
-const INITIAL_MENTOR_OFFERS: MentorOffer[] = [
-  {
-    id: 'mentor-seed-1',
-    userId: 1001,
-    fullName: 'Prof. Dr. Tanvir Ahmed',
-    batchYear: 12,
-    avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200',
-    category: 'Medical',
-    expertise: 'FCPS (Part 1 & 2 Medicine), Cardiology Residency',
-    shortDescription: 'SZMC Batch 12 Alumnus. Happy to guide interns and junior doctors on post-graduation strategy, internal medicine ward clinical exams, and BCPS protocol.',
-    institution: 'Shaheed Ziaur Rahman Medical College Hospital',
-    position: 'Associate Professor & Consultant',
-    contactPreference: 'হোয়াটসঅ্যাপ / মেসেজ',
-    createdAt: '2026-02-15',
-  },
-  {
-    id: 'mentor-seed-2',
-    userId: 1003,
-    fullName: 'Dr. Siamur Rahman',
-    batchYear: 18,
-    avatarUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=200',
-    category: 'Abroad',
-    expertise: 'PLAB 1 & 2, GMC Registration, NHS Clinical Fellow Transition',
-    shortDescription: 'Currently practicing in Manchester, UK. Can mentor on UK GMC licensing, NHS interview technique, clinical audit prep, and Tier 2 visa processing.',
-    institution: 'Manchester University NHS Foundation Trust',
-    position: 'Specialist Registrar (Surgery)',
-    contactPreference: 'ইমেইল / গুগল মিট',
-    createdAt: '2026-03-01',
-  },
-  {
-    id: 'mentor-seed-3',
-    userId: 1004,
-    fullName: 'Dr. Nusrat Jahan',
-    batchYear: 24,
-    avatarUrl: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&q=80&w=200',
-    category: 'Job',
-    expertise: '43rd BCS (Health Cadre), Upazila Health Complex Clinical Operations',
-    shortDescription: 'Guidance on BCS preliminary & written preparation for medical doctors, cadre choice, foundation training, and rural hospital clinical leadership.',
-    institution: 'Ministry of Health & Family Welfare',
-    position: 'Medical Officer (43rd BCS Health)',
-    contactPreference: 'হোয়াটসঅ্যাপ',
-    createdAt: '2026-03-10',
-  },
-];
+const INITIAL_MENTOR_OFFERS: MentorOffer[] = [];
 
-const INITIAL_MENTORSHIP_REQUESTS: MentorshipRequest[] = [
-  {
-    id: 'req-seed-1',
-    userId: 2005,
-    userName: 'Dr. Fahim Murshed',
-    userBatch: 31,
-    userAvatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&q=80&w=200',
-    topic: 'Medical',
-    question: 'ইন্টার্নশিপ শেষ করে FCPS Part 1 Medicine নাকি MD Residency কোনটা শুরু করা বাস্তবসম্মত হবে? প্রস্তুতি কীভাবে শুরু করব?',
-    contactInfo: 'fahim.murshed.dr@gmail.com',
-    createdAt: '2 days ago',
-    status: 'answered',
-    answers: [
-      {
-        id: 'ans-seed-1',
-        mentorId: 1001,
-        mentorName: 'Prof. Dr. Tanvir Ahmed',
-        mentorBatch: 12,
-        mentorAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200',
-        mentorProfession: 'Associate Professor & Consultant',
-        answerText: 'ইন্টার্নশিপ চলাকালীন Davidson ও basic physiology/pathology পড়ে রাখা ভালো। জুলাই সেশনে FCPS Part-1 দেওয়া যায়, একই প্রস্তুতিতে নভেম্বরে BSMMU residency পরীক্ষা দেওয়া সম্ভব। যেকোনো সহযোগিতায় যোগাযোগ করতে পারো।',
-        createdAt: '1 day ago',
-      },
-    ],
-  },
-  {
-    id: 'req-seed-2',
-    userId: 2008,
-    userName: 'Kazi Naimur',
-    userBatch: 34,
-    userAvatar: 'https://images.unsplash.com/photo-1492562080023-ab3db95bfbce?auto=format&fit=crop&q=80&w=200',
-    topic: 'Abroad',
-    question: 'PLAB 1 পাস করেছি, এখন UK clinical attachment ও PLAB 2 একাডেমি কীভাবে নির্বাচন করা উচিত?',
-    contactInfo: '01711223344',
-    createdAt: '3 days ago',
-    status: 'open',
-    answers: [],
-  },
-];
+const INITIAL_MENTORSHIP_REQUESTS: MentorshipRequest[] = [];
 
 let isRequestsSyncing = false;
 async function syncMentorshipRequestsWithBackend() {
@@ -248,7 +167,7 @@ async function syncMentorsWithBackend() {
 }
 
 export const loadMentorshipRequests = (): MentorshipRequest[] => {
-  if (typeof window === 'undefined') return INITIAL_MENTORSHIP_REQUESTS;
+  if (typeof window === 'undefined') return [];
   // Trigger background sync with Supabase for real-time fresh updates
   void syncMentorshipRequestsWithBackend();
 
@@ -256,12 +175,14 @@ export const loadMentorshipRequests = (): MentorshipRequest[] => {
     const raw = localStorage.getItem(REQUESTS_STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed.filter((r) => r && r.id && !String(r.id).startsWith('req-seed-'));
+      }
     }
   } catch (e) {
     console.warn('Failed to load mentorship requests from storage', e);
   }
-  return INITIAL_MENTORSHIP_REQUESTS;
+  return [];
 };
 
 export const saveMentorshipRequests = (requests: MentorshipRequest[]) => {
@@ -433,19 +354,21 @@ export const addMentorshipAnswer = (
 };
 
 export const loadMentorOffers = (): MentorOffer[] => {
-  if (typeof window === 'undefined') return INITIAL_MENTOR_OFFERS;
+  if (typeof window === 'undefined') return [];
   void syncMentorsWithBackend();
 
   try {
     const raw = localStorage.getItem(MENTORS_STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed.filter((m) => m && m.id && !String(m.id).startsWith('mentor-seed-'));
+      }
     }
   } catch (e) {
     console.warn('Failed to load mentor offers from storage', e);
   }
-  return INITIAL_MENTOR_OFFERS;
+  return [];
 };
 
 export const saveMentorOffers = (mentors: MentorOffer[]) => {

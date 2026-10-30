@@ -22,7 +22,6 @@ import { BatchSummary, AlumniProfile, SPECIALTIES_LIST } from '../types';
 import { NDCLogo } from './NDCLogo';
 import { fetchBatchesFromDb, fetchBatchAlumniProfilesFromDb } from '../services/supabaseService';
 import { realtimeManager } from '../services/supabaseRealtimeService';
-import { FAMOUS_SZMC_ALUMNI } from './landing/FeaturedAlumniSection';
 
 interface BatchesViewProps {
   onSelectBatch: (batchYear: number) => void;
@@ -89,9 +88,9 @@ export const BatchesView: React.FC<BatchesViewProps> = ({ onSelectBatch, onViewP
     }
     let isMounted = true;
 
-    // Pre-populate with local stored & prominent alumni belonging to this batch
+    // Pre-populate with local stored registered alumni belonging to this batch
     const stored = loadStoredAlumniProfiles();
-    const localMatches = [...stored, ...FAMOUS_SZMC_ALUMNI].filter(
+    const localMatches = stored.filter(
       (p) => p && (p.batchYear === activeBatchYear || p.batchYear - 1991 === activeBatchYear)
     );
     const initialMap = new Map<number, AlumniProfile>();

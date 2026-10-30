@@ -128,11 +128,11 @@ export const LandingPage: React.FC<LandingPageProps> = ({
     setPreviewBatch(batch);
   };
 
-  // Get batch members from stored profiles and famous alumni for the selected batch
+  // Get batch members from stored registered profiles for the selected batch
   const batchMembers = useMemo(() => {
     if (!previewBatch) return [];
     const stored = loadStoredAlumniProfiles();
-    const combined = [...stored, ...FAMOUS_SZMC_ALUMNI, ...ALUMNI_PROFILES];
+    const combined = [...stored, ...ALUMNI_PROFILES];
     const map = new Map<number, AlumniProfile>();
     combined.forEach((a) => {
       if (

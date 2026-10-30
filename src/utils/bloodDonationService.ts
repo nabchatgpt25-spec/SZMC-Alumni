@@ -42,240 +42,24 @@ export function sanitizeInputText(value: string, maxLength = 300): string {
     .slice(0, maxLength);
 }
 
-const DEFAULT_SAMPLE_DONORS: BloodDonorProfile[] = [
-  {
-    userId: 101,
-    fullName: 'Dr. Tanvir Ahmed',
-    avatarUrl: 'https://images.unsplash.com/photo-1537368910025-700350fe46c7?w=120&auto=format&fit=crop&q=80',
-    batchYear: 24,
-    profession: 'Registrar, Internal Medicine',
-    institution: 'Dhaka Medical College Hospital',
-    phone: '+880 1711-234567',
-    whatsapp: '+880 1711-234567',
-    email: 'tanvir.ahmed@szmc.edu.bd',
-    verificationStatus: 'verified',
-    bloodGroup: 'O+',
-    isRegisteredDonor: true,
-    availability: 'available',
-    preferredArea: 'Shahbagh / Motijheel / Ramna (DMCH, BSMMU, BIRDEM)',
-    city: 'Dhaka',
-    lastDonationDate: '2024-01-10',
-    emergencyAlertPreference: 'all_urgent',
-    donationHistory: [
-      { id: 'dh-1', date: '2024-01-10', hospital: 'DMCH', units: 1, notes: 'Emergency cardiac surgery' }
-    ],
-    updatedAt: new Date().toISOString(),
-  },
-  {
-    userId: 102,
-    fullName: 'Dr. Nafis Rahman',
-    avatarUrl: 'https://images.unsplash.com/photo-1622253692010-333f2da6031d?w=120&auto=format&fit=crop&q=80',
-    batchYear: 26,
-    profession: 'Medical Officer, Cardiology',
-    institution: 'National Institute of Cardiovascular Diseases',
-    phone: '+880 1819-876543',
-    whatsapp: '+880 1819-876543',
-    email: 'nafis.rahman@szmc.edu.bd',
-    verificationStatus: 'verified',
-    bloodGroup: 'A+',
-    isRegisteredDonor: true,
-    availability: 'available',
-    preferredArea: 'Mirpur / Agargaon / Shyamoli (NICVD, NIKDU, Heart Foundation)',
-    city: 'Dhaka',
-    lastDonationDate: '2024-02-15',
-    emergencyAlertPreference: 'all_urgent',
-    donationHistory: [],
-    updatedAt: new Date().toISOString(),
-  },
-  {
-    userId: 103,
-    fullName: 'Dr. Sadia Islam',
-    avatarUrl: 'https://images.unsplash.com/photo-1594824813579-0824b2b4d455?w=120&auto=format&fit=crop&q=80',
-    batchYear: 27,
-    profession: 'Assistant Professor, Pediatrics',
-    institution: 'BSMMU',
-    phone: '+880 1912-345678',
-    whatsapp: '+880 1912-345678',
-    email: 'sadia.islam@szmc.edu.bd',
-    verificationStatus: 'verified',
-    bloodGroup: 'B+',
-    isRegisteredDonor: true,
-    availability: 'available',
-    preferredArea: 'Shahbagh / Motijheel / Ramna (DMCH, BSMMU, BIRDEM)',
-    city: 'Dhaka',
-    lastDonationDate: '2023-11-20',
-    emergencyAlertPreference: 'same_area_only',
-    donationHistory: [],
-    updatedAt: new Date().toISOString(),
-  },
-  {
-    userId: 104,
-    fullName: 'Dr. Mahmudul Hasan',
-    avatarUrl: 'https://images.unsplash.com/photo-1612349317150-e413f6a5b16d?w=120&auto=format&fit=crop&q=80',
-    batchYear: 25,
-    profession: 'Senior Consultant, Nephrology',
-    institution: 'Square Hospital',
-    phone: '+880 1611-456789',
-    whatsapp: '+880 1611-456789',
-    email: 'mahmud.hasan@szmc.edu.bd',
-    verificationStatus: 'verified',
-    bloodGroup: 'AB+',
-    isRegisteredDonor: true,
-    availability: 'available',
-    preferredArea: 'Dhanmondi / Panthapath / Green Road (Square, Labaid)',
-    city: 'Dhaka',
-    lastDonationDate: '2023-12-05',
-    emergencyAlertPreference: 'all_urgent',
-    donationHistory: [],
-    updatedAt: new Date().toISOString(),
-  },
-  {
-    userId: 105,
-    fullName: 'Dr. Farhana Yasmin',
-    avatarUrl: 'https://images.unsplash.com/photo-1559839734-2b71ea197ec2?w=120&auto=format&fit=crop&q=80',
-    batchYear: 28,
-    profession: 'Resident Physician, General Surgery',
-    institution: 'Evercare Hospital Dhaka',
-    phone: '+880 1722-334455',
-    whatsapp: '+880 1722-334455',
-    email: 'farhana.yasmin@szmc.edu.bd',
-    verificationStatus: 'verified',
-    bloodGroup: 'O-',
-    isRegisteredDonor: true,
-    availability: 'available',
-    preferredArea: 'Gulshan / Banani / Bashundhara (Evercare, United)',
-    city: 'Dhaka',
-    lastDonationDate: '2023-10-15',
-    emergencyAlertPreference: 'critical_only',
-    donationHistory: [],
-    updatedAt: new Date().toISOString(),
-  },
-  {
-    userId: 106,
-    fullName: 'Dr. Zubair Al Mamun',
-    avatarUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=120&auto=format&fit=crop&q=80',
-    batchYear: 23,
-    profession: 'Consultant, Orthopedics',
-    institution: 'National Institute of Traumatology (NITOR)',
-    phone: '+880 1515-678901',
-    whatsapp: '+880 1515-678901',
-    email: 'zubair.mamun@szmc.edu.bd',
-    verificationStatus: 'verified',
-    bloodGroup: 'A-',
-    isRegisteredDonor: true,
-    availability: 'available',
-    preferredArea: 'Mirpur / Agargaon / Shyamoli (NICVD, NIKDU, Heart Foundation)',
-    city: 'Dhaka',
-    lastDonationDate: '2023-09-10',
-    emergencyAlertPreference: 'all_urgent',
-    donationHistory: [],
-    updatedAt: new Date().toISOString(),
-  },
-  {
-    userId: 107,
-    fullName: 'Dr. Shahriar Kabir',
-    avatarUrl: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=120&auto=format&fit=crop&q=80',
-    batchYear: 22,
-    profession: 'Associate Professor, Surgery',
-    institution: 'Shaheed Ziaur Rahman Medical College Hospital',
-    phone: '+880 1712-998877',
-    whatsapp: '+880 1712-998877',
-    email: 'shahriar.kabir@szmc.edu.bd',
-    verificationStatus: 'verified',
-    bloodGroup: 'B-',
-    isRegisteredDonor: true,
-    availability: 'available',
-    preferredArea: 'Sylhet / Rajshahi / Khulna Regional Hub',
-    city: 'Bogura',
-    lastDonationDate: '2024-01-05',
-    emergencyAlertPreference: 'all_urgent',
-    donationHistory: [],
-    updatedAt: new Date().toISOString(),
-  },
-  {
-    userId: 108,
-    fullName: 'Dr. Rafiqul Haque',
-    avatarUrl: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=120&auto=format&fit=crop&q=80',
-    batchYear: 20,
-    profession: 'Clinical Hematologist',
-    institution: 'Kurmitola General Hospital',
-    phone: '+880 1811-332211',
-    whatsapp: '+880 1811-332211',
-    email: 'rafiqul.haque@szmc.edu.bd',
-    verificationStatus: 'verified',
-    bloodGroup: 'AB-',
-    isRegisteredDonor: true,
-    availability: 'available',
-    preferredArea: 'Uttara / Kurmitola / Airport Corridor',
-    city: 'Dhaka',
-    lastDonationDate: '2023-08-12',
-    emergencyAlertPreference: 'all_urgent',
-    donationHistory: [],
-    updatedAt: new Date().toISOString(),
-  }
-];
+const DEFAULT_SAMPLE_DONORS: BloodDonorProfile[] = [];
 
-const DEFAULT_SAMPLE_REQUESTS: BloodEmergencyRequest[] = [
-  {
-    id: 'req_sample_1',
-    bloodGroup: 'O+',
-    unitsRequired: 2,
-    unitsFulfilled: 1,
-    hospitalName: 'Dhaka Medical College Hospital (DMCH)',
-    hospitalArea: 'Shahbagh / Motijheel / Ramna (DMCH, BSMMU, BIRDEM)',
-    city: 'Dhaka',
-    requiredDateTime: new Date(Date.now() + 4 * 3600000).toISOString(),
-    emergencyLevel: 'critical',
-    contactMethod: 'Attendant Emergency Line',
-    contactPhone: '+880 1711-002233',
-    description: 'Emergency trauma resuscitation following road traffic accident. ICU Bed 4.',
-    patientRelation: 'Batchmate Mother',
-    requesterId: 201,
-    requesterName: 'Dr. Rezwan Karim',
-    requesterAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=120&auto=format&fit=crop&q=80',
-    requesterBatch: 25,
-    status: 'Active',
-    createdAt: new Date(Date.now() - 3600000).toISOString(),
-    updatedAt: new Date(Date.now() - 1800000).toISOString(),
-    responses: [],
-  },
-  {
-    id: 'req_sample_2',
-    bloodGroup: 'A+',
-    unitsRequired: 1,
-    unitsFulfilled: 0,
-    hospitalName: 'Square Hospital',
-    hospitalArea: 'Dhanmondi / Panthapath / Green Road (Square, Labaid)',
-    city: 'Dhaka',
-    requiredDateTime: new Date(Date.now() + 8 * 3600000).toISOString(),
-    emergencyLevel: 'urgent',
-    contactMethod: 'Attendant Emergency Line',
-    contactPhone: '+880 1819-445566',
-    description: 'Elective coronary artery bypass surgery tomorrow morning at 8:30 AM.',
-    patientRelation: 'Alumnus Relative',
-    requesterId: 202,
-    requesterName: 'Dr. Momena Khatun',
-    requesterAvatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=120&auto=format&fit=crop&q=80',
-    requesterBatch: 27,
-    status: 'Active',
-    createdAt: new Date(Date.now() - 7200000).toISOString(),
-    updatedAt: new Date(Date.now() - 7200000).toISOString(),
-    responses: [],
-  }
-];
+const DEFAULT_SAMPLE_REQUESTS: BloodEmergencyRequest[] = [];
 
 export function loadBloodDonors(): BloodDonorProfile[] {
-  if (typeof window === 'undefined') return DEFAULT_SAMPLE_DONORS;
+  if (typeof window === 'undefined') return [];
   try {
     const raw = localStorage.getItem(BLOOD_DONORS_STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed.filter((d) => d && d.userId && !(d.userId >= 101 && d.userId <= 120));
+      }
     }
   } catch (err) {
     console.warn('Failed to load blood donors from localStorage:', err);
   }
-  return DEFAULT_SAMPLE_DONORS;
+  return [];
 }
 
 export function saveBloodDonors(donors: BloodDonorProfile[]): void {
@@ -289,17 +73,25 @@ export function saveBloodDonors(donors: BloodDonorProfile[]): void {
 }
 
 export function loadBloodRequests(): BloodEmergencyRequest[] {
-  if (typeof window === 'undefined') return DEFAULT_SAMPLE_REQUESTS;
+  if (typeof window === 'undefined') return [];
   try {
     const raw = localStorage.getItem(BLOOD_REQUESTS_STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed.filter(
+          (r) =>
+            r &&
+            r.id &&
+            !String(r.id).startsWith('req_sample_') &&
+            !(r.requesterId && r.requesterId >= 101 && r.requesterId <= 220)
+        );
+      }
     }
   } catch (err) {
     console.warn('Failed to load blood requests from localStorage:', err);
   }
-  return DEFAULT_SAMPLE_REQUESTS;
+  return [];
 }
 
 export function saveBloodRequests(requests: BloodEmergencyRequest[]): void {

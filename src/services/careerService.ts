@@ -69,53 +69,7 @@ export const getCareerTypeLabel = (type: CareerType): { bn: string; en: string; 
   }
 };
 
-const INITIAL_CAREER_OPPORTUNITIES: CareerOpportunity[] = [
-  {
-    id: 'opp-seed-1',
-    title: 'Assistant Professor / Consultant (Internal Medicine & Cardiology)',
-    company: 'Shaheed Ziaur Rahman Medical College Hospital',
-    location: 'Silimpur, Bogura (On-site)',
-    type: 'job',
-    description: 'Looking for enthusiastic post-graduate specialists (FCPS / MD / MRCP) to join the cardiology & medicine consultant team at SZMCH. Patient ward care, clinical rounds, and undergraduate student mentoring.',
-    posterId: 1001,
-    posterName: 'Prof. Dr. Tanvir Ahmed',
-    posterBatch: 'Batch 12',
-    posterAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200',
-    createdAt: new Date(Date.now() - 86400000 * 2).toISOString(),
-    status: 'active',
-    applicants: [],
-  },
-  {
-    id: 'opp-seed-2',
-    title: 'Clinical Research Fellow & Epidemiology Intern',
-    company: 'International Centre for Diarrhoeal Disease Research (icddr,b)',
-    location: 'Mohakhali, Dhaka (Hybrid)',
-    type: 'internship',
-    description: 'Six-month clinical research internship for medical graduates and final-year students. Opportunity to work on infectious disease cohorts, data analysis, and manuscript preparation for international journals.',
-    posterId: 1003,
-    posterName: 'Dr. Siamur Rahman',
-    posterBatch: 'Batch 18',
-    posterAvatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=200',
-    createdAt: new Date(Date.now() - 86400000 * 4).toISOString(),
-    status: 'active',
-    applicants: [],
-  },
-  {
-    id: 'opp-seed-3',
-    title: 'NHS Clinical Fellow Referral (Emergency Medicine & Surgery)',
-    company: 'National Health Service (NHS Trust UK)',
-    location: 'London & Manchester, United Kingdom',
-    type: 'referral',
-    description: 'Direct alumnus peer referral for GMC-registered doctors or PLAB 2 qualifiers. Dedicated support for visa sponsorship, NHS ward induction, and clinical observership transitions.',
-    posterId: 1004,
-    posterName: 'Dr. Kazi Farhan',
-    posterBatch: 'Batch 08',
-    posterAvatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&q=80&w=200',
-    createdAt: new Date(Date.now() - 86400000 * 6).toISOString(),
-    status: 'active',
-    applicants: [],
-  },
-];
+const INITIAL_CAREER_OPPORTUNITIES: CareerOpportunity[] = [];
 
 let isCareersSyncing = false;
 async function syncCareersWithBackend() {
@@ -180,7 +134,7 @@ async function syncCareersWithBackend() {
 }
 
 export const loadCareerOpportunities = (): CareerOpportunity[] => {
-  if (typeof window === 'undefined') return INITIAL_CAREER_OPPORTUNITIES;
+  if (typeof window === 'undefined') return [];
   void syncCareersWithBackend();
 
   try {
@@ -188,13 +142,13 @@ export const loadCareerOpportunities = (): CareerOpportunity[] => {
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed;
+        return parsed.filter((c) => c && c.id && !String(c.id).startsWith('opp-seed-'));
       }
     }
   } catch (err) {
     console.warn('Failed to load career opportunities from storage:', err);
   }
-  return INITIAL_CAREER_OPPORTUNITIES;
+  return [];
 };
 
 export const saveCareerOpportunities = (opportunities: CareerOpportunity[]): void => {

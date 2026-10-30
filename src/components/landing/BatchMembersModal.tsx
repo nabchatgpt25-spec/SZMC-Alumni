@@ -45,7 +45,7 @@ export const BatchMembersModal: React.FC<BatchMembersModalProps> = ({
               Batch {batch.batchYear < 10 ? `0${batch.batchYear}` : batch.batchYear} Alumni Roster
             </h3>
             <p className="text-xs text-blue-100 mt-1">
-              Representative: <span className="font-semibold text-white">{batch.representative}</span> • {batch.total} Total Graduates
+              Representative: <span className="font-semibold text-white">{batch.representative}</span>{batch.total ? ` • ${batch.total} Total Graduates` : ''}
             </p>
           </div>
 

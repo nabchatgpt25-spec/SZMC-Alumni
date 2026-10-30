@@ -55,22 +55,22 @@ export const DEFAULT_BLANK_USER: AlumniProfile = {
   avatarUrl: 'https://images.unsplash.com/photo-1622253692010-333f2da6031d?w=200&auto=format&fit=crop&q=80',
   coverUrl: campusHeroImg,
   batchYear: 20,
-  session: 'Session 2011-12 (MBBS)',
+  session: 'MBBS',
   group: 'MBBS',
-  collegeRoll: '2011042',
+  collegeRoll: '',
   profession: 'Medical Doctor / Physician',
-  position: 'Assistant Professor / Consultant',
+  position: '',
   institution: 'Shaheed Ziaur Rahman Medical College Hospital, Bogura',
-  specialty: ['Internal Medicine', 'Cardiology & Cardiac Surgery'],
-  degree: ['MBBS', 'FCPS', 'MD'],
+  specialty: [],
+  degree: ['MBBS'],
   city: 'Bogura',
   country: 'Bangladesh',
   isPublic: true,
-  online: true,
+  online: false,
   lastSeen: 'Now',
   postsCount: 0,
-  badges: ['Verified SZMCian', 'Life Member'],
-  bio: 'Proud SZMCian. Dedicated to healing and patient care. Connected with SZMC alumni across Bangladesh and worldwide.',
+  badges: ['SZMCian'],
+  bio: '',
 };
 
 // Aliased for backward compatibility in imports
@@ -85,15 +85,15 @@ export const ALUMNI_PROFILES: AlumniProfile[] = loadStoredAlumniProfiles();
 export const INITIAL_POSTS: PostItem[] = [];
 
 // Shaheed Ziaur Rahman Medical College (SZMC Bogura) MBBS Batches (Est. 1992, Batches 1 to 35, Session 1991-92 onwards)
-const SPECIAL_BATCH_NOTES: Record<number, { note: string; representative?: string }> = {
-  1: { note: 'Pioneer MBBS Batch (SZMC-01, Session 1991-92)', representative: 'Dr. Tariqul Islam (SZMC-01)' },
-  5: { note: '5th Batch (SZMC-05, Session 1995-96)', representative: 'Dr. M. A. Hashem (SZMC-05)' },
-  10: { note: '10th Milestone Batch (SZMC-10, Session 2000-01)', representative: 'Dr. Tanvir Rahman (SZMC-10)' },
-  15: { note: '15th Batch (SZMC-15, Session 2005-06)', representative: 'Dr. Nazmul Huda (SZMC-15)' },
-  20: { note: '20th Batch (SZMC-20, Session 2010-11)', representative: 'Dr. Kazi Rezwan (SZMC-20)' },
-  25: { note: 'Silver Jubilee Batch (SZMC-25, Session 2015-16)', representative: 'Dr. Sadia Afrin (SZMC-25)' },
-  30: { note: '30th Batch (SZMC-30, Session 2020-21)', representative: 'Dr. Asif Mahmud (SZMC-30)' },
-  35: { note: 'Current MBBS Session (SZMC-35, Session 2025-26)', representative: 'Dr. Shahriar Kabir (SZMC-35)' },
+const SPECIAL_BATCH_NOTES: Record<number, { note: string }> = {
+  1: { note: 'Pioneer MBBS Batch (SZMC-01, Session 1991-92)' },
+  5: { note: '5th Batch (SZMC-05, Session 1995-96)' },
+  10: { note: '10th Milestone Batch (SZMC-10, Session 2000-01)' },
+  15: { note: '15th Batch (SZMC-15, Session 2005-06)' },
+  20: { note: '20th Batch (SZMC-20, Session 2010-11)' },
+  25: { note: 'Silver Jubilee Batch (SZMC-25, Session 2015-16)' },
+  30: { note: '30th Batch (SZMC-30, Session 2020-21)' },
+  35: { note: 'Current MBBS Session (SZMC-35, Session 2025-26)' },
 };
 
 export const BATCH_LIST: BatchSummary[] = Array.from({ length: 35 }, (_, idx) => {
@@ -107,7 +107,7 @@ export const BATCH_LIST: BatchSummary[] = Array.from({ length: 35 }, (_, idx) =>
     batchYear: batchNum,
     session: `${startYear}-${sessionEndShort}`,
     total: null,
-    representative: special?.representative || `SZMC-${batchNum < 10 ? '0' + batchNum : batchNum} Coordinator`,
+    representative: `SZMC-${batchNum < 10 ? '0' + batchNum : batchNum} Coordinator`,
     specialNote: special?.note,
   };
 });

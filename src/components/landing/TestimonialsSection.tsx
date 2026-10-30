@@ -84,7 +84,7 @@ export const TestimonialsSection: React.FC = () => {
                     {item.role}
                   </p>
                   <p className="text-[10px] text-slate-500 dark:text-slate-400">
-                    NDC {item.batch} • {item.degrees}
+                    {item.batch} • {item.degrees}
                   </p>
                 </div>
               </div>
