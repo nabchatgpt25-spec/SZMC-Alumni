@@ -15,7 +15,7 @@ function getAudioContext(): AudioContext | null {
 }
 
 export function playSound(
-  kind: 'notification' | 'like' | 'comment' | 'post' | 'pop' | 'tap' | 'theme'
+  kind: 'notification' | 'like' | 'comment' | 'post' | 'pop' | 'tap' | 'theme' | 'send' | 'receive'
 ): void {
   try {
     const ctx = getAudioContext();
@@ -38,6 +38,8 @@ export function playSound(
       tap: [720],
       theme: [523.25, 659.25, 783.99, 1046.5],
       notification: [587.33, 880], // Facebook-style gentle double chime
+      send: [620, 840],            // Messenger upbeat swoosh/pop
+      receive: [840, 620, 932],    // Messenger pleasant chime
     };
 
     const seq = freqs[kind] || freqs.notification;

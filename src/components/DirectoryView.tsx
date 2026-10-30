@@ -14,7 +14,8 @@ import {
   RefreshCw,
   ChevronDown,
   Stethoscope,
-  Check
+  Check,
+  MessageCircle
 } from 'lucide-react';
 import { AlumniProfile, SPECIALTIES_LIST } from '../types';
 import { BATCH_LIST, loadStoredAlumniProfiles } from '../data/mockData';
@@ -823,11 +824,29 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
                 <button
                   type="button"
                   onClick={() => onViewProfile(profile.id)}
-                  className="flex-1 min-w-[120px] inline-flex items-center justify-center gap-1.5 py-2 px-3 bg-slate-100 dark:bg-slate-800 hover:bg-blue-600 hover:text-white dark:hover:bg-blue-600 text-slate-800 dark:text-slate-200 text-xs font-bold rounded-xl transition-all cursor-pointer"
+                  className="flex-1 min-w-[100px] inline-flex items-center justify-center gap-1.5 py-2 px-3 bg-slate-100 dark:bg-slate-800 hover:bg-blue-600 hover:text-white dark:hover:bg-blue-600 text-slate-800 dark:text-slate-200 text-xs font-bold rounded-xl transition-all cursor-pointer"
                 >
                   <Eye className="w-3.5 h-3.5" />
                   <span>View Profile</span>
                 </button>
+
+                {profile.id !== currentUser.id && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (typeof (window as any).szmcStartDirectMessage === 'function') {
+                        (window as any).szmcStartDirectMessage(profile);
+                      } else {
+                        onViewProfile(profile.id);
+                      }
+                    }}
+                    className="inline-flex items-center justify-center gap-1.5 py-2 px-3 bg-[#0084FF]/10 dark:bg-[#0084FF]/20 hover:bg-[#0084FF] text-[#0084FF] hover:text-white text-xs font-bold rounded-xl transition-all cursor-pointer shrink-0 shadow-2xs active:scale-95"
+                    title={`Direct Message ${profile.fullName}`}
+                  >
+                    <MessageCircle className="w-3.5 h-3.5 fill-[#0084FF]/20" />
+                    <span>Message</span>
+                  </button>
+                )}
               </div>
             </div>
           ))}

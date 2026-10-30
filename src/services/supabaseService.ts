@@ -71,7 +71,7 @@ export async function fetchAlumniProfilesFromDb(params?: {
       return [];
     }
 
-    return data.map(mapSupabaseRowToAlumniProfile);
+    return data.map((row: any) => mapSupabaseRowToAlumniProfile(row));
   } catch (err) {
     console.warn('Supabase fetchAlumniProfiles fallback:', err);
     return loadStoredAlumniProfiles();
@@ -180,7 +180,7 @@ export async function fetchBatchAlumniProfilesFromDb(batchYear: number): Promise
         .range(offset, offset + pageSize - 1);
 
       if (error || !data) return [];
-      profiles.push(...data.map(mapSupabaseRowToAlumniProfile));
+      profiles.push(...data.map((row: any) => mapSupabaseRowToAlumniProfile(row)));
       if (data.length < pageSize) break;
     }
     return profiles;

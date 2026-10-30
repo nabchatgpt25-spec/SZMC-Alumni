@@ -1,6 +1,6 @@
 import { User } from '@supabase/supabase-js';
 import { supabase, isSupabaseConfigured, ALUMNI_PUBLIC_COLUMNS } from './supabase.ts';
-import { AlumniProfile, UserRole } from '../types.ts';
+import { AlumniProfile, UserRole, SUPER_ADMIN_EMAILS } from '../types.ts';
 import { formatToE164Phone } from '../utils/phone.ts';
 import { normalizeAcademicStreamAndGroup } from '../utils/academicGroupMapping.ts';
 
@@ -124,6 +124,7 @@ export async function getOrCreateSupabaseProfile(
 
     // 2. Otherwise, insert a new profile record for the authenticated user
     const cleanEmail = (authUser.email || extraData?.email || '').toLowerCase().trim();
+    const isSuperAdminEmail = cleanEmail ? SUPER_ADMIN_EMAILS.includes(cleanEmail) : false;
     const batchYear = Number(extraData?.batchYear) || 25;
     const normalizedBatch = batchYear > 1900 ? batchYear - 1991 : (batchYear > 0 && batchYear <= 35 ? batchYear : 25);
 

@@ -10,10 +10,12 @@ import {
   Globe,
   Share2,
   ArrowRight,
-  ExternalLink
+  ExternalLink,
+  MessageCircle
 } from 'lucide-react';
 import { AlumniProfile } from '../../types';
 import { WhatsAppIcon, FacebookIcon } from '../SocialIcons';
+import { useAuth } from '../../context/AuthContext';
 
 interface QuickProfileModalProps {
   profile: AlumniProfile | null;
@@ -26,6 +28,7 @@ export const QuickProfileModal: React.FC<QuickProfileModalProps> = ({
   onClose,
   onLoginPrompt,
 }) => {
+  const { isLoggedIn, currentUser } = useAuth();
   if (!profile) return null;
 
   const handleShare = () => {
@@ -237,17 +240,33 @@ export const QuickProfileModal: React.FC<QuickProfileModalProps> = ({
             >
               Close
             </button>
-            <button
-              type="button"
-              onClick={() => {
-                onClose();
-                onLoginPrompt();
-              }}
-              className="flex-1 sm:flex-none px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-md shadow-blue-600/20 transition-all cursor-pointer flex items-center justify-center gap-1.5"
-            >
-              <span>Login to Connect / Message</span>
-              <ArrowRight className="w-3.5 h-3.5" />
-            </button>
+            {isLoggedIn && currentUser.id !== profile.id ? (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  if (typeof (window as any).szmcStartDirectMessage === 'function') {
+                    (window as any).szmcStartDirectMessage(profile);
+                  }
+                }}
+                className="flex-1 sm:flex-none px-5 py-2.5 bg-gradient-to-r from-[#0084FF] to-[#00A3FF] hover:from-[#0073E6] hover:to-[#0090E6] text-white text-xs font-bold rounded-xl shadow-md shadow-[#0084FF]/25 hover:shadow-lg hover:shadow-[#0084FF]/35 transition-all cursor-pointer flex items-center justify-center gap-1.5 active:scale-95"
+              >
+                <MessageCircle className="w-3.5 h-3.5 fill-white/20" />
+                <span>Message Dr. {profile.fullName.split(' ')[0]}</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onLoginPrompt();
+                }}
+                className="flex-1 sm:flex-none px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-md shadow-blue-600/20 transition-all cursor-pointer flex items-center justify-center gap-1.5"
+              >
+                <span>Login to Connect / Message</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
         </div>
       </div>

@@ -5,6 +5,7 @@ import { isUserSuperAdmin } from '../../types';
 import {
   deleteMessage,
   editMessage,
+  findOrCreateDirectConversation,
   listConversations,
   listMessages,
   markConversationRead,
@@ -25,7 +26,15 @@ import { NewChatModal } from './NewChatModal';
 import { ConversationSettingsPanel } from './ConversationSettingsPanel';
 import { MessageSettingsModal } from './MessageSettingsModal';
 
-export const MessengerView: React.FC = () => {
+interface MessengerViewProps {
+  initialTargetProfileId?: number | null;
+  onClearInitialTarget?: () => void;
+}
+
+export const MessengerView: React.FC<MessengerViewProps> = ({
+  initialTargetProfileId,
+  onClearInitialTarget,
+}) => {
   const { currentUser, isAdminUser } = useAuth();
   const myId = currentUser.id;
   const isSuperAdmin = currentUser.role === 'admin' || isAdminUser;
@@ -78,6 +87,28 @@ export const MessengerView: React.FC = () => {
   useEffect(() => {
     void refreshConversations();
   }, [refreshConversations]);
+
+  // Auto-open direct conversation when targeted from a profile
+  useEffect(() => {
+    if (!initialTargetProfileId || initialTargetProfileId === myId) return;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const convId = await findOrCreateDirectConversation(myId, initialTargetProfileId);
+        if (cancelled) return;
+        await refreshConversations();
+        setActiveId(convId);
+        onClearInitialTarget?.();
+      } catch (err) {
+        console.warn('Failed to auto-open direct conversation from profile:', err);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [initialTargetProfileId, myId, refreshConversations, onClearInitialTarget]);
 
   // 1. Subscribe to Supabase Realtime channel status
   useEffect(() => {
@@ -330,15 +361,17 @@ export const MessengerView: React.FC = () => {
             </button>
           )}
 
-          {/* Normal Member Privacy Settings */}
-          <button
-            type="button"
-            onClick={() => setShowMessageSettingsModal(true)}
-            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700/80 text-xs font-semibold text-slate-700 dark:text-slate-200 transition-colors shadow-2xs cursor-pointer"
-          >
-            <Sliders className="w-3.5 h-3.5 text-[#0084FF]" />
-            <span>Settings</span>
-          </button>
+          {/* Settings button - ONLY visible for admin / super-admin, hidden from normal alumni */}
+          {isSuperAdmin && (
+            <button
+              type="button"
+              onClick={() => setShowMessageSettingsModal(true)}
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700/80 text-xs font-semibold text-slate-700 dark:text-slate-200 transition-colors shadow-2xs cursor-pointer"
+            >
+              <Sliders className="w-3.5 h-3.5 text-[#0084FF]" />
+              <span>Settings</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -359,7 +392,7 @@ export const MessengerView: React.FC = () => {
               }
             }}
             onNewChat={() => setShowNewChat(true)}
-            onOpenSettings={() => setShowMessageSettingsModal(true)}
+            onOpenSettings={isSuperAdmin ? () => setShowMessageSettingsModal(true) : undefined}
             onRetry={() => void refreshConversations()}
           />
         </div>
@@ -466,13 +499,15 @@ export const MessengerView: React.FC = () => {
         <NewChatModal myId={myId} onClose={() => setShowNewChat(false)} onStarted={handleStartChat} />
       )}
 
-      {/* Normal Alumni Message Settings */}
-      <MessageSettingsModal
-        isOpen={showMessageSettingsModal}
-        onClose={() => setShowMessageSettingsModal(false)}
-        profileId={myId}
-        batchYear={currentUser.batchYear}
-      />
+      {/* Admin Message Settings & Schema Tools (Hidden from normal alumni) */}
+      {isSuperAdmin && (
+        <MessageSettingsModal
+          isOpen={showMessageSettingsModal}
+          onClose={() => setShowMessageSettingsModal(false)}
+          profileId={myId}
+          batchYear={currentUser.batchYear}
+        />
+      )}
 
       {/* SUPER ADMIN CONSOLE MODAL (Dr. Nurul Anam Bashir Only) */}
       {showSuperAdminModal && isSuperAdmin && (

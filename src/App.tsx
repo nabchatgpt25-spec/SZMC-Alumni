@@ -18,6 +18,8 @@ import { MapView } from './components/MapView';
 import { ProfileView } from './components/ProfileView';
 import { GalleryView } from './components/GalleryView';
 import { MessengerView } from './components/messenger/MessengerView';
+import { FacebookMessengerDock } from './components/messenger/FacebookMessengerDock';
+import type { AlumniProfile } from './types';
 import { LandingPage } from './components/LandingPage';
 import { AuthModal } from './components/AuthModal';
 import { UpcomingFeatureView } from './components/UpcomingFeatureView';
@@ -114,6 +116,34 @@ function AlumniAppContent() {
   ) => {
     setVerificationModalState({ isOpen: true, initialTab });
   };
+
+  // Facebook Messenger Floating Dock & Direct Message state
+  const [dockChatPeer, setDockChatPeer] = useState<AlumniProfile | null>(null);
+  const [messengerInitialProfileId, setMessengerInitialProfileId] = useState<number | null>(null);
+
+  const handleStartDirectMessage = (peer: AlumniProfile) => {
+    if (!isLoggedIn) {
+      setAuthModalMode('login');
+      return;
+    }
+    if (route === 'messages') {
+      setMessengerInitialProfileId(peer.id);
+    } else {
+      setDockChatPeer(peer);
+    }
+  };
+
+  const handleOpenFullMessenger = (peerId: number) => {
+    setDockChatPeer(null);
+    setMessengerInitialProfileId(peerId);
+    navigateTo('messages');
+  };
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      (window as any).szmcStartDirectMessage = handleStartDirectMessage;
+    }
+  }, [isLoggedIn, route]);
 
   // Handle ?vouch_for=... shared peer vouch link
   useEffect(() => {
@@ -339,7 +369,10 @@ function AlumniAppContent() {
               )}
 
               {route === 'messages' && (
-                <MessengerView />
+                <MessengerView
+                  initialTargetProfileId={messengerInitialProfileId}
+                  onClearInitialTarget={() => setMessengerInitialProfileId(null)}
+                />
               )}
 
               {route === 'careers' && (
@@ -381,6 +414,7 @@ function AlumniAppContent() {
                   backLabel={getBackLabel()}
                   onOpenVerificationCenter={openVerificationCenter}
                   onNavigate={navigateTo}
+                  onStartMessage={handleStartDirectMessage}
                 />
               )}
 
@@ -579,6 +613,15 @@ function AlumniAppContent() {
             setAuthModalMode(null);
             navigateTo('feed');
           }}
+        />
+      )}
+
+      {/* Facebook Messenger Floating Chat Dock */}
+      {dockChatPeer && (
+        <FacebookMessengerDock
+          peer={dockChatPeer}
+          onClose={() => setDockChatPeer(null)}
+          onOpenFullMessenger={handleOpenFullMessenger}
         />
       )}
     </div>

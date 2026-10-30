@@ -21,6 +21,7 @@ import {
   Sparkles,
   Check,
   MessageSquare,
+  MessageCircle,
   Heart,
   Trash2,
   Send,
@@ -67,6 +68,7 @@ interface ProfileViewProps {
   onOpenVerificationCenter?: (tab?: 'status' | 'vouch_classmates' | 'upload_id' | 'policy') => void;
   onNavigate?: (route: string) => void;
   initialTab?: 'about' | 'posts' | 'edit' | 'blood' | 'settings';
+  onStartMessage?: (targetProfile: AlumniProfile) => void;
 }
 
 export const ProfileView: React.FC<ProfileViewProps> = ({
@@ -76,6 +78,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   onOpenVerificationCenter,
   onNavigate,
   initialTab,
+  onStartMessage,
 }) => {
   const { isLoggedIn, currentUser, updateProfile, deleteAccount } = useAuth();
 
@@ -970,6 +973,23 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
 
             {/* Social & Contact Actions */}
             <div className="flex flex-wrap items-center justify-center sm:justify-end gap-1.5 sm:gap-2 pt-2 sm:pt-4 shrink-0 w-full sm:w-auto">
+              {!isMine && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (onStartMessage) {
+                      onStartMessage(profile);
+                    } else if (onNavigate) {
+                      onNavigate('messages');
+                    }
+                  }}
+                  className="inline-flex items-center gap-1.5 sm:gap-2 px-3.5 sm:px-4 py-1.5 sm:py-2 rounded-xl bg-gradient-to-r from-[#0084FF] to-[#00A3FF] hover:from-[#0073E6] hover:to-[#0090E6] text-white text-[11px] sm:text-xs font-bold shadow-md shadow-[#0084FF]/25 hover:shadow-lg hover:shadow-[#0084FF]/35 transition-all transform active:scale-95 cursor-pointer shrink-0"
+                  title={`Direct Message Dr. ${profile.fullName}`}
+                >
+                  <MessageCircle className="w-3.5 h-3.5 sm:w-4 sm:h-4 fill-white/20" />
+                  <span>Message</span>
+                </button>
+              )}
               {profile.whatsapp && (
                 <a
                   href={`https://wa.me/${profile.whatsapp.replace(/[^0-9]/g, '')}`}

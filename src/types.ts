@@ -389,4 +389,10 @@ export const DEGREES_LIST = [
   'BSc', 'MSc', 'HSC', 'Others'
 ];
 
+export const SUPER_ADMIN_EMAILS = [
+  'admin@szmcalumni.net',
+  'firstaidnetworkbd@gmail.com',
+  'support@szmcalumni.net',
+];
+
 export type { OfficialNotice } from './data/noticesData';
