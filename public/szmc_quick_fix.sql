@@ -94,8 +94,37 @@ DROP POLICY IF EXISTS "Gallery: Read All" ON public.gallery_albums;
 CREATE POLICY "Gallery: Read All" ON public.gallery_albums FOR SELECT TO anon, authenticated
 USING (true);
 
-DROP POLICY IF EXISTS "Blood Requests: Read Active" ON public.blood_requests;
-CREATE POLICY "Blood Requests: Read Active" ON public.blood_requests FOR SELECT TO anon, authenticated
-USING (true);
+-- 7. Add uploaded schema extensions: linked_url, link_metadata, and automated sync_post_counters triggers
+ALTER TABLE public.posts ADD COLUMN IF NOT EXISTS linked_url TEXT NULL;
+ALTER TABLE public.posts ADD COLUMN IF NOT EXISTS link_metadata JSONB NULL;
+
+CREATE OR REPLACE FUNCTION public.sync_post_counters()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF TG_TABLE_NAME = 'post_likes' THEN
+    IF TG_OP = 'INSERT' THEN
+      UPDATE public.posts SET likes_count = likes_count + 1 WHERE id = NEW.post_id;
+    ELSIF TG_OP = 'DELETE' THEN
+      UPDATE public.posts SET likes_count = GREATEST(0, likes_count - 1) WHERE id = OLD.post_id;
+    END IF;
+  ELSIF TG_TABLE_NAME = 'post_comments' THEN
+    IF TG_OP = 'INSERT' THEN
+      UPDATE public.posts SET comments_count = comments_count + 1 WHERE id = NEW.post_id;
+    ELSIF TG_OP = 'DELETE' THEN
+      UPDATE public.posts SET comments_count = GREATEST(0, comments_count - 1) WHERE id = OLD.post_id;
+    END IF;
+  END IF;
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+DROP TRIGGER IF EXISTS trg_sync_post_likes ON public.post_likes;
+CREATE TRIGGER trg_sync_post_likes AFTER INSERT OR DELETE ON public.post_likes
+FOR EACH ROW EXECUTE FUNCTION public.sync_post_counters();
+
+DROP TRIGGER IF EXISTS trg_sync_post_comments ON public.post_comments;
+CREATE TRIGGER trg_sync_post_comments AFTER INSERT OR DELETE ON public.post_comments
+FOR EACH ROW EXECUTE FUNCTION public.sync_post_counters();
 
 COMMIT;
+

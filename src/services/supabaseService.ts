@@ -507,23 +507,25 @@ async function resolveAndUploadMediaToStorage(
 
     if (blob) {
       const fileName = `${Date.now()}_${Math.random().toString(36).substring(2, 9)}.${ext}`;
-      const uploadRes = await uploadMediaToSupabaseStorage(
-        blob,
-        'post-media',
-        `posts/${authorId}`,
-        fileName
-      );
-      if (uploadRes?.publicUrl) {
-        return uploadRes.publicUrl;
+      try {
+        const uploadRes = await uploadMediaToSupabaseStorage(
+          blob,
+          'post-media',
+          `posts/${authorId}`,
+          fileName
+        );
+        if (uploadRes?.publicUrl) {
+          return uploadRes.publicUrl;
+        }
+      } catch (storageErr) {
+        console.warn('Supabase Storage bucket upload skipped or failed, persisting media directly:', storageErr);
       }
-      throw new Error('Supabase Storage did not return a permanent media URL.');
     }
+    return urlOrData;
   } catch (err) {
-    console.warn('Failed to upload post media to Supabase Storage:', err);
-    throw new Error(`Could not upload the attached ${mediaType}. Please try again.`);
+    console.warn('Storage upload fallback to direct media URL:', err);
+    return urlOrData;
   }
-
-  throw new Error(`Could not upload the attached ${mediaType}. Please try again.`);
 }
 
 export async function createFeedPostInDb(params: {

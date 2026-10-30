@@ -307,12 +307,14 @@ export interface PostItem {
   content: string;
   images: string[];
   videos?: string[];
+  linked_url?: string;
+  link_metadata?: any;
   likesCount: number;
   commentsCount: number;
   createdAt: string;
   likedByMe: boolean;
   comments: PostComment[];
-  category?: 'General Update' | 'Tech & Innovation' | 'Professional Insights' | 'Reunion' | 'Achievement';
+  category?: 'General Update' | 'Tech & Innovation' | 'Professional Insights' | 'Reunion' | 'Achievement' | string;
   isEdited?: boolean;
   isSaved?: boolean;
 }

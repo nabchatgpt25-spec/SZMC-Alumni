@@ -39,6 +39,9 @@ import {
   Check
 } from 'lucide-react';
 import { PostItem, PostComment } from '../types';
+import { CreatePostModal } from './CreatePostModal';
+import { PostCard } from './PostCard';
+import { LinkPreview } from './LinkPreview';
 import { useAuth } from '../context/AuthContext';
 import { playSound } from '../utils/audio';
 import { PostLightboxModal } from './PostLightboxModal';
@@ -1173,82 +1176,53 @@ export const FeedView: React.FC<FeedViewProps> = ({
         </div>
       )}
 
-      {/* Create Post Card (Facebook-Style Trigger Bar -> Opens "New Post" Modal on Click) */}
+      {/* Create Post Bar (Opens CreatePostModal) */}
       <div
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={(e) => {
-          handleDropPhotos(e);
-          setIsCreateModalOpen(true);
-        }}
-        className={`bg-white dark:bg-slate-900 rounded-2xl p-4 sm:p-5 border transition-all shadow-xs ${
-          isDraggingOver
-            ? 'border-blue-500 ring-2 ring-blue-500/20 bg-blue-50/40 dark:bg-blue-950/20'
-            : 'border-slate-200/80 dark:border-slate-800'
-        }`}
+        className="bg-white dark:bg-slate-900 rounded-3xl p-4 sm:p-5 border border-slate-200/80 dark:border-slate-800 shadow-xs transition-all hover:border-slate-300 dark:hover:border-slate-700"
       >
-        {/* Top Row: Avatar + Clickable Placeholder + Quick Photo & Emoji Icons */}
-        <div className="flex items-center gap-2.5 sm:gap-3">
+        <div className="flex items-center gap-3">
           <img
-            src={currentUser.avatarUrl}
+            src={currentUser.avatarUrl || '/assets/aistudio/images__1__2778177d.png'}
             alt={currentUser.fullName}
             className="w-10 h-10 sm:w-11 sm:h-11 rounded-full object-cover ring-2 ring-blue-500/20 shrink-0"
           />
 
-          {/* Clickable Placeholder that opens the Facebook-style New Post modal */}
           <button
             type="button"
             id="open-create-post-modal-btn"
-            onClick={() => {
-              setIsCreateModalOpen(true);
-              setTimeout(() => composerTextareaRef.current?.focus(), 80);
-            }}
+            onClick={() => setIsCreateModalOpen(true)}
             className="flex-1 text-left px-4 py-3 rounded-full bg-slate-100 hover:bg-slate-200/75 dark:bg-slate-800/80 dark:hover:bg-slate-800 border border-slate-200/70 dark:border-slate-700/70 text-sm text-slate-500 dark:text-slate-400 transition-all cursor-pointer truncate"
           >
-            {postContent.trim()
-              ? postContent
-              : 'Share something with your SZMC doctor colleagues...'}
+            What's on your mind, Dr. {currentUser.fullName.split(' ')[0] || 'Alumnus'}? Share updates, photos, or links...
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setIsCreateModalOpen(true)}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-full bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 text-xs font-bold transition-all cursor-pointer shrink-0"
+            title="Add Photos"
+          >
+            <ImageIcon className="w-4 h-4 text-emerald-500" />
+            <span className="hidden sm:inline">Photo</span>
           </button>
         </div>
-
-        {/* Hidden File Input for Multi-Image Upload */}
-        <input
-          type="file"
-          ref={fileInputRef}
-          accept="image/jpeg,image/png,image/webp,image/gif"
-          multiple
-          onChange={handleImageUpload}
-          className="hidden"
-          id="feed-photo-upload-input"
-        />
-
-        {/* Hidden File Input for Video Upload */}
-        <input
-          type="file"
-          ref={videoInputRef}
-          accept="video/mp4,video/webm,video/ogg,video/quicktime"
-          multiple
-          onChange={handleVideoUpload}
-          className="hidden"
-          id="feed-video-upload-input"
-        />
-
-        {/* Hidden Camera Capture Input */}
-        <input
-          type="file"
-          ref={cameraInputRef}
-          accept="image/*,video/*"
-          capture="environment"
-          onChange={handleImageUpload}
-          className="hidden"
-          id="feed-camera-capture-input"
-        />
       </div>
 
-      {/* ===================================================================== */}
-      {/* FACEBOOK-STYLE "NEW POST" MODAL (APPEARS WHEN CLICKING PLACEHOLDER)   */}
-      {/* ===================================================================== */}
-      {isCreateModalOpen && (
+      {/* Uploaded Clean CreatePostModal Component */}
+      <CreatePostModal
+        isOpen={isCreateModalOpen}
+        onClose={() => setIsCreateModalOpen(false)}
+        authorId={currentUser.id}
+        authorName={currentUser.fullName}
+        authorAvatar={currentUser.avatarUrl}
+        onPostCreated={(newPost) => {
+          setPosts((prev) => [newPost as any, ...prev]);
+          playSound('post');
+          showToast('✨ Post published successfully to SZMC Alumni feed!');
+        }}
+      />
+
+      {false && isCreateModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-4 bg-black/75 backdrop-blur-xs animate-fade-in">
           <div
             onDragOver={handleDragOver}
@@ -2299,8 +2273,15 @@ export const FeedView: React.FC<FeedViewProps> = ({
                   </div>
                 )}
 
+                {/* Uploaded LinkPreview for Rich Social/Video Embeds */}
+                {post.linked_url && (
+                  <div className="mb-4">
+                    <LinkPreview url={post.linked_url} data={post.link_metadata} />
+                  </div>
+                )}
+
                 {/* Post Videos & Shared Social/Web Links (YouTube, Facebook, Instagram, LinkedIn, Direct Videos, etc.) */}
-                {allSharedMediaAndLinks.length > 0 && (
+                {allSharedMediaAndLinks.length > 0 && !post.linked_url && (
                   <div className="space-y-3.5 mb-4">
                     {allSharedMediaAndLinks.map((mediaUrl, idx) => (
                       <SharedEmbedCard
