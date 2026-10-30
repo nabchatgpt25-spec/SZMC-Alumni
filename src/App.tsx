@@ -57,6 +57,16 @@ function AlumniAppContent() {
     }
   }, []);
 
+  // Target Album ID for direct deep-linking from Feed ("See Album") into Gallery
+  const [targetAlbumIdForGallery, setTargetAlbumIdForGallery] = useState<number | null>(() => {
+    if (typeof window !== 'undefined' && window.location.hash) {
+      const h = window.location.hash.replace('#', '');
+      if (h.startsWith('album-')) return Number(h.replace('album-', '')) || null;
+      if (h.startsWith('gallery:')) return Number(h.replace('gallery:', '')) || null;
+    }
+    return null;
+  });
+
   // Route state: 'landing' | 'feed' | 'alumni' | 'directory' | 'find' | 'batches' | 'map' | 'gallery' | 'profile' | `batch:${number}` | `post-${number}`
   const [route, setRoute] = useState<string>(() => {
     if (typeof window !== 'undefined') {
@@ -66,6 +76,7 @@ function AlumniAppContent() {
       }
       if (window.location.hash) {
         const h = window.location.hash.replace('#', '');
+        if (h.startsWith('album-') || h.startsWith('gallery:')) return 'gallery';
         if (h.startsWith('post-') || h === 'dashboard' || h === 'feed') return 'feed';
         // When logged in, always prioritize social media feed over stale profile/directory hash
         if (isLoggedIn && (h === 'profile' || h === 'alumni' || h === 'directory')) {
@@ -166,7 +177,15 @@ function AlumniAppContent() {
   useEffect(() => {
     const handleHashChange = () => {
       const h = window.location.hash.replace('#', '');
-      if (h.startsWith('post-')) {
+      if (h.startsWith('album-')) {
+        const aId = Number(h.replace('album-', '')) || null;
+        setTargetAlbumIdForGallery(aId);
+        setRoute('gallery');
+      } else if (h.startsWith('gallery:')) {
+        const aId = Number(h.replace('gallery:', '')) || null;
+        setTargetAlbumIdForGallery(aId);
+        setRoute('gallery');
+      } else if (h.startsWith('post-')) {
         setRoute('feed');
       } else if (h) {
         setRoute(h);
@@ -177,6 +196,17 @@ function AlumniAppContent() {
   }, []);
 
   const navigateTo = (newRoute: string, keepSelectedProfile = false) => {
+    if (newRoute.startsWith('album-')) {
+      const aId = Number(newRoute.replace('album-', '')) || null;
+      setTargetAlbumIdForGallery(aId);
+      setRoute('gallery');
+      window.location.hash = newRoute;
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+    if (newRoute === 'gallery' && !newRoute.startsWith('album-')) {
+      setTargetAlbumIdForGallery(null);
+    }
     if (newRoute === 'profile' && !keepSelectedProfile) {
       setSelectedProfileId(currentUser.id);
     }
@@ -370,7 +400,13 @@ function AlumniAppContent() {
               )}
 
               {route === 'gallery' && (
-                <GalleryView />
+                <GalleryView
+                  initialAlbumId={targetAlbumIdForGallery}
+                  onBackToFeed={() => {
+                    setTargetAlbumIdForGallery(null);
+                    navigateTo('feed');
+                  }}
+                />
               )}
 
               {route === 'messages' && (

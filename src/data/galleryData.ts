@@ -1,8 +1,217 @@
 import { GalleryAlbum } from '../types';
 
+export const SUPABASE_GALLERY_BASE = 'https://hjuyiqyviohinbhzaipl.supabase.co/storage/v1/object/public/gallery/szmc';
+
+export const SZMC_SUPABASE_IMAGES = {
+  campus_1: `${SUPABASE_GALLERY_BASE}/campus_1.jpg`,
+  campus_2: `${SUPABASE_GALLERY_BASE}/campus_2.jpg`,
+  szmc_day_1: `${SUPABASE_GALLERY_BASE}/szmc_day_1.jpg`,
+  szmc_day_2: `${SUPABASE_GALLERY_BASE}/szmc_day_2.jpg`,
+  szmc_day_3: `${SUPABASE_GALLERY_BASE}/szmc_day_3.jpg`,
+  conference: `${SUPABASE_GALLERY_BASE}/conference.jpg`,
+  beauty_of_szmc: `${SUPABASE_GALLERY_BASE}/beauty_of_szmc.jpg`,
+  sports: `${SUPABASE_GALLERY_BASE}/sports.jpg`,
+  beginnings: `${SUPABASE_GALLERY_BASE}/beginnings.jpg`,
+} as const;
+
 /**
- * Gallery albums dataset.
- * Production starts with an empty list []; albums are fetched dynamically
- * from Supabase Storage & database tables (`gallery_albums`, `gallery_photos`).
+ * Gallery albums dataset featuring authentic SZMC alumni photo archives stored in Supabase.
+ * Mapped according to user classification:
+ * 1, 2: Campus
+ * 10, 3, 6: SZMC Day
+ * 4: Conference
+ * 5: Beauty of SZMC
+ * 7, 8: Sports
+ * 9: Beginnings
  */
-export const INITIAL_ALBUMS: GalleryAlbum[] = [];
+export const INITIAL_ALBUMS: GalleryAlbum[] = [
+  {
+    id: 1,
+    title: 'SZMC Medical College Campus & Academic Facilities',
+    description: 'Iconic panoramic views of Shaheed Ziaur Rahman Medical College Bogura campus, hospital building, and green courtyards.',
+    category: 'campus',
+    date: 'Continuous Archive',
+    location: 'SZMC Campus, Silimpur, Bogura',
+    batchYear: 0,
+    photosCount: 2,
+    coverUrl: SZMC_SUPABASE_IMAGES.campus_1,
+    createdBy: 'SZMC Alumni Association',
+    createdDate: '2026-10-30',
+    photos: [
+      {
+        id: 'campus-p1',
+        url: SZMC_SUPABASE_IMAGES.campus_1,
+        caption: 'Shaheed Ziaur Rahman Medical College & Hospital main academic building complex under monsoon sky',
+        uploaderName: 'SZMC Media Cell',
+        batchYear: 18,
+        uploadedAt: '2026-10-30',
+        likesCount: 142,
+        tags: ['Campus', 'Academic Building', 'Silimpur', 'Architecture', 'Photo 1'],
+        mediaType: 'image',
+      },
+      {
+        id: 'campus-p2',
+        url: SZMC_SUPABASE_IMAGES.campus_2,
+        caption: 'Main entrance facade with circular drive-in portico and campus palm greenery',
+        uploaderName: 'SZMC Media Cell',
+        batchYear: 22,
+        uploadedAt: '2026-10-30',
+        likesCount: 118,
+        tags: ['Campus Entrance', 'Courtyard', 'Palms', 'Photo 2'],
+        mediaType: 'image',
+      },
+    ],
+  },
+  {
+    id: 2,
+    title: 'SZMC Day Grand Annual Celebration & Alumni Gathering',
+    description: 'Annual 5th November SZMC Day celebrations, reunion rallies, student assemblies, and historic commemorative posters.',
+    category: 'reunion',
+    date: '5th November Annual',
+    location: 'Central Campus Grounds, SZMC',
+    batchYear: 0,
+    photosCount: 3,
+    coverUrl: SZMC_SUPABASE_IMAGES.szmc_day_1,
+    createdBy: 'SZMC Day Organizing Committee',
+    createdDate: '2026-10-30',
+    photos: [
+      {
+        id: 'szmc-day-p1',
+        url: SZMC_SUPABASE_IMAGES.szmc_day_1,
+        caption: 'Massive SZMC Day alumni gathering and rally with official 5th November celebration banner',
+        uploaderName: 'Batch 25 Alumni Liaison',
+        batchYear: 25,
+        uploadedAt: '2026-10-30',
+        likesCount: 265,
+        tags: ['SZMC Day', '5th November', 'Reunion', 'Alumni Gathering', 'Photo 10, 3, 6'],
+        mediaType: 'image',
+      },
+      {
+        id: 'szmc-day-p2',
+        url: SZMC_SUPABASE_IMAGES.szmc_day_2,
+        caption: 'SZMC DAY 2026 November 05 countdown poster: "এসো স্মৃতির প্রাঙ্গণে মিলি প্রীতির বন্ধনে"',
+        uploaderName: 'SZMC Cultural Society',
+        batchYear: 28,
+        uploadedAt: '2026-10-30',
+        likesCount: 189,
+        tags: ['SZMC Day 2026', 'Official Poster', 'Countdown', 'Photo 6'],
+        mediaType: 'image',
+      },
+      {
+        id: 'szmc-day-p3',
+        url: SZMC_SUPABASE_IMAGES.szmc_day_3,
+        caption: 'Commemorative "Shikor Theke Shikhore" historic festival artwork featuring Mahasthangarh Stupa',
+        uploaderName: 'SZMC Heritage Cell',
+        batchYear: 15,
+        uploadedAt: '2026-10-30',
+        likesCount: 174,
+        tags: ['Shikor Theke Shikhore', 'Heritage', 'Mahasthangarh', 'Poster', 'SZMC Day'],
+        mediaType: 'image',
+      },
+    ],
+  },
+  {
+    id: 3,
+    title: 'Clinical & Academic Medical Conferences',
+    description: 'Postgraduate medical seminars, clinical case symposiums, and professional CME conventions at the central auditorium.',
+    category: 'academic',
+    date: 'Quarterly',
+    location: 'SZMC Central Medical Auditorium',
+    batchYear: 0,
+    photosCount: 1,
+    coverUrl: SZMC_SUPABASE_IMAGES.conference,
+    createdBy: 'SZMC Academic Council',
+    createdDate: '2026-10-30',
+    photos: [
+      {
+        id: 'conference-p1',
+        url: SZMC_SUPABASE_IMAGES.conference,
+        caption: 'SZMC Medical College Grand Auditorium filled with doctors, faculty, and fellows during clinical seminar',
+        uploaderName: 'Dr. Alim Rahman',
+        batchYear: 12,
+        uploadedAt: '2026-10-30',
+        likesCount: 156,
+        tags: ['Conference', 'Auditorium', 'Medical Symposium', 'CME', 'Photo 4'],
+        mediaType: 'image',
+      },
+    ],
+  },
+  {
+    id: 4,
+    title: 'Beauty of SZMC: Cultural Festivals & Decorated Walkways',
+    description: 'Vibrant festival decor, red-canopied campus walkways, illuminated promenades, and artistic installations.',
+    category: 'campus',
+    date: 'Autumn Festivals',
+    location: 'Campus Walkways & Plaza',
+    batchYear: 0,
+    photosCount: 1,
+    coverUrl: SZMC_SUPABASE_IMAGES.beauty_of_szmc,
+    createdBy: 'SZMC Cultural Union',
+    createdDate: '2026-10-30',
+    photos: [
+      {
+        id: 'beauty-p1',
+        url: SZMC_SUPABASE_IMAGES.beauty_of_szmc,
+        caption: 'Decorated red canopy walkway with red carpet and colorful batch pavilions on campus promenade',
+        uploaderName: 'Cultural Secretary',
+        batchYear: 26,
+        uploadedAt: '2026-10-30',
+        likesCount: 203,
+        tags: ['Beauty of SZMC', 'Red Canopy', 'Festive Decor', 'Walkway', 'Photo 5'],
+        mediaType: 'image',
+      },
+    ],
+  },
+  {
+    id: 5,
+    title: 'Shaheed Zia Memorial Cricket & Sports Tournament',
+    description: 'Inter-batch medical cricket championships, athletic meets, and victory celebrations on the college sports field.',
+    category: 'sports',
+    date: 'Annual Sports Season',
+    location: 'SZMC Sports Grounds',
+    batchYear: 31,
+    photosCount: 1,
+    coverUrl: SZMC_SUPABASE_IMAGES.sports,
+    createdBy: 'SZMC Sports Club',
+    createdDate: '2026-10-30',
+    photos: [
+      {
+        id: 'sports-p1',
+        url: SZMC_SUPABASE_IMAGES.sports,
+        caption: 'Cricket tournament champions celebration holding trophy on the pitch with vibrant colored smoke bomb effects',
+        uploaderName: 'Sports Secretary',
+        batchYear: 31,
+        uploadedAt: '2026-10-30',
+        likesCount: 231,
+        tags: ['Cricket', 'Champions', 'Trophy', 'Sports Day', 'Photos 7, 8'],
+        mediaType: 'image',
+      },
+    ],
+  },
+  {
+    id: 6,
+    title: 'Historic Beginnings & 2006 Campus Inauguration Legacy',
+    description: 'Historical archive of the 2006 opening ceremony and founding milestones of Shaheed Ziaur Rahman Medical College.',
+    category: 'convocation',
+    date: '2006 Inauguration Milestone',
+    location: 'SZMC Hospital Complex, Bogura',
+    batchYear: 1,
+    photosCount: 1,
+    coverUrl: SZMC_SUPABASE_IMAGES.beginnings,
+    createdBy: 'SZMC Archive Foundation',
+    createdDate: '2026-10-30',
+    photos: [
+      {
+        id: 'beginnings-p1',
+        url: SZMC_SUPABASE_IMAGES.beginnings,
+        caption: 'Historic 2006 inauguration ceremony with founding medical college directors and dignitaries in new hospital ward',
+        uploaderName: 'SZMC Founding Faculty Archive',
+        batchYear: 1,
+        uploadedAt: '2026-10-30',
+        likesCount: 312,
+        tags: ['Historic', '2006 Inauguration', 'Beginnings', 'Founding Legacy', 'Photo 9'],
+        mediaType: 'image',
+      },
+    ],
+  },
+];

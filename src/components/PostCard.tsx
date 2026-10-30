@@ -13,6 +13,9 @@ import {
   Sparkles,
   GraduationCap,
   UserCheck,
+  Camera,
+  Eye,
+  ArrowRight,
 } from 'lucide-react';
 import { PostItem } from '../types/post';
 import { togglePostLike, addComment, toggleSavePost } from '../services/postService';
@@ -25,6 +28,7 @@ interface PostCardProps {
   currentUserName?: string;
   currentUserAvatar?: string;
   onPostUpdated?: (updated: PostItem) => void;
+  onNavigateToAlbum?: (albumId: number) => void;
 }
 
 export const PostCard: React.FC<PostCardProps> = ({
@@ -121,6 +125,9 @@ export const PostCard: React.FC<PostCardProps> = ({
   };
 
   const images = Array.isArray(post.images) ? post.images.filter(Boolean) : [];
+  const albumRefMatch = post.content?.match(/\[szmc_album_ref:([0-9]+)\]/);
+  const albumId = post.albumId ? Number(post.albumId) : (albumRefMatch ? Number(albumRefMatch[1]) : null);
+  const cleanContent = post.content?.replace(/\[szmc_album_ref:[0-9]+\]/g, '').trim() || '';
 
   return (
     <>
@@ -194,9 +201,58 @@ export const PostCard: React.FC<PostCardProps> = ({
         </div>
 
         {/* Post Text */}
-        <div className="px-3.5 sm:px-4 pb-2 text-[13.5px] sm:text-sm text-slate-800 dark:text-slate-200 whitespace-pre-line leading-relaxed">
-          {post.content}
-        </div>
+        {cleanContent && (
+          <div className="px-3.5 sm:px-4 pb-2 text-[13.5px] sm:text-sm text-slate-800 dark:text-slate-200 whitespace-pre-line leading-relaxed">
+            {cleanContent}
+          </div>
+        )}
+
+        {/* Interactive Photo Album Showcase Banner */}
+        {albumId && (
+          <div className="mx-3.5 sm:mx-4 mb-3 p-3.5 sm:p-4 rounded-2xl bg-gradient-to-r from-blue-50/90 via-indigo-50/80 to-sky-50/90 dark:from-blue-950/40 dark:via-indigo-950/30 dark:to-sky-950/40 border border-blue-200/90 dark:border-blue-800/70 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-blue-600 to-indigo-600 text-white flex items-center justify-center shrink-0 shadow-md shadow-blue-500/20">
+                <Camera className="w-5 h-5" />
+              </div>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10.5px] font-extrabold uppercase tracking-wider bg-blue-600 text-white shadow-xs">
+                    <Sparkles className="w-3 h-3" />
+                    Photo Album
+                  </span>
+                  {images.length > 0 && (
+                    <span className="text-[11px] font-bold text-slate-600 dark:text-slate-300">
+                      {images.length} {images.length === 1 ? 'Photograph' : 'Photographs'}
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs sm:text-sm font-black text-slate-900 dark:text-white truncate mt-1">
+                  {post.albumTitle ||
+                    (post.content.includes('Added a new photo album:')
+                      ? post.content.split('Added a new photo album:')[1]?.split('\n')[0]?.replace(/["“]/g, '').trim()
+                      : 'SZMC Campus & Memories Archive')}
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                if (onNavigateToAlbum) {
+                  onNavigateToAlbum(albumId);
+                } else {
+                  window.location.hash = `album-${albumId}`;
+                  window.dispatchEvent(new HashChangeEvent('hashchange'));
+                }
+              }}
+              className="btn-interactive inline-flex items-center justify-center gap-2 px-4 py-2 sm:px-5 sm:py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 active:scale-95 text-white text-xs sm:text-sm font-black shadow-md shadow-blue-500/25 cursor-pointer transition-all self-start sm:self-auto shrink-0 group"
+            >
+              <Eye className="w-4 h-4 text-blue-100 group-hover:scale-110 transition-transform" />
+              <span>See Album</span>
+              <ArrowRight className="w-4 h-4 group-hover:translate-x-0.5 transition-transform" />
+            </button>
+          </div>
+        )}
 
         {/* Embedded Link / YouTube / Facebook Preview */}
         {post.linked_url && (

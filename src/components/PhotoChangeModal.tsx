@@ -58,35 +58,37 @@ const AVATAR_PRESETS = [
   },
 ];
 
+import { SZMC_SUPABASE_IMAGES } from '../data/galleryData';
+
 const COVER_PRESETS = [
   {
-    label: 'SZMC Silimpur Campus & Medical College Grounds',
-    url: 'https://images.unsplash.com/photo-1541339907198-e08756dedf3f?w=1200&auto=format&fit=crop&q=80',
+    label: 'SZMC Silimpur Campus & Medical College Complex',
+    url: SZMC_SUPABASE_IMAGES.campus_1,
   },
   {
-    label: 'Academic Hospital Building & Ward Complex',
-    url: 'https://images.unsplash.com/photo-1523050854058-8df90110c9f1?w=1200&auto=format&fit=crop&q=80',
+    label: 'Main Academic Entrance & Tropical Grounds',
+    url: SZMC_SUPABASE_IMAGES.campus_2,
   },
   {
-    label: 'Clinical Laboratory & Pathology Center',
-    url: 'https://images.unsplash.com/photo-1532094349884-543bc11b234d?w=1200&auto=format&fit=crop&q=80',
+    label: 'SZMC Day Grand Alumni Conclave & Reunion',
+    url: SZMC_SUPABASE_IMAGES.szmc_day_1,
   },
   {
-    label: 'Medical College Library & Study Hall',
-    url: 'https://images.unsplash.com/photo-1521587760476-6c12a4b040da?w=1200&auto=format&fit=crop&q=80',
+    label: 'Medical Auditorium & Conference Hall',
+    url: SZMC_SUPABASE_IMAGES.conference,
   },
   {
-    label: 'College Auditorium & Medical Conference Hall',
-    url: 'https://images.unsplash.com/photo-1517457373958-b7bdd4587205?w=1200&auto=format&fit=crop&q=80',
+    label: 'Beauty of SZMC: Cultural Promenade & Canopies',
+    url: SZMC_SUPABASE_IMAGES.beauty_of_szmc,
   },
   {
-    label: 'SZMC Medical Blue & Emerald Gradient',
-    url: 'https://images.unsplash.com/photo-1579546929518-9e396f3cc809?w=1200&auto=format&fit=crop&q=80',
+    label: 'Historic 2006 Campus Inauguration Legacy',
+    url: SZMC_SUPABASE_IMAGES.beginnings,
   },
 ];
 
 const DEFAULT_AVATAR = 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=400&auto=format&fit=crop&q=80';
-const DEFAULT_COVER = 'https://images.unsplash.com/photo-1587351021759-3e566b6af7cc?w=1200&auto=format&fit=crop&q=80';
+const DEFAULT_COVER = SZMC_SUPABASE_IMAGES.campus_1;
 
 export const PhotoChangeModal: React.FC<PhotoChangeModalProps> = ({
   isOpen,

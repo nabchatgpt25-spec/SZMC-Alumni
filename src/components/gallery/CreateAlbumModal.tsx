@@ -19,30 +19,58 @@ interface CreateAlbumModalProps {
   onCreateAlbum: (album: GalleryAlbum) => void;
 }
 
-const PRESET_COVERS = [
+interface PresetCoverItem {
+  label: string;
+  numbers: string;
+  category: GalleryAlbum['category'];
+  url: string;
+  suggestedTitle: string;
+}
+
+import { SZMC_SUPABASE_IMAGES } from '../../data/galleryData';
+
+const PRESET_COVERS: PresetCoverItem[] = [
   {
-    label: 'Grand Banquet',
-    url: 'https://images.unsplash.com/photo-1511795409834-ef04bbd61622?w=1000&auto=format&fit=crop&q=80',
+    label: 'Campus',
+    numbers: '1, 2',
+    category: 'campus',
+    url: SZMC_SUPABASE_IMAGES.campus_1,
+    suggestedTitle: 'SZMC Medical College Campus & Academic Facilities',
   },
   {
-    label: 'Professional Conference',
-    url: 'https://images.unsplash.com/photo-1540575467063-178a50c2df87?w=1000&auto=format&fit=crop&q=80',
+    label: 'SZMC Day',
+    numbers: '10, 3, 6',
+    category: 'reunion',
+    url: SZMC_SUPABASE_IMAGES.szmc_day_1,
+    suggestedTitle: 'SZMC Day Grand Annual Celebration & Alumni Gathering',
   },
   {
-    label: 'Campus Quad',
-    url: 'https://images.unsplash.com/photo-1562774053-701939374585?w=1000&auto=format&fit=crop&q=80',
+    label: 'Conference',
+    numbers: '4',
+    category: 'academic',
+    url: SZMC_SUPABASE_IMAGES.conference,
+    suggestedTitle: 'SZMC Medical Symposium & Academic Conferences',
   },
   {
-    label: 'Convocation Gowns',
-    url: 'https://images.unsplash.com/photo-1523050854058-8df90110c9f1?w=1000&auto=format&fit=crop&q=80',
+    label: 'Beauty of SZMC',
+    numbers: '5',
+    category: 'campus',
+    url: SZMC_SUPABASE_IMAGES.beauty_of_szmc,
+    suggestedTitle: 'Beauty of SZMC: Festive Campus Promenade & Canopies',
   },
   {
-    label: 'Sports Stadium',
-    url: 'https://images.unsplash.com/photo-1540747913346-19e32dc3e97e?w=1000&auto=format&fit=crop&q=80',
+    label: 'Sports',
+    numbers: '7, 8',
+    category: 'sports',
+    url: SZMC_SUPABASE_IMAGES.sports,
+    suggestedTitle: 'Shaheed Zia Cricket & Sports Tournament Champions',
   },
   {
-    label: 'Library & Study',
-    url: 'https://images.unsplash.com/photo-1523240795612-9a054b0db644?w=1000&auto=format&fit=crop&q=80',
+    label: 'Beginnings',
+    numbers: '9',
+    category: 'convocation',
+    url: SZMC_SUPABASE_IMAGES.beginnings,
+    suggestedTitle: 'Historic Beginnings & 2006 Campus Inauguration Legacy',
   },
 ];
 
@@ -288,34 +316,48 @@ export const CreateAlbumModal: React.FC<CreateAlbumModalProps> = ({
               </div>
             </div>
 
-            {/* Presets Grid */}
+            {/* Presets Grid - Focused Elements 1 to 6 */}
             {coverSourceMode === 'preset' && (
-              <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2.5">
                 {PRESET_COVERS.map((preset) => {
                   const isSelected = selectedCover === preset.url;
                   return (
                     <div
                       key={preset.label}
-                      onClick={() => setSelectedCover(preset.url)}
-                      className={`group relative h-16 rounded-xl overflow-hidden cursor-pointer border-2 transition-all ${
+                      onClick={() => {
+                        setSelectedCover(preset.url);
+                        if (!title.trim() || PRESET_COVERS.some((p) => p.suggestedTitle === title)) {
+                          setTitle(preset.suggestedTitle);
+                        }
+                        setCategory(preset.category);
+                      }}
+                      className={`group relative h-24 rounded-xl overflow-hidden cursor-pointer border-2 transition-all duration-200 shadow-sm ${
                         isSelected
-                          ? 'border-blue-600 ring-2 ring-blue-500/20'
-                          : 'border-transparent hover:opacity-80'
+                          ? 'border-blue-600 ring-2 ring-blue-500/40 shadow-blue-500/20 scale-[1.02]'
+                          : 'border-slate-200 dark:border-slate-700/80 hover:border-blue-400 dark:hover:border-blue-500 hover:shadow-md'
                       }`}
                     >
                       <img
                         src={preset.url}
                         alt={preset.label}
-                        className="w-full h-full object-cover"
+                        referrerPolicy="no-referrer"
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                       />
-                      <div className="absolute inset-0 bg-black/40 flex items-center justify-center p-1 text-center">
-                        <span className="text-[9px] font-bold text-white leading-tight">
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/40 to-transparent flex flex-col justify-end p-1.5 text-center">
+                        <span className="text-[10px] font-bold text-white leading-tight drop-shadow-sm">
                           {preset.label}
                         </span>
+                        <span className="text-[8px] font-medium text-amber-300/95 tracking-tight">
+                          Pic {preset.numbers}
+                        </span>
                       </div>
-                      {isSelected && (
-                        <div className="absolute top-1 right-1 w-4 h-4 rounded-full bg-blue-600 text-white flex items-center justify-center">
-                          <Check className="w-2.5 h-2.5" />
+                      {isSelected ? (
+                        <div className="absolute top-1 right-1 w-4 h-4 rounded-full bg-blue-600 text-white flex items-center justify-center shadow-md">
+                          <Check className="w-2.5 h-2.5 stroke-[3]" />
+                        </div>
+                      ) : (
+                        <div className="absolute top-1 right-1 px-1 py-0.5 rounded bg-black/50 text-[7px] text-white/90 font-semibold backdrop-blur-xs">
+                          #{preset.numbers.split(',')[0].trim()}
                         </div>
                       )}
                     </div>

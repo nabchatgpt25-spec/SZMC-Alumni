@@ -158,7 +158,7 @@ export const FACTORY_DEFAULT_SITE_CONFIG: SiteConfig = {
     family: 5000,
     student: 1500,
   },
-  reunionBannerUrl: 'https://images.unsplash.com/photo-1540575467063-178a50c2df87?w=1600&auto=format&fit=crop&q=80',
+  reunionBannerUrl: '/assets/szmc/szmc_day_1.jpg',
 
   bankName: 'Sonali Bank PLC',
   bankAccountName: 'SZMC Alumni Association Welfare Fund',

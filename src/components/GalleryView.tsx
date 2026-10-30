@@ -25,12 +25,21 @@ import {
   fetchGalleryAlbumsFromDb,
   createGalleryAlbumInDb,
   addPhotoToGalleryAlbumInDb,
+  createFeedPostInDb,
 } from '../services/supabaseService';
 import { realtimeManager } from '../services/supabaseRealtimeService';
 
-const STORAGE_KEY = 'ndc_alumni_gallery_albums';
+const STORAGE_KEY = 'szmc_alumni_gallery_albums_v2';
 
-export const GalleryView: React.FC = () => {
+export interface GalleryViewProps {
+  initialAlbumId?: number | null;
+  onBackToFeed?: () => void;
+}
+
+export const GalleryView: React.FC<GalleryViewProps> = ({
+  initialAlbumId = null,
+  onBackToFeed,
+}) => {
   // Load albums from localStorage or fallback to INITIAL_ALBUMS
   const [albums, setAlbums] = useState<GalleryAlbum[]>(() => {
     try {
@@ -38,7 +47,11 @@ export const GalleryView: React.FC = () => {
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
+          // Merge to ensure all preset initial albums exist
+          const map = new Map<string | number, GalleryAlbum>();
+          INITIAL_ALBUMS.forEach((a) => map.set(a.id, a));
+          parsed.forEach((a: GalleryAlbum) => map.set(a.id, a));
+          return Array.from(map.values());
         }
       }
     } catch {
@@ -88,8 +101,23 @@ export const GalleryView: React.FC = () => {
     }
   }, [albums]);
 
-  // Selected Album for Showcase View
-  const [selectedAlbumId, setSelectedAlbumId] = useState<number | null>(null);
+  // Selected Album for Showcase View (supports initialAlbumId from Feed "See Album" click)
+  const [selectedAlbumId, setSelectedAlbumId] = useState<number | null>(() => {
+    if (initialAlbumId) return initialAlbumId;
+    if (typeof window !== 'undefined' && window.location.hash) {
+      const h = window.location.hash.replace('#', '');
+      if (h.startsWith('album-')) return Number(h.replace('album-', '')) || null;
+      if (h.startsWith('gallery:')) return Number(h.replace('gallery:', '')) || null;
+    }
+    return null;
+  });
+
+  useEffect(() => {
+    if (initialAlbumId) {
+      setSelectedAlbumId(initialAlbumId);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }, [initialAlbumId]);
 
   // Category and Search filter
   const [activeCategory, setActiveCategory] = useState<string>('all');
@@ -114,15 +142,22 @@ export const GalleryView: React.FC = () => {
   // Slideshow auto-play state
   const [isPlayingSlideshow, setIsPlayingSlideshow] = useState<boolean>(false);
 
-  // Active album being showcased
+  // Active album being showcased (matches numeric or string IDs)
   const activeAlbum = useMemo(() => {
-    return albums.find((a) => a.id === selectedAlbumId) || null;
+    if (!selectedAlbumId) return null;
+    return (
+      albums.find(
+        (a) => a.id === selectedAlbumId || Number(a.id) === Number(selectedAlbumId)
+      ) || null
+    );
   }, [albums, selectedAlbumId]);
 
   // Active photo set for lightbox
   const activeLightboxPhotos = useMemo(() => {
     if (!lightboxState.albumId) return [];
-    const alb = albums.find((a) => a.id === lightboxState.albumId);
+    const alb = albums.find(
+      (a) => a.id === lightboxState.albumId || Number(a.id) === Number(lightboxState.albumId)
+    );
     return alb ? alb.photos : [];
   }, [albums, lightboxState.albumId]);
 
@@ -167,12 +202,13 @@ export const GalleryView: React.FC = () => {
 
   // Handlers
   const handleCreateAlbum = async (newAlbum: GalleryAlbum) => {
-    // Optimistic UI insert
+    // 1. Optimistic UI insert
     setAlbums((prev) => [newAlbum, ...prev]);
     setSelectedAlbumId(newAlbum.id);
 
+    let realId: number | null = null;
     try {
-      const realId = await createGalleryAlbumInDb({
+      realId = await createGalleryAlbumInDb({
         title: newAlbum.title,
         description: newAlbum.description,
         category: newAlbum.category,
@@ -184,12 +220,67 @@ export const GalleryView: React.FC = () => {
 
       if (realId && realId !== newAlbum.id) {
         setAlbums((prev) =>
-          prev.map((a) => (a.id === newAlbum.id ? { ...a, id: realId } : a))
+          prev.map((a) => (a.id === newAlbum.id ? { ...a, id: realId! } : a))
         );
         setSelectedAlbumId(realId);
       }
     } catch (err) {
       console.warn('createGalleryAlbumInDb fallback:', err);
+    }
+
+    // 2. AUTOMATICALLY PUBLISH AS A PUBLIC FEED POST WITH "SEE ALBUM" ACTION
+    try {
+      const targetAlbumId = realId || newAlbum.id;
+      const photoUrls = newAlbum.photos?.map((p) => p.url).filter(Boolean) || [];
+      const imagesToPost = photoUrls.length > 0 ? photoUrls : [newAlbum.coverUrl];
+
+      const postContent = `📸 Added a new photo album: "${newAlbum.title}"\n\n${
+        newAlbum.description ? newAlbum.description + '\n\n' : ''
+      }Click "See Album" below to browse the complete album photographs in the gallery!\n[szmc_album_ref:${targetAlbumId}]`;
+
+      // A. Post to Express endpoint /api/posts for immediate availability to all users
+      try {
+        await fetch('/api/posts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            author_id: 10002,
+            content: postContent,
+            category: 'Reunion',
+            images: imagesToPost,
+            albumId: targetAlbumId,
+            albumTitle: newAlbum.title,
+            albumCategory: newAlbum.category,
+          }),
+        });
+      } catch (postFetchErr) {
+        console.warn('API /api/posts album post error:', postFetchErr);
+      }
+
+      // B. Also invoke Supabase DB helper
+      createFeedPostInDb({
+        content: postContent,
+        category: 'Reunion',
+        images: imagesToPost,
+      }).catch((sbErr) => console.warn('Supabase createFeedPostInDb notice:', sbErr));
+
+      // C. Dispatch event so FeedView instantly displays the new album post
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('szmc:album-posted', {
+            detail: {
+              albumId: targetAlbumId,
+              albumTitle: newAlbum.title,
+              category: newAlbum.category,
+              coverUrl: newAlbum.coverUrl,
+              images: imagesToPost,
+            },
+          })
+        );
+        window.dispatchEvent(new CustomEvent('szmc:refresh-feed'));
+      }
+    } catch (autoPostErr) {
+      console.warn('Auto-create public feed post for album notice:', autoPostErr);
     }
   };
 
@@ -262,7 +353,13 @@ export const GalleryView: React.FC = () => {
       <>
         <AlbumShowcaseView
           album={activeAlbum}
-          onBack={() => setSelectedAlbumId(null)}
+          onBack={() => {
+            setSelectedAlbumId(null);
+            if (typeof window !== 'undefined' && window.location.hash.startsWith('#album-')) {
+              window.location.hash = 'gallery';
+            }
+          }}
+          onBackToFeed={onBackToFeed}
           onOpenLightbox={(index) => {
             setLightboxState({
               isOpen: true,

@@ -40,7 +40,9 @@ import {
   GraduationCap,
   UserCheck,
   Calendar,
-  ChevronRight
+  ChevronRight,
+  Eye,
+  ArrowRight,
 } from 'lucide-react';
 import { PostItem, PostComment } from '../types';
 import { CreatePostModal } from './CreatePostModal';

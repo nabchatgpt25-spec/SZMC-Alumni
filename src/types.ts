@@ -309,6 +309,11 @@ export interface PostItem {
   isSaved?: boolean;
   isBatchmate?: boolean;
   isFriend?: boolean;
+  albumId?: number | string;
+  albumTitle?: string;
+  albumCoverUrl?: string;
+  albumCategory?: string;
+  albumPhotosCount?: number;
   pinned?: boolean;
   verified?: boolean;
   profession?: string;

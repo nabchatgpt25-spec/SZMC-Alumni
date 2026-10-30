@@ -817,7 +817,59 @@ app.get('/api/stream-groups', rateLimitGuard(120, 60_000), async (_req: Request,
 });
 
 // In-memory resilient fallback post store for zero-downtime posting
-const memoryPostsStore: any[] = [];
+const memoryPostsStore: any[] = [
+  {
+    id: 9001,
+    author_id: 10002,
+    userId: 10002,
+    fullName: 'SZMC Media & Cultural Archive',
+    avatarUrl: '/szmc-logo.png',
+    batchYear: 25,
+    author: 'SZMC Media & Cultural Archive',
+    authorAvatar: '/szmc-logo.png',
+    authorBatch: 25,
+    category: 'Reunion',
+    content: '📸 Added a new photo album: "SZMC Medical College Campus & Academic Facilities"\n\nIconic panoramic views of Shaheed Ziaur Rahman Medical College Bogura campus, hospital building, and green courtyards.\n\nClick "See Album" below to explore all high-resolution photos in the gallery!\n[szmc_album_ref:1]',
+    images: [
+      'https://hjuyiqyviohinbhzaipl.supabase.co/storage/v1/object/public/gallery/szmc/campus_1.jpg',
+      'https://hjuyiqyviohinbhzaipl.supabase.co/storage/v1/object/public/gallery/szmc/campus_2.jpg'
+    ],
+    videos: [],
+    likes_count: 48,
+    comments_count: 5,
+    is_pinned: false,
+    is_edited: false,
+    created_at: new Date(Date.now() - 3600000 * 2).toISOString(),
+    albumId: 1,
+    albumTitle: 'SZMC Medical College Campus & Academic Facilities',
+  },
+  {
+    id: 9002,
+    author_id: 10002,
+    userId: 10002,
+    fullName: 'SZMC Alumni Association',
+    avatarUrl: '/szmc-logo.png',
+    batchYear: 18,
+    author: 'SZMC Alumni Association',
+    authorAvatar: '/szmc-logo.png',
+    authorBatch: 18,
+    category: 'Reunion',
+    content: '📸 Added a new photo album: "SZMC Day Grand Annual Celebration & Alumni Gathering"\n\nAnnual 5th November SZMC Day celebrations, reunion rallies, student assemblies, and historic commemorative posters: "এসো স্মৃতির প্রাঙ্গণে মিলি প্রীতির বন্ধনে".\n\n[szmc_album_ref:2]',
+    images: [
+      'https://hjuyiqyviohinbhzaipl.supabase.co/storage/v1/object/public/gallery/szmc/szmc_day_1.jpg',
+      'https://hjuyiqyviohinbhzaipl.supabase.co/storage/v1/object/public/gallery/szmc/szmc_day_2.jpg',
+      'https://hjuyiqyviohinbhzaipl.supabase.co/storage/v1/object/public/gallery/szmc/szmc_day_3.jpg'
+    ],
+    videos: [],
+    likes_count: 82,
+    comments_count: 11,
+    is_pinned: false,
+    is_edited: false,
+    created_at: new Date(Date.now() - 3600000 * 5).toISOString(),
+    albumId: 2,
+    albumTitle: 'SZMC Day Grand Annual Celebration & Alumni Gathering',
+  },
+];
 
 // Quad Feed Posts - Resilient Server Proxy
 app.get('/api/posts', rateLimitGuard(120, 60_000), async (req: Request, res: Response) => {
@@ -3080,6 +3132,10 @@ app.get(['/szmc_full_schema.sql', '/download/szmc_full_schema.sql'], (_req: Requ
 // ---------------------------------------------------------------------------
 async function startServer() {
   const httpServer = createHttpServer(app);
+
+  // Serve static assets from public directory (images, fonts, favicons, logos)
+  const publicPath = path.resolve(__dirname, 'public');
+  app.use(express.static(publicPath));
 
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');

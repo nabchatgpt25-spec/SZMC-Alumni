@@ -25,6 +25,7 @@ import { GalleryAlbum, GalleryPhoto } from '../../types';
 interface AlbumShowcaseViewProps {
   album: GalleryAlbum;
   onBack: () => void;
+  onBackToFeed?: () => void;
   onOpenLightbox: (index: number) => void;
   onToggleLike: (photoId: string) => void;
   onRequestUpload: (albumId: number) => void;
@@ -34,6 +35,7 @@ interface AlbumShowcaseViewProps {
 export const AlbumShowcaseView: React.FC<AlbumShowcaseViewProps> = ({
   album,
   onBack,
+  onBackToFeed,
   onOpenLightbox,
   onToggleLike,
   onRequestUpload,
@@ -88,15 +90,27 @@ export const AlbumShowcaseView: React.FC<AlbumShowcaseViewProps> = ({
       {/* ------------------------------------------------------------- */}
       {/* 1. Breadcrumb & Navigation Bar */}
       {/* ------------------------------------------------------------- */}
-      <div className="flex items-center justify-between">
-        <button
-          type="button"
-          onClick={onBack}
-          className="inline-flex items-center gap-2 px-3.5 py-2 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 text-xs font-bold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors shadow-2xs cursor-pointer"
-        >
-          <ArrowLeft className="w-4 h-4 text-blue-600" />
-          <span>Back to All Albums</span>
-        </button>
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-2">
+          {onBackToFeed && (
+            <button
+              type="button"
+              onClick={onBackToFeed}
+              className="inline-flex items-center gap-2 px-3.5 py-2 rounded-2xl bg-blue-50 dark:bg-blue-950/60 border border-blue-200 dark:border-blue-800 text-xs font-bold text-blue-700 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-900/50 transition-colors shadow-2xs cursor-pointer"
+            >
+              <ArrowLeft className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+              <span>Back to Feed</span>
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onBack}
+            className="inline-flex items-center gap-2 px-3.5 py-2 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 text-xs font-bold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors shadow-2xs cursor-pointer"
+          >
+            <ArrowLeft className="w-4 h-4 text-slate-500" />
+            <span>All Albums</span>
+          </button>
+        </div>
 
         <div className="flex items-center gap-2">
           <span

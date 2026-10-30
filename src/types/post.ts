@@ -65,6 +65,11 @@ export interface PostItem {
   comments?: PostComment[];
   isBatchmate?: boolean;
   isFriend?: boolean;
+  albumId?: number | string;
+  albumTitle?: string;
+  albumCoverUrl?: string;
+  albumCategory?: string;
+  albumPhotosCount?: number;
   // Legacy compatibility fields
   author?: string;
   authorAvatar?: string;
