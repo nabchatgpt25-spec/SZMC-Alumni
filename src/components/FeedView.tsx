@@ -2110,23 +2110,6 @@ export const FeedView: React.FC<FeedViewProps> = ({
             <X className="w-3 h-3 text-slate-400 hover:text-rose-500" />
           </button>
         )}
-
-        {/* Video Auto-play Toggle */}
-        <button
-          type="button"
-          onClick={() => setAutoPlayOnScroll((prev) => !prev)}
-          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-2xl text-[11px] font-bold border transition-all cursor-pointer shrink-0 shadow-xs ml-auto ${
-            autoPlayOnScroll
-              ? 'bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800'
-              : 'bg-white dark:bg-slate-900 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-800'
-          }`}
-          title="Automatically play videos when scrolled into view and pause when scrolled away"
-        >
-          <Video className="w-3.5 h-3.5" />
-          <span className="hidden sm:inline">Auto-Video on Scroll:</span>
-          <span className="sm:hidden">Auto-Play:</span>
-          <span>{autoPlayOnScroll ? 'ON' : 'OFF'}</span>
-        </button>
       </div>
 
       {/* Posts Stream */}

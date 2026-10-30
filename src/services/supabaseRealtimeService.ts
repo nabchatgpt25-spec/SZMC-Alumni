@@ -331,6 +331,87 @@ class SupabaseRealtimeManager {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // 6. GALLERY ALBUMS & PHOTOS REALTIME CHANNEL
+  // ---------------------------------------------------------------------------
+  private galleryChannel: RealtimeChannel | null = null;
+  private galleryListeners = new Set<(event: any) => void>();
+
+  public subscribeToGallery(listener: (event: any) => void): () => void {
+    this.galleryListeners.add(listener);
+    if (!this.galleryChannel && isSupabaseConfigured) {
+      try {
+        this.galleryChannel = supabase
+          .channel('realtime:gallery')
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'gallery_albums' }, (payload) => {
+            this.galleryListeners.forEach((cb) => cb({ table: 'gallery_albums', payload }));
+          })
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'gallery_photos' }, (payload) => {
+            this.galleryListeners.forEach((cb) => cb({ table: 'gallery_photos', payload }));
+          })
+          .subscribe();
+      } catch (err) {
+        console.warn('Realtime gallery subscription warning:', err);
+      }
+    }
+    return () => {
+      this.galleryListeners.delete(listener);
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // 7. MENTORSHIP REALTIME CHANNEL
+  // ---------------------------------------------------------------------------
+  private mentorshipChannel: RealtimeChannel | null = null;
+  private mentorshipListeners = new Set<(event: any) => void>();
+
+  public subscribeToMentorship(listener: (event: any) => void): () => void {
+    this.mentorshipListeners.add(listener);
+    if (!this.mentorshipChannel && isSupabaseConfigured) {
+      try {
+        this.mentorshipChannel = supabase
+          .channel('realtime:mentorship')
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'mentorship_requests' }, (payload) => {
+            this.mentorshipListeners.forEach((cb) => cb({ table: 'mentorship_requests', payload }));
+          })
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'mentor_offers' }, (payload) => {
+            this.mentorshipListeners.forEach((cb) => cb({ table: 'mentor_offers', payload }));
+          })
+          .subscribe();
+      } catch (err) {
+        console.warn('Realtime mentorship subscription warning:', err);
+      }
+    }
+    return () => {
+      this.mentorshipListeners.delete(listener);
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // 8. CAREERS REALTIME CHANNEL
+  // ---------------------------------------------------------------------------
+  private careersChannel: RealtimeChannel | null = null;
+  private careersListeners = new Set<(event: any) => void>();
+
+  public subscribeToCareers(listener: (event: any) => void): () => void {
+    this.careersListeners.add(listener);
+    if (!this.careersChannel && isSupabaseConfigured) {
+      try {
+        this.careersChannel = supabase
+          .channel('realtime:careers')
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'career_opportunities' }, (payload) => {
+            this.careersListeners.forEach((cb) => cb({ table: 'career_opportunities', payload }));
+          })
+          .subscribe();
+      } catch (err) {
+        console.warn('Realtime careers subscription warning:', err);
+      }
+    }
+    return () => {
+      this.careersListeners.delete(listener);
+    };
+  }
+
   private initSharedChannels() {
     this.ensureFeedChannel();
     this.ensureBloodChannel();
@@ -340,3 +421,4 @@ class SupabaseRealtimeManager {
 }
 
 export const realtimeManager = new SupabaseRealtimeManager();
+

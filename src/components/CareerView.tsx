@@ -26,6 +26,7 @@ import {
   applyToCareerOpportunity,
   deleteCareerOpportunity,
 } from '../services/careerService';
+import { realtimeManager } from '../services/supabaseRealtimeService';
 
 interface CurrentUser {
   id: number;
@@ -92,7 +93,7 @@ export const CareerView: React.FC<CareerViewProps> = ({
     return 'Alumnus';
   }, [currentUser]);
 
-  // Load opportunities on mount and sync with events
+  // Load opportunities on mount and sync with events & Supabase Realtime
   useEffect(() => {
     const refreshData = () => {
       setOpportunities(loadCareerOpportunities());
@@ -101,9 +102,12 @@ export const CareerView: React.FC<CareerViewProps> = ({
 
     window.addEventListener('careers_updated', refreshData);
     window.addEventListener('storage', refreshData);
+    const unsubRealtime = realtimeManager.subscribeToCareers(refreshData);
+
     return () => {
       window.removeEventListener('careers_updated', refreshData);
       window.removeEventListener('storage', refreshData);
+      unsubRealtime();
     };
   }, []);
 

@@ -1,5 +1,6 @@
 import { MentorshipCategory, MentorshipRequest, MentorOffer, MentorshipAnswer } from '../types/mentorship';
 import { notifyMentorshipQuestion, notifyMentorshipAnswer } from '../utils/notificationService';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
 
 const REQUESTS_STORAGE_KEY = 'mentorship_requests_v1';
 const MENTORS_STORAGE_KEY = 'mentorship_mentors_v1';
@@ -127,8 +128,130 @@ const INITIAL_MENTORSHIP_REQUESTS: MentorshipRequest[] = [
   },
 ];
 
+let isRequestsSyncing = false;
+async function syncMentorshipRequestsWithBackend() {
+  if (isRequestsSyncing) return;
+  isRequestsSyncing = true;
+  try {
+    let remoteData: any[] | null = null;
+    if (isSupabaseConfigured) {
+      try {
+        const { data, error } = await supabase
+          .from('mentorship_requests')
+          .select('*')
+          .order('created_at', { ascending: false });
+        if (!error && data && data.length > 0) {
+          remoteData = data.map((r: any) => ({
+            id: String(r.id),
+            userId: Number(r.user_id),
+            userName: r.user_name,
+            userBatch: r.user_batch,
+            userAvatar: r.user_avatar,
+            topic: r.topic,
+            question: r.question,
+            contactInfo: r.contact_info,
+            targetMentorId: r.target_mentor_id,
+            targetMentorName: r.target_mentor_name,
+            status: r.status,
+            answers: Array.isArray(r.answers) ? r.answers : [],
+            createdAt: r.created_at,
+          }));
+        }
+      } catch {}
+    }
+
+    if (!remoteData) {
+      const resp = await fetch('/api/mentorship/requests');
+      if (resp.ok) {
+        const json = await resp.json();
+        if (Array.isArray(json.requests) && json.requests.length > 0) {
+          remoteData = json.requests;
+        }
+      }
+    }
+
+    if (remoteData && remoteData.length > 0) {
+      const current = loadMentorshipRequests();
+      const map = new Map<string, MentorshipRequest>();
+      remoteData.forEach((r) => map.set(r.id, r));
+      current.forEach((r) => {
+        if (!map.has(r.id)) map.set(r.id, r);
+      });
+      const merged = Array.from(map.values());
+      localStorage.setItem(REQUESTS_STORAGE_KEY, JSON.stringify(merged));
+      window.dispatchEvent(new CustomEvent('mentorship_requests_updated', { detail: merged }));
+    }
+  } catch (err) {
+    console.warn('Mentorship requests sync notice:', err);
+  } finally {
+    isRequestsSyncing = false;
+  }
+}
+
+let isMentorsSyncing = false;
+async function syncMentorsWithBackend() {
+  if (isMentorsSyncing) return;
+  isMentorsSyncing = true;
+  try {
+    let remoteData: any[] | null = null;
+    if (isSupabaseConfigured) {
+      try {
+        const { data, error } = await supabase
+          .from('mentor_offers')
+          .select('*')
+          .order('created_at', { ascending: false });
+        if (!error && data && data.length > 0) {
+          remoteData = data.map((m: any) => ({
+            id: String(m.id),
+            userId: Number(m.user_id),
+            fullName: m.full_name,
+            batchYear: Number(m.batch_year),
+            avatarUrl: m.avatar_url,
+            category: m.category,
+            expertise: m.expertise,
+            shortDescription: m.short_description,
+            institution: m.institution,
+            position: m.position,
+            contactPreference: m.contact_preference,
+            createdAt: m.created_at,
+          }));
+        }
+      } catch {}
+    }
+
+    if (!remoteData) {
+      const resp = await fetch('/api/mentorship/mentors');
+      if (resp.ok) {
+        const json = await resp.json();
+        if (Array.isArray(json.mentors) && json.mentors.length > 0) {
+          remoteData = json.mentors;
+        }
+      }
+    }
+
+    if (remoteData && remoteData.length > 0) {
+      const current = loadMentorOffers();
+      const map = new Map<string, MentorOffer>();
+      remoteData.forEach((m) => map.set(m.id, m));
+      current.forEach((m) => {
+        if (!map.has(m.id)) map.set(m.id, m);
+      });
+      const merged = Array.from(map.values());
+      localStorage.setItem(MENTORS_STORAGE_KEY, JSON.stringify(merged));
+      window.dispatchEvent(new CustomEvent('mentors_updated', { detail: merged }));
+    }
+  } catch (err) {
+    console.warn('Mentors sync notice:', err);
+  } finally {
+    isMentorsSyncing = false;
+  }
+}
+
 export const loadMentorshipRequests = (): MentorshipRequest[] => {
   if (typeof window === 'undefined') return INITIAL_MENTORSHIP_REQUESTS;
+  // Trigger background sync with Supabase for real-time fresh updates
+  void syncMentorshipRequestsWithBackend();
+
   try {
     const raw = localStorage.getItem(REQUESTS_STORAGE_KEY);
     if (raw) {
@@ -179,6 +302,56 @@ export const createMentorshipRequest = (
   const updated = [newReq, ...current];
   saveMentorshipRequests(updated);
 
+  // Asynchronously persist to Supabase & Backend
+  const payload = {
+    id: tempId,
+    userId: user.id,
+    userName: user.name || 'SZMC Doctor',
+    userBatch: user.batch ?? null,
+    userAvatar: user.avatar,
+    topic,
+    question: question.trim(),
+    contactInfo: user.contact?.trim() || null,
+    targetMentorId: !Number.isNaN(targetIdNum) && targetIdNum > 0 ? targetIdNum : null,
+    targetMentorName: targetMentor?.name || null,
+  };
+
+  if (isSupabaseConfigured) {
+    (async () => {
+      try {
+        const { error } = await supabase
+          .from('mentorship_requests')
+          .insert({
+            id: tempId,
+            user_id: user.id,
+            user_name: payload.userName,
+            user_batch: payload.userBatch,
+            user_avatar: payload.userAvatar,
+            topic: payload.topic,
+            question: payload.question,
+            contact_info: payload.contactInfo,
+            target_mentor_id: payload.targetMentorId,
+            target_mentor_name: payload.targetMentorName,
+            status: 'open',
+            answers: [],
+          });
+        if (error) throw error;
+      } catch {
+        fetch('/api/mentorship/requests', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        }).catch((e) => console.warn('Backend proxy mentorship request fallback failed:', e));
+      }
+    })();
+  } else {
+    fetch('/api/mentorship/requests', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).catch((e) => console.warn('Backend proxy mentorship request fallback failed:', e));
+  }
+
   if (!Number.isNaN(targetIdNum) && targetIdNum > 0) {
     notifyMentorshipQuestion({
       mentorId: targetIdNum,
@@ -228,6 +401,22 @@ export const addMentorshipAnswer = (
 
   saveMentorshipRequests(updated);
 
+  // Asynchronously persist to Supabase & Backend
+  const payload = {
+    mentorId: mentor.id,
+    mentorName: mentor.name,
+    mentorBatch: mentor.batch ?? null,
+    mentorAvatar: mentor.avatar,
+    mentorProfession: mentor.profession,
+    answerText: answerText.trim(),
+  };
+
+  fetch(`/api/mentorship/requests/${encodeURIComponent(requestId)}/answers`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  }).catch((e) => console.warn('Backend proxy mentorship answer notice:', e));
+
   if (targetReq && targetReq.userId) {
     notifyMentorshipAnswer({
       requesterId: targetReq.userId,
@@ -245,6 +434,8 @@ export const addMentorshipAnswer = (
 
 export const loadMentorOffers = (): MentorOffer[] => {
   if (typeof window === 'undefined') return INITIAL_MENTOR_OFFERS;
+  void syncMentorsWithBackend();
+
   try {
     const raw = localStorage.getItem(MENTORS_STORAGE_KEY);
     if (raw) {
@@ -288,5 +479,14 @@ export const registerMentorOffer = (
   }
 
   saveMentorOffers(updated);
+
+  // Persist to Supabase & Backend
+  fetch('/api/mentorship/mentors', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(newOffer),
+  }).catch((e) => console.warn('Backend proxy mentor offer notice:', e));
+
   return newOffer;
 };
+

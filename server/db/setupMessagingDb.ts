@@ -576,7 +576,148 @@ BEGIN
   RETURN announcement_conv_id;
 END;
 $$;
+
+-- 14. MENTORSHIP & CAREER OPPORTUNITIES SYSTEM
+CREATE TABLE IF NOT EXISTS public.mentorship_requests (
+  id TEXT PRIMARY KEY,
+  user_id BIGINT NULL,
+  user_name TEXT NOT NULL,
+  user_batch INTEGER NULL,
+  user_avatar TEXT NULL,
+  topic TEXT NOT NULL DEFAULT 'Medical',
+  question TEXT NOT NULL,
+  contact_info TEXT NULL,
+  target_mentor_id BIGINT NULL,
+  target_mentor_name TEXT NULL,
+  status TEXT NOT NULL DEFAULT 'open',
+  answers JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS public.mentor_offers (
+  id TEXT PRIMARY KEY,
+  user_id BIGINT NULL,
+  full_name TEXT NOT NULL,
+  batch_year INTEGER NULL,
+  avatar_url TEXT NULL,
+  category TEXT NOT NULL DEFAULT 'Medical',
+  expertise TEXT NOT NULL,
+  short_description TEXT NOT NULL,
+  institution TEXT NULL,
+  position TEXT NULL,
+  contact_preference TEXT NOT NULL DEFAULT 'WhatsApp',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS public.career_opportunities (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  company TEXT NOT NULL,
+  location TEXT NOT NULL,
+  type TEXT NOT NULL DEFAULT 'job',
+  description TEXT NOT NULL,
+  poster_id BIGINT NULL,
+  poster_name TEXT NOT NULL,
+  poster_batch TEXT NULL,
+  poster_avatar TEXT NULL,
+  poster_email TEXT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  applicants JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 15. DUAL-SCHEMA COLUMN HARMONIZATION (Ensures zero errors whether 001 or full_schema was run)
+DO $$
+BEGIN
+  -- gallery_albums columns
+  ALTER TABLE public.gallery_albums ADD COLUMN IF NOT EXISTS cover_url TEXT;
+  ALTER TABLE public.gallery_albums ADD COLUMN IF NOT EXISTS cover_photo_url TEXT;
+  ALTER TABLE public.gallery_albums ADD COLUMN IF NOT EXISTS event_date_label TEXT;
+  ALTER TABLE public.gallery_albums ADD COLUMN IF NOT EXISTS photos_count INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE public.gallery_albums ADD COLUMN IF NOT EXISTS is_published BOOLEAN NOT NULL DEFAULT TRUE;
+
+  -- gallery_photos columns
+  ALTER TABLE public.gallery_photos ADD COLUMN IF NOT EXISTS url TEXT;
+  ALTER TABLE public.gallery_photos ADD COLUMN IF NOT EXISTS photo_url TEXT;
+  ALTER TABLE public.gallery_photos ADD COLUMN IF NOT EXISTS caption TEXT;
+  ALTER TABLE public.gallery_photos ADD COLUMN IF NOT EXISTS tags TEXT[] NOT NULL DEFAULT '{}';
+  ALTER TABLE public.gallery_photos ADD COLUMN IF NOT EXISTS media_type TEXT NOT NULL DEFAULT 'image';
+  ALTER TABLE public.gallery_photos ADD COLUMN IF NOT EXISTS file_size TEXT;
+  ALTER TABLE public.gallery_photos ADD COLUMN IF NOT EXISTS likes_count INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE public.gallery_photos ADD COLUMN IF NOT EXISTS is_approved BOOLEAN NOT NULL DEFAULT TRUE;
+
+  -- post_comments columns
+  ALTER TABLE public.post_comments ADD COLUMN IF NOT EXISTS author_id BIGINT;
+  ALTER TABLE public.post_comments ADD COLUMN IF NOT EXISTS user_id BIGINT;
+
+  -- blood_requests columns
+  ALTER TABLE public.blood_requests ADD COLUMN IF NOT EXISTS units_required SMALLINT;
+  ALTER TABLE public.blood_requests ADD COLUMN IF NOT EXISTS units_needed SMALLINT;
+  ALTER TABLE public.blood_requests ADD COLUMN IF NOT EXISTS hospital_name TEXT;
+  ALTER TABLE public.blood_requests ADD COLUMN IF NOT EXISTS hospital TEXT;
+  ALTER TABLE public.blood_requests ADD COLUMN IF NOT EXISTS emergency_level TEXT;
+  ALTER TABLE public.blood_requests ADD COLUMN IF NOT EXISTS urgency TEXT;
+  ALTER TABLE public.blood_requests ADD COLUMN IF NOT EXISTS required_datetime TIMESTAMPTZ;
+  ALTER TABLE public.blood_requests ADD COLUMN IF NOT EXISTS required_date DATE;
+  ALTER TABLE public.blood_requests ADD COLUMN IF NOT EXISTS description TEXT;
+  ALTER TABLE public.blood_requests ADD COLUMN IF NOT EXISTS medical_reason TEXT;
+  ALTER TABLE public.blood_requests ADD COLUMN IF NOT EXISTS contact_method TEXT;
+  ALTER TABLE public.blood_requests ADD COLUMN IF NOT EXISTS contact_number TEXT;
+  ALTER TABLE public.blood_requests ADD COLUMN IF NOT EXISTS coordination_ref TEXT;
+  ALTER TABLE public.blood_requests ADD COLUMN IF NOT EXISTS patient_relation TEXT;
+
+  -- blood_donors columns
+  ALTER TABLE public.blood_donors ADD COLUMN IF NOT EXISTS is_available BOOLEAN DEFAULT TRUE;
+  ALTER TABLE public.blood_donors ADD COLUMN IF NOT EXISTS availability TEXT DEFAULT 'available';
+  ALTER TABLE public.blood_donors ADD COLUMN IF NOT EXISTS full_name TEXT;
+  ALTER TABLE public.blood_donors ADD COLUMN IF NOT EXISTS phone_number TEXT;
+  ALTER TABLE public.blood_donors ADD COLUMN IF NOT EXISTS user_id BIGINT;
+  ALTER TABLE public.blood_donors ADD COLUMN IF NOT EXISTS profile_id BIGINT;
+  ALTER TABLE public.blood_donors ADD COLUMN IF NOT EXISTS preferred_area TEXT;
+  ALTER TABLE public.blood_donors ADD COLUMN IF NOT EXISTS emergency_alert_preference TEXT;
+  ALTER TABLE public.blood_donors ADD COLUMN IF NOT EXISTS donation_history JSONB NOT NULL DEFAULT '[]'::jsonb;
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
+
+-- 16. PERMISSIVE YET SECURE GRANTS & RLS FOR EXPANDED MODULES
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.mentorship_requests TO anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.mentor_offers TO anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.career_opportunities TO anon, authenticated;
+
+ALTER TABLE public.mentorship_requests ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.mentor_offers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.career_opportunities ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "mentorship_requests_all" ON public.mentorship_requests;
+CREATE POLICY "mentorship_requests_all" ON public.mentorship_requests FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "mentor_offers_all" ON public.mentor_offers;
+CREATE POLICY "mentor_offers_all" ON public.mentor_offers FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "career_opportunities_all" ON public.career_opportunities;
+CREATE POLICY "career_opportunities_all" ON public.career_opportunities FOR ALL USING (true) WITH CHECK (true);
+
+-- 17. ENABLE REALTIME REPLICATION FOR ACTIVE MODULES
+DO $$
+BEGIN
+  ALTER PUBLICATION supabase_realtime ADD TABLE public.posts;
+  ALTER PUBLICATION supabase_realtime ADD TABLE public.post_comments;
+  ALTER PUBLICATION supabase_realtime ADD TABLE public.post_likes;
+  ALTER PUBLICATION supabase_realtime ADD TABLE public.saved_posts;
+  ALTER PUBLICATION supabase_realtime ADD TABLE public.gallery_albums;
+  ALTER PUBLICATION supabase_realtime ADD TABLE public.gallery_photos;
+  ALTER PUBLICATION supabase_realtime ADD TABLE public.blood_requests;
+  ALTER PUBLICATION supabase_realtime ADD TABLE public.blood_donors;
+  ALTER PUBLICATION supabase_realtime ADD TABLE public.mentorship_requests;
+  ALTER PUBLICATION supabase_realtime ADD TABLE public.mentor_offers;
+  ALTER PUBLICATION supabase_realtime ADD TABLE public.career_opportunities;
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
 `;
+
 
 export async function attemptBootstrapMessagingTables(): Promise<{
   success: boolean;

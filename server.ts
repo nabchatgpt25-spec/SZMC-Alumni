@@ -955,6 +955,935 @@ app.post('/api/posts', rateLimitGuard(40, 60_000), async (req: Request, res: Res
   }
 });
 
+// Post Likes - High Performance Supabase Storage
+app.post('/api/posts/:id/like', rateLimitGuard(60, 60_000), async (req: Request, res: Response) => {
+  try {
+    const postId = Number(req.params.id);
+    const userId = Number(req.body.userId || req.body.user_id || 1);
+
+    let liked = false;
+    let likesCount = 0;
+
+    if (isSupabaseServerConfigured) {
+      try {
+        const { data: existing } = await supabaseServer
+          .from('post_likes')
+          .select('id')
+          .eq('post_id', postId)
+          .eq('user_id', userId)
+          .maybeSingle();
+
+        if (existing) {
+          await supabaseServer.from('post_likes').delete().eq('id', existing.id);
+          liked = false;
+        } else {
+          await supabaseServer.from('post_likes').insert({ post_id: postId, user_id: userId });
+          liked = true;
+        }
+
+        const { count } = await supabaseServer
+          .from('post_likes')
+          .select('id', { count: 'exact', head: true })
+          .eq('post_id', postId);
+
+        likesCount = count || 0;
+        await supabaseServer.from('posts').update({ likes_count: likesCount }).eq('id', postId);
+      } catch (err) {
+        console.warn('Supabase post_like toggle notice:', err);
+      }
+    }
+
+    // Keep memoryPostsStore in sync
+    const memPost = memoryPostsStore.find((p) => p.id === postId);
+    if (memPost) {
+      memPost.likes_count = likesCount || (liked ? (memPost.likes_count || 0) + 1 : Math.max(0, (memPost.likes_count || 1) - 1));
+      memPost.likes = memPost.likes_count;
+      memPost.liked = liked;
+      memPost.likedByMe = liked;
+    }
+
+    return res.json({ success: true, liked, likesCount: likesCount || memPost?.likes_count || (liked ? 1 : 0) });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to toggle like' });
+  }
+});
+
+// Post Comments - Dual Column Supabase Storage (author_id & user_id)
+app.post('/api/posts/:id/comment', rateLimitGuard(60, 60_000), async (req: Request, res: Response) => {
+  try {
+    const postId = Number(req.params.id);
+    const userId = Number(req.body.userId || req.body.user_id || req.body.author_id || 1);
+    const content = String(req.body.content || '').trim();
+
+    if (!content) {
+      return res.status(400).json({ error: 'Comment content cannot be empty' });
+    }
+
+    let insertedComment: any = null;
+
+    if (isSupabaseServerConfigured) {
+      try {
+        // Try with user_id first, fallback to author_id
+        const payload: any = { post_id: postId, content };
+        payload.user_id = userId;
+        payload.author_id = userId;
+
+        const { data, error } = await supabaseServer
+          .from('post_comments')
+          .insert(payload)
+          .select('*')
+          .single();
+
+        if (!error && data) {
+          insertedComment = data;
+        } else {
+          // If inserting both failed due to strict column check, try user_id alone then author_id alone
+          const try1 = await supabaseServer.from('post_comments').insert({ post_id: postId, user_id: userId, content }).select('*').single();
+          if (!try1.error && try1.data) {
+            insertedComment = try1.data;
+          } else {
+            const try2 = await supabaseServer.from('post_comments').insert({ post_id: postId, author_id: userId, content }).select('*').single();
+            if (!try2.error && try2.data) insertedComment = try2.data;
+          }
+        }
+
+        // Increment comments_count on post
+        const { count } = await supabaseServer
+          .from('post_comments')
+          .select('id', { count: 'exact', head: true })
+          .eq('post_id', postId);
+
+        if (typeof count === 'number') {
+          await supabaseServer.from('posts').update({ comments_count: count }).eq('id', postId);
+        }
+      } catch (err) {
+        console.warn('Supabase comment insert notice:', err);
+      }
+    }
+
+    if (!insertedComment) {
+      insertedComment = {
+        id: Date.now(),
+        post_id: postId,
+        user_id: userId,
+        author_id: userId,
+        content,
+        created_at: new Date().toISOString(),
+      };
+    }
+
+    const memPost = memoryPostsStore.find((p) => p.id === postId);
+    if (memPost) {
+      memPost.comments_count = (memPost.comments_count || 0) + 1;
+      if (!Array.isArray(memPost.comments)) memPost.comments = [];
+      memPost.comments.push({
+        id: insertedComment.id,
+        postId,
+        userId,
+        fullName: 'You',
+        avatarUrl: '/assets/aistudio/images__1__2778177d.png',
+        content,
+        likesCount: 0,
+        createdAt: insertedComment.created_at || new Date().toISOString(),
+      });
+    }
+
+    return res.status(201).json({ success: true, comment: insertedComment });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to add comment' });
+  }
+});
+
+// Gallery Albums & Photos - High Resilient Supabase Storage
+const memoryGalleryAlbums: any[] = [];
+
+app.get('/api/gallery/albums', rateLimitGuard(60, 60_000), async (_req: Request, res: Response) => {
+  try {
+    if (isSupabaseServerConfigured) {
+      try {
+        const { data: albums, error } = await supabaseServer
+          .from('gallery_albums')
+          .select('*, gallery_photos(*)')
+          .order('created_at', { ascending: false });
+
+        if (!error && albums && albums.length > 0) {
+          const formatted = albums.map((a: any) => {
+            const rawPhotos = a.gallery_photos || [];
+            const photos = rawPhotos.map((p: any) => ({
+              id: p.id,
+              url: p.url || p.photo_url || a.cover_url || a.cover_photo_url,
+              caption: p.caption || '',
+              category: a.category,
+              batchYear: p.batch_year || a.batch_year,
+              year: String(a.batch_year || 2026),
+              uploaderName: 'SZMC Alumnus',
+              likes: Number(p.likes_count) || 0,
+              liked: false,
+              tags: Array.isArray(p.tags) ? p.tags : [],
+              mediaType: p.media_type || 'image',
+              fileSize: p.file_size || '1.2 MB',
+            }));
+            return {
+              id: Number(a.id),
+              title: a.title,
+              description: a.description || '',
+              category: a.category,
+              date: a.event_date_label || '2026',
+              location: a.location || 'SZMC Campus, Silimpur, Bogura',
+              batchYear: a.batch_year || 0,
+              photosCount: photos.length || a.photos_count || 1,
+              coverUrl: a.cover_url || a.cover_photo_url || (photos[0]?.url ?? '/assets/aistudio/images__1__2778177d.png'),
+              photos,
+            };
+          });
+          return res.json({ albums: formatted });
+        }
+      } catch (err) {
+        console.warn('Supabase fetch gallery albums notice:', err);
+      }
+    }
+    return res.json({ albums: memoryGalleryAlbums });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to fetch gallery albums' });
+  }
+});
+
+app.post('/api/gallery/albums', rateLimitGuard(30, 60_000), async (req: Request, res: Response) => {
+  try {
+    const { title, description, category, eventDateLabel, location, batchYear, coverUrl, createdById } = req.body;
+    if (!title || !title.trim()) {
+      return res.status(400).json({ error: 'Album title is required' });
+    }
+
+    const validCat = ['reunion', 'academic', 'campus', 'sports', 'cultural', 'milestone'];
+    const normCat = (category || 'campus').toLowerCase();
+    const finalCat = validCat.includes(normCat) ? normCat : 'campus';
+    const finalCover = coverUrl || 'https://images.unsplash.com/photo-1511795409834-ef04bbd61622?w=1000&auto=format&fit=crop&q=80';
+
+    let insertedAlbumId: number | null = null;
+
+    if (isSupabaseServerConfigured) {
+      try {
+        const payload: any = {
+          title: title.trim(),
+          description: description || 'SZMC Album',
+          category: finalCat,
+          event_date_label: eventDateLabel || 'Recent',
+          location: location || 'SZMC Campus, Silimpur, Bogura',
+          batch_year: Number(batchYear) || null,
+          cover_url: finalCover,
+          cover_photo_url: finalCover,
+          is_published: true,
+          photos_count: 1,
+        };
+        if (createdById) payload.created_by_id = Number(createdById);
+
+        const { data, error } = await supabaseServer.from('gallery_albums').insert(payload).select('id').single();
+        if (!error && data?.id) {
+          insertedAlbumId = Number(data.id);
+          // Insert cover photo into gallery_photos
+          await supabaseServer.from('gallery_photos').insert({
+            album_id: insertedAlbumId,
+            url: finalCover,
+            photo_url: finalCover,
+            caption: `${title.trim()} - Cover Photo`,
+            is_approved: true,
+          });
+        }
+      } catch (err) {
+        console.warn('Supabase create album notice:', err);
+      }
+    }
+
+    const finalId = insertedAlbumId || Date.now();
+    const albumObj = {
+      id: finalId,
+      title: title.trim(),
+      description: description || 'A collection of SZMC memories.',
+      category: finalCat,
+      date: eventDateLabel || 'Recent',
+      location: location || 'SZMC Campus, Silimpur, Bogura',
+      batchYear: Number(batchYear) || 0,
+      photosCount: 1,
+      coverUrl: finalCover,
+      photos: [
+        {
+          id: `p-${Date.now()}`,
+          url: finalCover,
+          caption: `${title.trim()} - Cover Photo`,
+          uploaderName: 'SZMC Alumnus',
+          batchYear: Number(batchYear) || 0,
+          uploadedAt: 'Today',
+          likesCount: 1,
+          likedByMe: true,
+          tags: ['Cover', finalCat],
+        },
+      ],
+    };
+
+    memoryGalleryAlbums.unshift(albumObj);
+    return res.status(201).json({ success: true, album: albumObj });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to create album' });
+  }
+});
+
+app.post('/api/gallery/photos', rateLimitGuard(60, 60_000), async (req: Request, res: Response) => {
+  try {
+    const { albumId, url, photoUrl, caption, batchYear, tags, mediaType, fileSize, uploaderId } = req.body;
+    const finalUrl = url || photoUrl;
+    if (!albumId || !finalUrl) {
+      return res.status(400).json({ error: 'albumId and url are required' });
+    }
+
+    let insertedPhotoId: string | null = null;
+
+    if (isSupabaseServerConfigured) {
+      try {
+        const payload: any = {
+          album_id: Number(albumId),
+          url: finalUrl,
+          photo_url: finalUrl,
+          caption: caption || null,
+          batch_year: Number(batchYear) || null,
+          tags: Array.isArray(tags) ? tags : [],
+          media_type: mediaType || 'image',
+          file_size: fileSize || null,
+          is_approved: true,
+        };
+        if (uploaderId) payload.uploader_id = Number(uploaderId);
+
+        const { data, error } = await supabaseServer.from('gallery_photos').insert(payload).select('id').single();
+        if (!error && data?.id) {
+          insertedPhotoId = String(data.id);
+          // Increment album photos_count
+          const { count } = await supabaseServer.from('gallery_photos').select('id', { count: 'exact', head: true }).eq('album_id', Number(albumId));
+          if (typeof count === 'number') {
+            await supabaseServer.from('gallery_albums').update({ photos_count: count, photo_count: count }).eq('id', Number(albumId));
+          }
+        }
+      } catch (err) {
+        console.warn('Supabase add gallery photo notice:', err);
+      }
+    }
+
+    const photoObj = {
+      id: insertedPhotoId || `p-${Date.now()}`,
+      albumId: Number(albumId),
+      url: finalUrl,
+      caption: caption || '',
+      batchYear: Number(batchYear) || 0,
+      tags: Array.isArray(tags) ? tags : [],
+      mediaType: mediaType || 'image',
+      fileSize: fileSize || '1.2 MB',
+    };
+
+    return res.status(201).json({ success: true, photo: photoObj });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to add photo' });
+  }
+});
+
+// Blood Network - High Resilient Supabase Storage
+const memoryBloodRequests: any[] = [];
+const memoryBloodDonors: any[] = [];
+
+app.get('/api/blood/requests', rateLimitGuard(60, 60_000), async (_req: Request, res: Response) => {
+  try {
+    if (isSupabaseServerConfigured) {
+      try {
+        const { data: rows, error } = await supabaseServer
+          .from('blood_requests')
+          .select(`
+            *,
+            requester:alumni_profiles!blood_requests_requester_id_fkey(id, full_name, avatar_url, batch_year, phone),
+            blood_request_responses(id, donor_id, status, response_note, created_at, donor:blood_donors(user_id, blood_group))
+          `)
+          .order('created_at', { ascending: false });
+
+        if (!error && rows && rows.length > 0) {
+          const mapped = rows.map((r: any) => ({
+            id: String(r.id),
+            bloodGroup: r.blood_group,
+            unitsRequired: r.units_required || r.units_needed || 1,
+            unitsFulfilled: r.units_fulfilled || 0,
+            hospitalName: r.hospital_name || r.hospital || 'SZMC Hospital Bogura',
+            hospitalArea: r.hospital_area || r.hospital_address || 'Silimpur',
+            city: r.city || r.district || 'Bogura',
+            requiredDateTime: r.required_datetime || r.required_date || new Date().toISOString(),
+            emergencyLevel: (r.emergency_level || r.urgency || 'urgent').toLowerCase(),
+            contactMethod: r.contact_method || 'Portal Secure Coordination',
+            contactPhone: r.coordination_ref || r.contact_number || r.requester?.phone || '',
+            description: r.description || r.medical_reason || 'Urgent requirement for patient care at SZMCH.',
+            patientRelation: r.patient_relation || 'Alumnus Relative',
+            requesterId: r.requester_id,
+            requesterName: r.requester?.full_name || r.patient_name || 'SZMC Doctor',
+            requesterAvatar: r.requester?.avatar_url || '/assets/aistudio/images__1__2778177d.png',
+            requesterBatch: r.requester?.batch_year || 20,
+            status: r.status || 'Active',
+            createdAt: r.created_at,
+            updatedAt: r.updated_at,
+            responses: (r.blood_request_responses || []).map((resp: any) => ({
+              id: String(resp.id),
+              requestId: String(r.id),
+              donorUserId: resp.donor_id || resp.donor?.user_id || 0,
+              donorName: 'Registered Doctor Donor',
+              donorAvatar: '/assets/aistudio/images__1__2778177d.png',
+              donorBatchYear: 20,
+              donorBloodGroup: resp.donor?.blood_group || r.blood_group,
+              donorPreferredArea: r.hospital_area || 'Bogura',
+              respondedAt: resp.created_at,
+              status: resp.status || 'offered',
+              note: resp.response_note || '',
+            })),
+          }));
+          return res.json({ requests: mapped });
+        }
+      } catch (err) {
+        console.warn('Supabase fetch blood requests notice:', err);
+      }
+    }
+    return res.json({ requests: memoryBloodRequests });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to fetch blood requests' });
+  }
+});
+
+app.post('/api/blood/requests', rateLimitGuard(30, 60_000), async (req: Request, res: Response) => {
+  try {
+    const {
+      requesterId,
+      bloodGroup,
+      unitsRequired,
+      hospitalName,
+      hospitalArea,
+      city,
+      requiredDateTime,
+      emergencyLevel,
+      contactMethod,
+      contactPhone,
+      description,
+      patientRelation,
+    } = req.body;
+
+    let insertedId: string | null = null;
+
+    if (isSupabaseServerConfigured) {
+      try {
+        const payload: any = {
+          requester_id: Number(requesterId) || 1,
+          blood_group: bloodGroup,
+          units_required: Number(unitsRequired) || 1,
+          units_needed: Number(unitsRequired) || 1,
+          hospital_name: hospitalName || 'SZMC Hospital',
+          hospital: hospitalName || 'SZMC Hospital',
+          hospital_area: hospitalArea || 'Silimpur',
+          hospital_address: hospitalArea || 'Silimpur',
+          city: city || 'Bogura',
+          district: city || 'Bogura',
+          required_datetime: requiredDateTime ? new Date(requiredDateTime).toISOString() : new Date().toISOString(),
+          required_date: requiredDateTime ? new Date(requiredDateTime).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
+          emergency_level: (emergencyLevel || 'urgent').toLowerCase(),
+          urgency: (emergencyLevel || 'urgent').toLowerCase(),
+          contact_method: contactMethod || 'Portal Secure Coordination',
+          contact_number: contactPhone || 'Through Portal',
+          coordination_ref: contactPhone || 'Through Portal',
+          description: description || 'Urgent blood requirement for clinical patient care.',
+          medical_reason: description || 'Urgent blood requirement.',
+          patient_name: patientRelation || 'Patient',
+          patient_relation: patientRelation || 'Relative',
+          status: 'Active',
+        };
+
+        const { data, error } = await supabaseServer.from('blood_requests').insert(payload).select('id').single();
+        if (!error && data?.id) {
+          insertedId = String(data.id);
+        }
+      } catch (err) {
+        console.warn('Supabase insert blood request notice:', err);
+      }
+    }
+
+    const finalId = insertedId || `req_${Date.now()}`;
+    const newReq = {
+      id: finalId,
+      bloodGroup,
+      unitsRequired: Number(unitsRequired) || 1,
+      unitsFulfilled: 0,
+      hospitalName,
+      hospitalArea,
+      city: city || 'Bogura',
+      requiredDateTime: requiredDateTime || new Date().toISOString(),
+      emergencyLevel: emergencyLevel || 'urgent',
+      contactMethod: contactMethod || 'Portal Secure Coordination',
+      contactPhone: contactPhone || '',
+      description: description || '',
+      patientRelation: patientRelation || 'Relative',
+      requesterId: Number(requesterId) || 1,
+      requesterName: req.body.requesterName || 'SZMC Doctor',
+      requesterAvatar: req.body.requesterAvatar || '/assets/aistudio/images__1__2778177d.png',
+      requesterBatch: Number(req.body.requesterBatch) || 20,
+      status: 'Active',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      responses: [],
+    };
+
+    memoryBloodRequests.unshift(newReq);
+    return res.status(201).json({ success: true, request: newReq });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to create blood request' });
+  }
+});
+
+app.post('/api/blood/donors', rateLimitGuard(30, 60_000), async (req: Request, res: Response) => {
+  try {
+    const { userId, bloodGroup, isRegisteredDonor, availability, preferredArea, city, lastDonationDate, emergencyAlertPreference } = req.body;
+    const donorUserId = Number(userId || 1);
+
+    if (isSupabaseServerConfigured) {
+      try {
+        const payload: any = {
+          user_id: donorUserId,
+          profile_id: donorUserId,
+          blood_group: bloodGroup,
+          is_registered_donor: Boolean(isRegisteredDonor),
+          availability: availability || 'available',
+          preferred_area: preferredArea || 'Bogura',
+          city: city || 'Bogura',
+          last_donation_date: lastDonationDate || null,
+          emergency_alert_preference: emergencyAlertPreference || 'all_urgent',
+          updated_at: new Date().toISOString(),
+        };
+
+        await supabaseServer.from('blood_donors').upsert(payload);
+        await supabaseServer.from('alumni_profiles').update({
+          blood_group: bloodGroup,
+          is_registered_donor: Boolean(isRegisteredDonor),
+        }).eq('id', donorUserId);
+      } catch (err) {
+        console.warn('Supabase upsert blood donor notice:', err);
+      }
+    }
+
+    const donorObj = {
+      userId: donorUserId,
+      bloodGroup,
+      isRegisteredDonor: Boolean(isRegisteredDonor),
+      availability: availability || 'available',
+      preferredArea: preferredArea || 'Bogura',
+      city: city || 'Bogura',
+      lastDonationDate,
+      emergencyAlertPreference: emergencyAlertPreference || 'all_urgent',
+      updatedAt: new Date().toISOString(),
+    };
+
+    const exIdx = memoryBloodDonors.findIndex((d) => d.userId === donorUserId);
+    if (exIdx >= 0) memoryBloodDonors[exIdx] = donorObj;
+    else memoryBloodDonors.push(donorObj);
+
+    return res.json({ success: true, donor: donorObj });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to register blood donor' });
+  }
+});
+
+// Mentorship System - High Resilient Supabase Storage
+const memoryMentorshipRequests: any[] = [];
+const memoryMentorOffers: any[] = [];
+
+app.get('/api/mentorship/requests', rateLimitGuard(60, 60_000), async (_req: Request, res: Response) => {
+  try {
+    if (isSupabaseServerConfigured) {
+      try {
+        const { data: rows, error } = await supabaseServer
+          .from('mentorship_requests')
+          .select('*')
+          .order('created_at', { ascending: false });
+
+        if (!error && rows && rows.length > 0) {
+          const mapped = rows.map((r: any) => ({
+            id: String(r.id),
+            userId: Number(r.user_id),
+            userName: r.user_name,
+            userBatch: r.user_batch,
+            userAvatar: r.user_avatar,
+            topic: r.topic,
+            question: r.question,
+            contactInfo: r.contact_info,
+            targetMentorId: r.target_mentor_id,
+            targetMentorName: r.target_mentor_name,
+            status: r.status,
+            answers: Array.isArray(r.answers) ? r.answers : [],
+            createdAt: r.created_at,
+          }));
+          return res.json({ requests: mapped });
+        }
+      } catch (err) {
+        console.warn('Supabase fetch mentorship requests notice:', err);
+      }
+    }
+    return res.json({ requests: memoryMentorshipRequests });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to fetch mentorship requests' });
+  }
+});
+
+app.post('/api/mentorship/requests', rateLimitGuard(30, 60_000), async (req: Request, res: Response) => {
+  try {
+    const { id, userId, userName, userBatch, userAvatar, topic, question, contactInfo, targetMentorId, targetMentorName } = req.body;
+    if (!question || !question.trim()) {
+      return res.status(400).json({ error: 'Question text is required' });
+    }
+
+    const reqId = id || `req-${Date.now()}`;
+    const newReq = {
+      id: reqId,
+      user_id: Number(userId) || null,
+      user_name: userName || 'SZMC Doctor',
+      user_batch: Number(userBatch) || null,
+      user_avatar: userAvatar || '/assets/aistudio/images__1__2778177d.png',
+      topic: topic || 'Medical',
+      question: question.trim(),
+      contact_info: contactInfo || null,
+      target_mentor_id: targetMentorId ? Number(targetMentorId) : null,
+      target_mentor_name: targetMentorName || null,
+      status: 'open',
+      answers: [],
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    if (isSupabaseServerConfigured) {
+      try {
+        await supabaseServer.from('mentorship_requests').insert(newReq);
+      } catch (err) {
+        console.warn('Supabase insert mentorship request notice:', err);
+      }
+    }
+
+    memoryMentorshipRequests.unshift({
+      ...newReq,
+      userId: newReq.user_id,
+      userName: newReq.user_name,
+      userBatch: newReq.user_batch,
+      userAvatar: newReq.user_avatar,
+      contactInfo: newReq.contact_info,
+      targetMentorId: newReq.target_mentor_id,
+      targetMentorName: newReq.target_mentor_name,
+    });
+
+    return res.status(201).json({ success: true, request: newReq });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to create mentorship request' });
+  }
+});
+
+app.post('/api/mentorship/requests/:id/answers', rateLimitGuard(30, 60_000), async (req: Request, res: Response) => {
+  try {
+    const reqId = req.params.id;
+    const { mentorId, mentorName, mentorBatch, mentorAvatar, mentorProfession, answerText } = req.body;
+
+    if (!answerText || !answerText.trim()) {
+      return res.status(400).json({ error: 'Answer text is required' });
+    }
+
+    const newAns = {
+      id: `ans-${Date.now()}`,
+      mentorId: Number(mentorId) || 1,
+      mentorName: mentorName || 'SZMC Mentor',
+      mentorBatch: Number(mentorBatch) || null,
+      mentorAvatar: mentorAvatar || '/assets/aistudio/images__1__2778177d.png',
+      mentorProfession: mentorProfession || 'Consultant Physician',
+      answerText: answerText.trim(),
+      createdAt: 'Just now',
+    };
+
+    if (isSupabaseServerConfigured) {
+      try {
+        const { data: current } = await supabaseServer.from('mentorship_requests').select('answers').eq('id', reqId).maybeSingle();
+        const currentAnswers = Array.isArray(current?.answers) ? current.answers : [];
+        const updatedAnswers = [...currentAnswers, newAns];
+
+        await supabaseServer
+          .from('mentorship_requests')
+          .update({ answers: updatedAnswers, status: 'answered', updated_at: new Date().toISOString() })
+          .eq('id', reqId);
+      } catch (err) {
+        console.warn('Supabase add mentorship answer notice:', err);
+      }
+    }
+
+    const memReq = memoryMentorshipRequests.find((r) => r.id === reqId);
+    if (memReq) {
+      if (!Array.isArray(memReq.answers)) memReq.answers = [];
+      memReq.answers.push(newAns);
+      memReq.status = 'answered';
+    }
+
+    return res.status(201).json({ success: true, answer: newAns });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to add answer' });
+  }
+});
+
+app.get('/api/mentorship/mentors', rateLimitGuard(60, 60_000), async (_req: Request, res: Response) => {
+  try {
+    if (isSupabaseServerConfigured) {
+      try {
+        const { data: rows, error } = await supabaseServer
+          .from('mentor_offers')
+          .select('*')
+          .order('created_at', { ascending: false });
+
+        if (!error && rows && rows.length > 0) {
+          const mapped = rows.map((m: any) => ({
+            id: String(m.id),
+            userId: Number(m.user_id),
+            fullName: m.full_name,
+            batchYear: Number(m.batch_year),
+            avatarUrl: m.avatar_url,
+            category: m.category,
+            expertise: m.expertise,
+            shortDescription: m.short_description,
+            institution: m.institution,
+            position: m.position,
+            contactPreference: m.contact_preference,
+            createdAt: m.created_at,
+          }));
+          return res.json({ mentors: mapped });
+        }
+      } catch (err) {
+        console.warn('Supabase fetch mentors notice:', err);
+      }
+    }
+    return res.json({ mentors: memoryMentorOffers });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to fetch mentors' });
+  }
+});
+
+app.post('/api/mentorship/mentors', rateLimitGuard(30, 60_000), async (req: Request, res: Response) => {
+  try {
+    const { id, userId, fullName, batchYear, avatarUrl, category, expertise, shortDescription, institution, position, contactPreference } = req.body;
+    if (!fullName || !expertise) {
+      return res.status(400).json({ error: 'Full name and expertise are required' });
+    }
+
+    const mentorId = id || `mentor-${Date.now()}`;
+    const payload = {
+      id: mentorId,
+      user_id: Number(userId) || null,
+      full_name: fullName.trim(),
+      batch_year: Number(batchYear) || null,
+      avatar_url: avatarUrl || '/assets/aistudio/images__1__2778177d.png',
+      category: category || 'Medical',
+      expertise: expertise.trim(),
+      short_description: shortDescription || '',
+      institution: institution || 'SZMC Hospital',
+      position: position || 'Doctor',
+      contact_preference: contactPreference || 'WhatsApp',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    if (isSupabaseServerConfigured) {
+      try {
+        await supabaseServer.from('mentor_offers').upsert(payload);
+      } catch (err) {
+        console.warn('Supabase register mentor notice:', err);
+      }
+    }
+
+    const mentorObj = {
+      id: mentorId,
+      userId: payload.user_id,
+      fullName: payload.full_name,
+      batchYear: payload.batch_year,
+      avatarUrl: payload.avatar_url,
+      category: payload.category,
+      expertise: payload.expertise,
+      shortDescription: payload.short_description,
+      institution: payload.institution,
+      position: payload.position,
+      contactPreference: payload.contact_preference,
+      createdAt: payload.created_at,
+    };
+
+    const exIdx = memoryMentorOffers.findIndex((m) => m.fullName.toLowerCase() === mentorObj.fullName.toLowerCase());
+    if (exIdx >= 0) memoryMentorOffers[exIdx] = mentorObj;
+    else memoryMentorOffers.unshift(mentorObj);
+
+    return res.status(201).json({ success: true, mentor: mentorObj });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to register mentor' });
+  }
+});
+
+// Career & Job Opportunities System - High Resilient Supabase Storage
+const memoryCareerOpportunities: any[] = [];
+
+app.get('/api/careers', rateLimitGuard(60, 60_000), async (_req: Request, res: Response) => {
+  try {
+    if (isSupabaseServerConfigured) {
+      try {
+        const { data: rows, error } = await supabaseServer
+          .from('career_opportunities')
+          .select('*')
+          .order('created_at', { ascending: false });
+
+        if (!error && rows && rows.length > 0) {
+          const mapped = rows.map((c: any) => ({
+            id: String(c.id),
+            title: c.title,
+            company: c.company,
+            location: c.location,
+            type: c.type,
+            description: c.description,
+            posterId: Number(c.poster_id),
+            posterName: c.poster_name,
+            posterBatch: c.poster_batch,
+            posterAvatar: c.poster_avatar,
+            posterEmail: c.poster_email,
+            status: c.status,
+            applicants: Array.isArray(c.applicants) ? c.applicants : [],
+            createdAt: c.created_at,
+          }));
+          return res.json({ opportunities: mapped });
+        }
+      } catch (err) {
+        console.warn('Supabase fetch careers notice:', err);
+      }
+    }
+    return res.json({ opportunities: memoryCareerOpportunities });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to fetch career opportunities' });
+  }
+});
+
+app.post('/api/careers', rateLimitGuard(30, 60_000), async (req: Request, res: Response) => {
+  try {
+    const { id, title, company, location, type, description, posterId, posterName, posterBatch, posterAvatar, posterEmail } = req.body;
+    if (!title || !company) {
+      return res.status(400).json({ error: 'Title and company/institution are required' });
+    }
+
+    const oppId = id || `opp-${Date.now()}`;
+    const payload = {
+      id: oppId,
+      title: title.trim(),
+      company: company.trim(),
+      location: location || 'Bogura / Hybrid',
+      type: type || 'job',
+      description: description || '',
+      poster_id: Number(posterId) || null,
+      poster_name: posterName || 'SZMC Doctor',
+      poster_batch: posterBatch || 'Alumnus',
+      poster_avatar: posterAvatar || '/assets/aistudio/images__1__2778177d.png',
+      poster_email: posterEmail || null,
+      status: 'active',
+      applicants: [],
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    if (isSupabaseServerConfigured) {
+      try {
+        await supabaseServer.from('career_opportunities').insert(payload);
+      } catch (err) {
+        console.warn('Supabase insert career notice:', err);
+      }
+    }
+
+    const oppObj = {
+      id: oppId,
+      title: payload.title,
+      company: payload.company,
+      location: payload.location,
+      type: payload.type,
+      description: payload.description,
+      posterId: payload.poster_id,
+      posterName: payload.poster_name,
+      posterBatch: payload.poster_batch,
+      posterAvatar: payload.poster_avatar,
+      posterEmail: payload.poster_email,
+      status: payload.status,
+      applicants: [],
+      createdAt: payload.created_at,
+    };
+
+    memoryCareerOpportunities.unshift(oppObj);
+    return res.status(201).json({ success: true, opportunity: oppObj });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to create career opportunity' });
+  }
+});
+
+app.post('/api/careers/:id/apply', rateLimitGuard(30, 60_000), async (req: Request, res: Response) => {
+  try {
+    const oppId = req.params.id;
+    const { applicantId, applicantName, applicantBatch, applicantAvatar, applicantEmail, applicantPhone } = req.body;
+
+    const newApp = {
+      id: `app-${Date.now()}`,
+      applicantId: Number(applicantId) || 1,
+      applicantName: applicantName || 'SZMC Applicant',
+      applicantBatch: applicantBatch || '',
+      applicantAvatar: applicantAvatar || '/assets/aistudio/images__1__2778177d.png',
+      applicantEmail: applicantEmail || '',
+      applicantPhone: applicantPhone || '',
+      appliedAt: new Date().toISOString(),
+    };
+
+    let updatedApplicants: any[] = [newApp];
+
+    if (isSupabaseServerConfigured) {
+      try {
+        const { data: current } = await supabaseServer.from('career_opportunities').select('applicants').eq('id', oppId).maybeSingle();
+        const existing = Array.isArray(current?.applicants) ? current.applicants : [];
+        updatedApplicants = [newApp, ...existing];
+
+        await supabaseServer
+          .from('career_opportunities')
+          .update({ applicants: updatedApplicants, updated_at: new Date().toISOString() })
+          .eq('id', oppId);
+      } catch (err) {
+        console.warn('Supabase apply career notice:', err);
+      }
+    }
+
+    const memOpp = memoryCareerOpportunities.find((o) => o.id === oppId);
+    if (memOpp) {
+      if (!Array.isArray(memOpp.applicants)) memOpp.applicants = [];
+      memOpp.applicants.unshift(newApp);
+    }
+
+    return res.status(201).json({ success: true, application: newApp });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to apply for opportunity' });
+  }
+});
+
+app.delete('/api/careers/:id', rateLimitGuard(30, 60_000), async (req: Request, res: Response) => {
+  try {
+    const oppId = req.params.id;
+    if (isSupabaseServerConfigured) {
+      try {
+        await supabaseServer.from('career_opportunities').delete().eq('id', oppId);
+      } catch (err) {
+        console.warn('Supabase delete career notice:', err);
+      }
+    }
+    const idx = memoryCareerOpportunities.findIndex((o) => o.id === oppId);
+    if (idx >= 0) memoryCareerOpportunities.splice(idx, 1);
+
+    return res.json({ success: true, message: 'Career opportunity deleted successfully' });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to delete opportunity' });
+  }
+});
+
+
 // ===========================================================================
 // MESSAGING & CHAT SETTINGS API ROUTES (SUPABASE + RESILIENT STORE)
 // ===========================================================================

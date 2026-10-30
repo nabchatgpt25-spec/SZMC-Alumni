@@ -26,6 +26,7 @@ import {
   createGalleryAlbumInDb,
   addPhotoToGalleryAlbumInDb,
 } from '../services/supabaseService';
+import { realtimeManager } from '../services/supabaseRealtimeService';
 
 const STORAGE_KEY = 'ndc_alumni_gallery_albums';
 
@@ -46,27 +47,36 @@ export const GalleryView: React.FC = () => {
     return INITIAL_ALBUMS;
   });
 
-  // Save to localStorage on change and load from Supabase on mount
+  // Save to localStorage on change and load from Supabase on mount & Realtime
   useEffect(() => {
     let isMounted = true;
-    fetchGalleryAlbumsFromDb()
-      .then((dbAlbums) => {
-        if (isMounted && dbAlbums && dbAlbums.length > 0) {
-          setAlbums((prev) => {
-            const map = new Map<string | number, GalleryAlbum>();
-            dbAlbums.forEach((a) => map.set(a.id, a));
-            prev.forEach((a) => {
-              if (!map.has(a.id)) map.set(a.id, a);
+    const loadAlbums = () => {
+      fetchGalleryAlbumsFromDb()
+        .then((dbAlbums) => {
+          if (isMounted && dbAlbums && dbAlbums.length > 0) {
+            setAlbums((prev) => {
+              const map = new Map<string | number, GalleryAlbum>();
+              dbAlbums.forEach((a) => map.set(a.id, a));
+              prev.forEach((a) => {
+                if (!map.has(a.id)) map.set(a.id, a);
+              });
+              return Array.from(map.values());
             });
-            return Array.from(map.values());
-          });
-        }
-      })
-      .catch((err) => {
-        console.warn('GalleryView: Supabase albums fetch fallback:', err);
-      });
+          }
+        })
+        .catch((err) => {
+          console.warn('GalleryView: Supabase albums fetch fallback:', err);
+        });
+    };
+
+    loadAlbums();
+    const unsubRealtime = realtimeManager.subscribeToGallery(() => {
+      loadAlbums();
+    });
+
     return () => {
       isMounted = false;
+      unsubRealtime();
     };
   }, []);
 
@@ -156,21 +166,31 @@ export const GalleryView: React.FC = () => {
   }, [albums]);
 
   // Handlers
-  const handleCreateAlbum = (newAlbum: GalleryAlbum) => {
-    createGalleryAlbumInDb({
-      title: newAlbum.title,
-      description: newAlbum.description,
-      category: newAlbum.category,
-      eventDateLabel: newAlbum.date,
-      location: newAlbum.location,
-      batchYear: newAlbum.batchYear,
-      coverUrl: newAlbum.coverUrl,
-    }).catch((err) => {
-      console.warn('createGalleryAlbumInDb fallback:', err);
-    });
-
+  const handleCreateAlbum = async (newAlbum: GalleryAlbum) => {
+    // Optimistic UI insert
     setAlbums((prev) => [newAlbum, ...prev]);
-    setSelectedAlbumId(newAlbum.id); // immediately navigate into showcase
+    setSelectedAlbumId(newAlbum.id);
+
+    try {
+      const realId = await createGalleryAlbumInDb({
+        title: newAlbum.title,
+        description: newAlbum.description,
+        category: newAlbum.category,
+        eventDateLabel: newAlbum.date,
+        location: newAlbum.location,
+        batchYear: newAlbum.batchYear,
+        coverUrl: newAlbum.coverUrl,
+      });
+
+      if (realId && realId !== newAlbum.id) {
+        setAlbums((prev) =>
+          prev.map((a) => (a.id === newAlbum.id ? { ...a, id: realId } : a))
+        );
+        setSelectedAlbumId(realId);
+      }
+    } catch (err) {
+      console.warn('createGalleryAlbumInDb fallback:', err);
+    }
   };
 
   const handleUploadPhotos = (albumId: number, newPhotos: GalleryPhoto[]) => {

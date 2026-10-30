@@ -1078,8 +1078,6 @@ export async function createBloodRequestInDb(params: {
   coordinationRef?: string;
   patientRelation?: string;
 }): Promise<string | null> {
-  if (!isSupabaseConfigured) return null;
-
   let requiredDate = new Date(params.requiredDateTime);
   if (Number.isNaN(requiredDate.getTime())) {
     requiredDate = new Date();
@@ -1099,36 +1097,63 @@ export async function createBloodRequestInDb(params: {
     ? params.contactMethod
     : 'Portal Secure Coordination';
 
-  try {
-    const { data, error } = await supabase
-      .from('blood_requests')
-      .insert({
-        requester_id: params.requesterId,
-        blood_group: params.bloodGroup,
-        units_required: params.unitsRequired,
-        hospital_name: params.hospitalName,
-        hospital_area: params.hospitalArea,
-        city: params.city || 'Dhaka',
-        required_datetime: requiredDate.toISOString(),
-        emergency_level: emergencyLevel,
-        contact_method: contactMethod,
-        coordination_ref: params.coordinationRef || null,
-        patient_relation: params.patientRelation || null,
-        description: params.description,
-        status: params.status,
-      })
-      .select('id')
-      .single();
+  const payload: any = {
+    requester_id: params.requesterId,
+    blood_group: params.bloodGroup,
+    units_required: params.unitsRequired,
+    units_needed: params.unitsRequired,
+    hospital_name: params.hospitalName,
+    hospital: params.hospitalName,
+    hospital_area: params.hospitalArea,
+    hospital_address: params.hospitalArea,
+    city: params.city || 'Bogura',
+    district: params.city || 'Bogura',
+    required_datetime: requiredDate.toISOString(),
+    required_date: requiredDate.toISOString().split('T')[0],
+    emergency_level: emergencyLevel,
+    urgency: emergencyLevel,
+    contact_method: contactMethod,
+    contact_number: params.coordinationRef || 'Through Portal',
+    coordination_ref: params.coordinationRef || null,
+    patient_relation: params.patientRelation || null,
+    patient_name: params.patientRelation || 'Patient',
+    description: params.description || 'Urgent blood requirement',
+    medical_reason: params.description || 'Urgent blood requirement',
+    status: params.status || 'Active',
+  };
 
-    if (error || !data?.id) {
-      console.warn('Failed to insert blood request:', error?.message);
-      return null;
+  if (isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from('blood_requests')
+        .insert(payload)
+        .select('id')
+        .single();
+
+      if (!error && data?.id) {
+        return String(data.id);
+      }
+    } catch (err) {
+      console.warn('Direct client blood request insert notice, using backend proxy:', err);
     }
-    return String(data.id);
-  } catch (err) {
-    console.warn('Failed to insert blood request:', err);
-    return null;
   }
+
+  // Resilient backend proxy fallback
+  try {
+    const resp = await fetch('/api/blood/requests', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (resp.ok) {
+      const body = await resp.json();
+      if (body.request?.id) return String(body.request.id);
+    }
+  } catch (proxyErr) {
+    console.warn('Backend proxy createBloodRequest failed:', proxyErr);
+  }
+
+  return null;
 }
 
 export async function registerBloodDonorInDb(params: {
@@ -1142,31 +1167,42 @@ export async function registerBloodDonorInDb(params: {
   emergencyAlertPreference: string;
   donationHistory?: BloodDonationHistoryItem[];
 }): Promise<boolean> {
-  if (!isSupabaseConfigured) return false;
+  const payload: any = {
+    user_id: params.userId,
+    profile_id: params.userId,
+    blood_group: params.bloodGroup,
+    is_registered_donor: params.isRegisteredDonor,
+    availability: params.availability,
+    preferred_area: params.preferredArea,
+    city: params.city,
+    last_donation_date: params.lastDonationDate || null,
+    emergency_alert_preference: params.emergencyAlertPreference,
+    donation_history: params.donationHistory || [],
+    updated_at: new Date().toISOString(),
+  };
 
-  try {
-    const { error } = await supabase.from('blood_donors').upsert({
-      user_id: params.userId,
-      blood_group: params.bloodGroup,
-      is_registered_donor: params.isRegisteredDonor,
-      availability: params.availability,
-      preferred_area: params.preferredArea,
-      city: params.city,
-      last_donation_date: params.lastDonationDate || null,
-      emergency_alert_preference: params.emergencyAlertPreference,
-      donation_history: params.donationHistory || [],
-      updated_at: new Date().toISOString(),
-    });
-
-    if (error) {
-      console.warn('Failed to upsert blood donor in Supabase:', error.message);
-      return false;
+  if (isSupabaseConfigured) {
+    try {
+      const { error } = await supabase.from('blood_donors').upsert(payload);
+      if (!error) return true;
+    } catch (err) {
+      console.warn('Direct client registerBloodDonor notice, using backend proxy:', err);
     }
-    return true;
-  } catch (err) {
-    console.warn('Failed to upsert blood donor in Supabase:', err);
-    return false;
   }
+
+  // Resilient backend proxy fallback
+  try {
+    const resp = await fetch('/api/blood/donors', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (resp.ok) return true;
+  } catch (proxyErr) {
+    console.warn('Backend proxy registerBloodDonor failed:', proxyErr);
+  }
+
+  return false;
 }
 
 // =============================================================================
@@ -1530,34 +1566,67 @@ export async function createGalleryAlbumInDb(params: {
   coverUrl: string;
   createdById?: number;
 }): Promise<number | null> {
-  if (!isSupabaseConfigured) return null;
-
-  const validCategories = ['reunion', 'academic', 'campus', 'convocation', 'sports', 'cultural', 'all'];
+  const validCategories = ['reunion', 'academic', 'campus', 'convocation', 'sports', 'cultural', 'all', 'milestone'];
   const normalizedCategory = (params.category || 'campus').toLowerCase();
   const category = validCategories.includes(normalizedCategory) ? normalizedCategory : 'campus';
 
-  try {
-    const { data, error } = await supabase
-      .from('gallery_albums')
-      .insert({
-        title: params.title,
-        description: params.description || null,
-        category: category,
-        event_date_label: params.eventDateLabel,
-        location: params.location || null,
-        batch_year: params.batchYear || null,
-        cover_url: params.coverUrl,
-        created_by_id: params.createdById || null,
-        is_published: true,
-      })
-      .select('id')
-      .single();
+  const payload: any = {
+    title: params.title.trim(),
+    description: params.description || null,
+    category: category,
+    event_date_label: params.eventDateLabel || 'Recent',
+    location: params.location || null,
+    batch_year: params.batchYear || null,
+    cover_url: params.coverUrl,
+    cover_photo_url: params.coverUrl,
+    is_published: true,
+    photos_count: 1,
+  };
+  if (params.createdById) payload.created_by_id = params.createdById;
 
-    if (error || !data) return null;
-    return Number(data.id);
-  } catch {
-    return null;
+  if (isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from('gallery_albums')
+        .insert(payload)
+        .select('id')
+        .single();
+
+      if (!error && data?.id) {
+        const newAlbumId = Number(data.id);
+        // Automatically save initial cover photo in gallery_photos
+        try {
+          await supabase.from('gallery_photos').insert({
+            album_id: newAlbumId,
+            url: params.coverUrl,
+            photo_url: params.coverUrl,
+            caption: `${params.title.trim()} - Cover Photo`,
+            is_approved: true,
+          });
+        } catch {}
+        return newAlbumId;
+      }
+    } catch (err) {
+      console.warn('Direct client createGalleryAlbum notice, using backend proxy:', err);
+    }
   }
+
+  // Resilient backend fallback
+  try {
+    const resp = await fetch('/api/gallery/albums', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (resp.ok) {
+      const body = await resp.json();
+      if (body.album?.id) return Number(body.album.id);
+    }
+  } catch (proxyErr) {
+    console.warn('Backend proxy createGalleryAlbum failed:', proxyErr);
+  }
+
+  return null;
 }
 
 export async function addPhotoToGalleryAlbumInDb(params: {
@@ -1570,30 +1639,49 @@ export async function addPhotoToGalleryAlbumInDb(params: {
   fileSize?: string;
   uploaderId?: number;
 }): Promise<string | null> {
-  if (!isSupabaseConfigured) return null;
+  const payload: any = {
+    album_id: params.albumId,
+    url: params.url,
+    photo_url: params.url,
+    caption: params.caption || null,
+    batch_year: params.batchYear || null,
+    tags: params.tags || [],
+    media_type: params.mediaType || 'image',
+    file_size: params.fileSize || null,
+    is_approved: true,
+  };
+  if (params.uploaderId) payload.uploader_id = params.uploaderId;
 
-  try {
-    const { data, error } = await supabase
-      .from('gallery_photos')
-      .insert({
-        album_id: params.albumId,
-        url: params.url,
-        caption: params.caption || null,
-        batch_year: params.batchYear || null,
-        tags: params.tags || [],
-        media_type: params.mediaType || 'image',
-        file_size: params.fileSize || null,
-        uploader_id: params.uploaderId || null,
-        is_approved: true,
-      })
-      .select('id')
-      .single();
+  if (isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from('gallery_photos')
+        .insert(payload)
+        .select('id')
+        .single();
 
-    if (error || !data) return null;
-    return String(data.id);
-  } catch {
-    return null;
+      if (!error && data?.id) return String(data.id);
+    } catch (err) {
+      console.warn('Direct client addPhotoToGalleryAlbum notice, using backend proxy:', err);
+    }
   }
+
+  // Resilient backend fallback
+  try {
+    const resp = await fetch('/api/gallery/photos', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (resp.ok) {
+      const body = await resp.json();
+      if (body.photo?.id) return String(body.photo.id);
+    }
+  } catch (proxyErr) {
+    console.warn('Backend proxy addPhotoToGalleryAlbum failed:', proxyErr);
+  }
+
+  return null;
 }
 
 // =============================================================================

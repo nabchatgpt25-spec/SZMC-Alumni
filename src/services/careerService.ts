@@ -1,10 +1,5 @@
-/**
- * Career Opportunities Service
- * Manages career postings, internships, referrals, and one-click applications.
- * Works seamlessly with localStorage and syncs with Supabase if configured.
- */
-
 import { notifyCareerApplication } from '../utils/notificationService';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
 
 export type CareerType = 'job' | 'internship' | 'referral';
 
@@ -122,8 +117,72 @@ const INITIAL_CAREER_OPPORTUNITIES: CareerOpportunity[] = [
   },
 ];
 
+let isCareersSyncing = false;
+async function syncCareersWithBackend() {
+  if (isCareersSyncing) return;
+  isCareersSyncing = true;
+  try {
+    let remoteData: any[] | null = null;
+    if (isSupabaseConfigured) {
+      try {
+        const { data, error } = await supabase
+          .from('career_opportunities')
+          .select('*')
+          .order('created_at', { ascending: false });
+
+        if (!error && data && data.length > 0) {
+          remoteData = data.map((c: any) => ({
+            id: String(c.id),
+            title: c.title,
+            company: c.company,
+            location: c.location,
+            type: c.type,
+            description: c.description,
+            posterId: Number(c.poster_id),
+            posterName: c.poster_name,
+            posterBatch: c.poster_batch,
+            posterAvatar: c.poster_avatar,
+            posterEmail: c.poster_email,
+            status: c.status,
+            applicants: Array.isArray(c.applicants) ? c.applicants : [],
+            createdAt: c.created_at,
+          }));
+        }
+      } catch {}
+    }
+
+    if (!remoteData) {
+      const resp = await fetch('/api/careers');
+      if (resp.ok) {
+        const json = await resp.json();
+        if (Array.isArray(json.opportunities) && json.opportunities.length > 0) {
+          remoteData = json.opportunities;
+        }
+      }
+    }
+
+    if (remoteData && remoteData.length > 0) {
+      const current = loadCareerOpportunities();
+      const map = new Map<string, CareerOpportunity>();
+      remoteData.forEach((opp) => map.set(opp.id, opp));
+      current.forEach((opp) => {
+        if (!map.has(opp.id)) map.set(opp.id, opp);
+      });
+      const merged = Array.from(map.values());
+      localStorage.setItem(CAREER_STORAGE_KEY, JSON.stringify(merged));
+      window.dispatchEvent(new CustomEvent('careers_updated', { detail: merged }));
+    }
+  } catch (err) {
+    console.warn('Career sync notice:', err);
+  } finally {
+    isCareersSyncing = false;
+  }
+}
+
 export const loadCareerOpportunities = (): CareerOpportunity[] => {
   if (typeof window === 'undefined') return INITIAL_CAREER_OPPORTUNITIES;
+  void syncCareersWithBackend();
+
   try {
     const raw = localStorage.getItem(CAREER_STORAGE_KEY);
     if (raw) {
@@ -163,6 +222,57 @@ export const createCareerOpportunity = (
 
   const updatedList = [newOpportunity, ...currentList];
   saveCareerOpportunities(updatedList);
+
+  // Asynchronously persist to Supabase & Backend proxy
+  const payload = {
+    id: tempId,
+    title: data.title,
+    company: data.company,
+    location: data.location,
+    type: data.type,
+    description: data.description,
+    posterId: data.posterId,
+    posterName: data.posterName,
+    posterBatch: data.posterBatch,
+    posterAvatar: data.posterAvatar,
+    posterEmail: data.posterEmail,
+  };
+
+  (async () => {
+    if (isSupabaseConfigured) {
+      try {
+        const { error } = await supabase
+          .from('career_opportunities')
+          .insert({
+            id: tempId,
+            title: payload.title,
+            company: payload.company,
+            location: payload.location,
+            type: payload.type,
+            description: payload.description,
+            poster_id: payload.posterId,
+            poster_name: payload.posterName,
+            poster_batch: payload.posterBatch,
+            poster_avatar: payload.posterAvatar,
+            poster_email: payload.posterEmail,
+            status: 'active',
+            applicants: [],
+          });
+        if (!error) return;
+      } catch {}
+    }
+
+    try {
+      await fetch('/api/careers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+    } catch (e) {
+      console.warn('Backend proxy create career notice:', e);
+    }
+  })();
+
   return newOpportunity;
 };
 
@@ -203,6 +313,22 @@ export const applyToCareerOpportunity = (
   currentList[index] = updatedTarget;
   saveCareerOpportunities(currentList);
 
+  // Asynchronously persist application to Supabase & Backend proxy
+  const payload = {
+    applicantId: applicant.applicantId,
+    applicantName: applicant.applicantName,
+    applicantBatch: applicant.applicantBatch,
+    applicantAvatar: applicant.applicantAvatar,
+    applicantEmail: applicant.applicantEmail,
+    applicantPhone: applicant.applicantPhone,
+  };
+
+  fetch(`/api/careers/${encodeURIComponent(opportunityId)}/apply`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  }).catch((e) => console.warn('Backend proxy apply career notice:', e));
+
   if (target.posterId && target.posterId > 0) {
     notifyCareerApplication({
       posterId: target.posterId,
@@ -234,5 +360,12 @@ export const deleteCareerOpportunity = (
 
   const updatedList = currentList.filter((item) => item.id !== opportunityId);
   saveCareerOpportunities(updatedList);
+
+  // Persist deletion to Supabase
+  fetch(`/api/careers/${encodeURIComponent(opportunityId)}`, {
+    method: 'DELETE',
+  }).catch((e) => console.warn('Backend proxy delete career notice:', e));
+
   return true;
 };
+

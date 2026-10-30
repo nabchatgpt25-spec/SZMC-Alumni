@@ -25,6 +25,7 @@ import {
   loadMentorOffers,
   registerMentorOffer,
 } from '../services/mentorshipService';
+import { realtimeManager } from '../services/supabaseRealtimeService';
 import { MentorshipCelebrationBanner } from './MentorshipCelebrationBanner';
 
 interface CurrentUser {
@@ -86,16 +87,23 @@ export const MentorshipView: React.FC<MentorshipViewProps> = ({
   const [answeringReqId, setAnsweringReqId] = useState<string | null>(null);
   const [answerInputText, setAnswerInputText] = useState('');
 
-  // Sync with events
+  // Sync with events and Supabase Realtime
   useEffect(() => {
     const handleMentorsUpdate = () => setMentors(loadMentorOffers());
     const handleRequestsUpdate = () => setRequests(loadMentorshipRequests());
 
     window.addEventListener('mentors_updated', handleMentorsUpdate);
     window.addEventListener('mentorship_requests_updated', handleRequestsUpdate);
+
+    const unsubRealtime = realtimeManager.subscribeToMentorship(() => {
+      setMentors(loadMentorOffers());
+      setRequests(loadMentorshipRequests());
+    });
+
     return () => {
       window.removeEventListener('mentors_updated', handleMentorsUpdate);
       window.removeEventListener('mentorship_requests_updated', handleRequestsUpdate);
+      unsubRealtime();
     };
   }, []);
 
