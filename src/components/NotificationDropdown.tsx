@@ -12,13 +12,22 @@ import {
   User,
   BellOff,
   Heart,
+  UserPlus,
+  UserCheck,
+  MessageSquare,
+  Sparkles,
 } from 'lucide-react';
-import { NotificationItem } from '../types/notification.types';
+import { NotificationItem, NotificationType } from '../types/notification.types';
 import {
   loadMergedNotifications,
   saveLocalNotifications,
 } from '../utils/notificationService';
-import { markNotificationReadInDb } from '../services/supabaseNotificationService';
+import {
+  markNotificationReadInDb,
+  markAllNotificationsReadInDb,
+  isSoundEnabledForUser,
+  fetchUnreadNotificationsFromDb,
+} from '../services/supabaseNotificationService';
 import { realtimeManager } from '../services/supabaseRealtimeService';
 import { playSound } from '../utils/audio';
 
@@ -40,11 +49,31 @@ export const NotificationDropdown: React.FC<NotificationDropdownProps> = ({
 
   const syncNotifications = () => {
     if (currentUserId) {
-      loadMergedNotifications(currentUserId)
-        .then((items) => {
-          if (items) setNotifications(items);
+      // First attempt unread notifications RPC directly
+      fetchUnreadNotificationsFromDb(currentUserId)
+        .then((unreads) => {
+          if (unreads && unreads.length > 0) {
+            // Merge with loaded full history
+            loadMergedNotifications(currentUserId)
+              .then((items) => {
+                if (items) setNotifications(items);
+              })
+              .catch(console.warn);
+          } else {
+            loadMergedNotifications(currentUserId)
+              .then((items) => {
+                if (items) setNotifications(items);
+              })
+              .catch(console.warn);
+          }
         })
-        .catch(console.warn);
+        .catch(() => {
+          loadMergedNotifications(currentUserId)
+            .then((items) => {
+              if (items) setNotifications(items);
+            })
+            .catch(console.warn);
+        });
     }
   };
 
@@ -53,13 +82,17 @@ export const NotificationDropdown: React.FC<NotificationDropdownProps> = ({
     window.addEventListener('ndc_notifications_updated', syncNotifications);
     window.addEventListener('storage', syncNotifications);
 
-    // Live WebSocket push subscription for instant notifications
+    // Live Realtime push subscription for my rows only (recipient_id = currentUserId)
     const unsubscribeRealtime = realtimeManager.subscribeToUserNotifications(
       currentUserId,
-      (newNotif) => {
-        try {
-          playSound('notification');
-        } catch {}
+      async (newNotif) => {
+        // Sound ONLY if user_message_settings.sound_enabled
+        const soundEnabled = await isSoundEnabledForUser(currentUserId);
+        if (soundEnabled) {
+          try {
+            playSound('notification');
+          } catch {}
+        }
         syncNotifications();
       }
     );
@@ -81,11 +114,9 @@ export const NotificationDropdown: React.FC<NotificationDropdownProps> = ({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const markAllAsRead = () => {
-    const next = notifications.map((n) => {
-      markNotificationReadInDb(n.id).catch(() => {});
-      return { ...n, unread: false };
-    });
+  const markAllAsRead = async () => {
+    await markAllNotificationsReadInDb(currentUserId);
+    const next = notifications.map((n) => ({ ...n, unread: false }));
     setNotifications(next);
     saveLocalNotifications(next);
   };
@@ -102,16 +133,89 @@ export const NotificationDropdown: React.FC<NotificationDropdownProps> = ({
       if (onNavigate) onNavigate('feed');
       return;
     }
-    if (item.targetRoute && onNavigate) {
-      onNavigate(item.targetRoute);
+    if (item.bloodRequestId) {
+      if (onNavigate) onNavigate('blood-network');
+      return;
+    }
+    if (item.type === 'new_message') {
+      if (onNavigate) onNavigate('messages');
+      return;
+    }
+    if (item.type === 'connection_request' || item.type === 'connection_accepted') {
+      if (onNavigate) onNavigate('directory');
+      return;
+    }
+    if (item.targetRoute) {
+      if (onNavigate) onNavigate(item.targetRoute);
+      return;
     }
   };
 
   const dismissNotificationItem = (e: React.MouseEvent, id: number) => {
     e.stopPropagation();
+    markNotificationReadInDb(id).catch(() => {});
     const next = notifications.filter((n) => n.id !== id);
     setNotifications(next);
     saveLocalNotifications(next);
+  };
+
+  // Canonical notification badge icon selector
+  const getNotificationIcon = (type: NotificationType) => {
+    switch (type) {
+      case 'post_like':
+      case 'like':
+        return <ThumbsUp className="w-2.5 h-2.5 fill-current" />;
+      case 'post_comment':
+      case 'comment':
+        return <MessageCircle className="w-2.5 h-2.5 fill-current" />;
+      case 'post_reaction':
+        return <Heart className="w-2.5 h-2.5 fill-current" />;
+      case 'connection_request':
+        return <UserPlus className="w-2.5 h-2.5" />;
+      case 'connection_accepted':
+        return <UserCheck className="w-2.5 h-2.5" />;
+      case 'new_message':
+        return <MessageSquare className="w-2.5 h-2.5" />;
+      case 'blood_request':
+      case 'blood':
+        return <Droplet className="w-2.5 h-2.5 fill-current" />;
+      case 'mentorship':
+        return <GraduationCap className="w-2.5 h-2.5" />;
+      case 'career':
+        return <Briefcase className="w-2.5 h-2.5" />;
+      case 'system':
+      default:
+        return <ShieldCheck className="w-2.5 h-2.5" />;
+    }
+  };
+
+  const getBadgeBg = (type: NotificationType) => {
+    switch (type) {
+      case 'post_like':
+      case 'like':
+        return 'bg-blue-600';
+      case 'post_comment':
+      case 'comment':
+        return 'bg-emerald-600';
+      case 'post_reaction':
+        return 'bg-amber-500';
+      case 'connection_request':
+        return 'bg-indigo-600';
+      case 'connection_accepted':
+        return 'bg-purple-600';
+      case 'new_message':
+        return 'bg-sky-600';
+      case 'blood_request':
+      case 'blood':
+        return 'bg-rose-600';
+      case 'mentorship':
+        return 'bg-amber-500';
+      case 'career':
+        return 'bg-emerald-600';
+      case 'system':
+      default:
+        return 'bg-slate-700';
+    }
   };
 
   return (
@@ -209,9 +313,7 @@ export const NotificationDropdown: React.FC<NotificationDropdownProps> = ({
             {notifications
               .filter((n) => notifFilter === 'all' || n.unread)
               .map((item) => {
-                const isLike = item.type === 'like';
-                const isComment = item.type === 'comment';
-                const isBlood = item.type === 'blood';
+                const isBlood = item.type === 'blood_request' || item.type === 'blood';
                 const isMentorship = item.type === 'mentorship';
                 const isCareer = item.type === 'career';
 
@@ -257,33 +359,11 @@ export const NotificationDropdown: React.FC<NotificationDropdownProps> = ({
 
                       {/* Mini Corner Badge */}
                       <div
-                        className={`absolute -bottom-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center text-white ring-2 ring-white dark:ring-slate-900 shadow-xs ${
-                          isLike
-                            ? 'bg-blue-600'
-                            : isComment
-                            ? 'bg-emerald-600'
-                            : isBlood
-                            ? 'bg-rose-600'
-                            : isMentorship
-                            ? 'bg-amber-500'
-                            : isCareer
-                            ? 'bg-emerald-600'
-                            : 'bg-indigo-600'
-                        }`}
+                        className={`absolute -bottom-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center text-white ring-2 ring-white dark:ring-slate-900 shadow-xs ${getBadgeBg(
+                          item.type
+                        )}`}
                       >
-                        {isLike ? (
-                          <ThumbsUp className="w-2.5 h-2.5 fill-current" />
-                        ) : isComment ? (
-                          <MessageCircle className="w-2.5 h-2.5 fill-current" />
-                        ) : isBlood ? (
-                          <Heart className="w-2.5 h-2.5 fill-current" />
-                        ) : isMentorship ? (
-                          <GraduationCap className="w-2.5 h-2.5" />
-                        ) : isCareer ? (
-                          <Briefcase className="w-2.5 h-2.5" />
-                        ) : (
-                          <ShieldCheck className="w-2.5 h-2.5" />
-                        )}
+                        {getNotificationIcon(item.type)}
                       </div>
                     </div>
 
@@ -295,8 +375,16 @@ export const NotificationDropdown: React.FC<NotificationDropdownProps> = ({
                             {item.actorName}
                           </span>
                         )}
-                        <span className={item.actorName ? 'text-slate-700 dark:text-slate-300' : 'font-semibold text-slate-900 dark:text-slate-100'}>
-                          {item.actorName ? item.title.replace(item.actorName, '').trim() || item.title : item.title}
+                        <span
+                          className={
+                            item.actorName
+                              ? 'text-slate-700 dark:text-slate-300'
+                              : 'font-semibold text-slate-900 dark:text-slate-100'
+                          }
+                        >
+                          {item.actorName
+                            ? item.title.replace(item.actorName, '').trim() || item.title
+                            : item.title}
                         </span>
                       </p>
                       {item.message && (

@@ -58,8 +58,6 @@ export const MessageSettingsModal: React.FC<MessageSettingsModalProps> = ({
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [copiedSql, setCopiedSql] = useState(false);
-  const [showSqlDrawer, setShowSqlDrawer] = useState(false);
 
   const [dbStatus, setDbStatus] = useState<{
     connected: boolean;
@@ -140,32 +138,6 @@ export const MessageSettingsModal: React.FC<MessageSettingsModalProps> = ({
     }
   };
 
-  const SQL_SNIPPET = `-- SZMC Alumni: User Message Settings & Conversations Schema
-CREATE TABLE IF NOT EXISTS public.user_message_settings (
-  profile_id BIGINT PRIMARY KEY,
-  who_can_message VARCHAR(50) DEFAULT 'everyone',
-  read_receipts_enabled BOOLEAN DEFAULT TRUE,
-  sound_enabled BOOLEAN DEFAULT TRUE,
-  notification_preview_enabled BOOLEAN DEFAULT TRUE,
-  email_notification_digest BOOLEAN DEFAULT FALSE,
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-ALTER TABLE public.user_message_settings ENABLE ROW LEVEL SECURITY;
-GRANT ALL ON public.user_message_settings TO anon, authenticated, service_role;
-DROP POLICY IF EXISTS "allow_all_message_settings" ON public.user_message_settings;
-CREATE POLICY "allow_all_message_settings" ON public.user_message_settings FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
-
-DO $$ BEGIN
-  ALTER PUBLICATION supabase_realtime ADD TABLE public.user_message_settings;
-EXCEPTION WHEN duplicate_object THEN NULL; WHEN OTHERS THEN NULL; END $$;`;
-
-  const copySql = () => {
-    navigator.clipboard.writeText(SQL_SNIPPET);
-    setCopiedSql(true);
-    setTimeout(() => setCopiedSql(false), 2500);
-  };
-
   if (!isOpen) return null;
 
   return (
@@ -200,107 +172,16 @@ EXCEPTION WHEN duplicate_object THEN NULL; WHEN OTHERS THEN NULL; END $$;`;
 
         {/* Content Body */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
-          {/* SUPER ADMIN ONLY: Supabase Realtime & Database Pipeline Console */}
+          {/* Institutional Status Banner */}
           {isSuperAdmin && (
-            <div className="space-y-3 p-4 rounded-2xl bg-purple-50/50 dark:bg-purple-950/20 border border-purple-200 dark:border-purple-900/50">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-black uppercase tracking-wider text-purple-700 dark:text-purple-300 flex items-center gap-1.5">
-                  <Shield className="w-3.5 h-3.5 text-purple-600" />
-                  Super Admin Database & Realtime System
-                </span>
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-purple-200/80 dark:bg-purple-900/60 text-purple-900 dark:text-purple-200 font-bold">
-                  Admin Exclusive
-                </span>
-              </div>
-
-              {/* Supabase Connection Status Card */}
-              <div className="p-3.5 rounded-xl bg-white dark:bg-slate-900 border border-purple-100 dark:border-purple-900/40 flex items-center justify-between gap-3">
-                <div className="flex items-center gap-3 min-w-0">
-                  <div
-                    className={`w-3 h-3 rounded-full ${
-                      dbStatus.tablesOnline
-                        ? 'bg-emerald-500 shadow-sm shadow-emerald-500/50'
-                        : 'bg-blue-500 shadow-sm shadow-blue-500/50'
-                    } animate-pulse`}
-                  />
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <p className="text-xs font-bold text-slate-900 dark:text-white truncate">
-                        {dbStatus.tablesOnline ? 'Supabase Sync Active' : 'Supabase Cloud Sync Ready'}
-                      </p>
-                      <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-200 dark:bg-slate-700 font-mono text-slate-600 dark:text-slate-300">
-                        hjuyiqyviohinbhzaipl
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
-                      {dbStatus.tablesOnline
-                        ? 'Tables verified in Supabase database'
-                        : 'Real-time sync active with instant local persistence'}
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-1.5 shrink-0">
-                  <button
-                    type="button"
-                    onClick={handleRefreshStatus}
-                    disabled={checkingDb}
-                    title="Verify connection"
-                    className="p-1.5 rounded-lg text-slate-500 hover:text-slate-800 dark:hover:text-white hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
-                  >
-                    <RefreshCw className={`w-3.5 h-3.5 ${checkingDb ? 'animate-spin' : ''}`} />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setShowSqlDrawer((prev) => !prev)}
-                    className="text-[11px] font-semibold text-purple-600 dark:text-purple-400 hover:underline px-2 py-1 rounded hover:bg-purple-100/50 dark:hover:bg-purple-950/40 transition-colors"
-                  >
-                    {showSqlDrawer ? 'Hide SQL' : 'View SQL'}
-                  </button>
-                </div>
-              </div>
-
-              {/* Collapsible Supabase SQL Setup Snippet */}
-              {showSqlDrawer && (
-                <div className="p-4 rounded-xl bg-slate-900 text-slate-200 text-xs border border-slate-700 space-y-3 animate-fadeIn">
-                  <div className="flex items-center justify-between">
-                    <span className="font-semibold text-white flex items-center gap-1.5">
-                      <Database className="w-3.5 h-3.5 text-blue-400" />
-                      Supabase SQL Migration Script
-                    </span>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={copySql}
-                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-purple-600 hover:bg-purple-700 text-white font-medium transition-colors cursor-pointer"
-                      >
-                        {copiedSql ? (
-                          <>
-                            <Check className="w-3 h-3" /> Copied!
-                          </>
-                        ) : (
-                          <>
-                            <Copy className="w-3 h-3" /> Copy SQL
-                          </>
-                        )}
-                      </button>
-                      <a
-                        href="https://supabase.com/dashboard/project/hjuyiqyviohinbhzaipl/sql/new"
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium transition-colors"
-                      >
-                        SQL Editor <ExternalLink className="w-3 h-3" />
-                      </a>
-                    </div>
-                  </div>
-                  <pre className="p-2.5 rounded-xl bg-slate-950 overflow-x-auto text-[11px] font-mono text-purple-300 leading-relaxed border border-slate-800 max-h-40">
-                    {SQL_SNIPPET}
-                  </pre>
-                  <p className="text-[10px] text-slate-400 leading-normal">
-                    Run this in your Supabase SQL Editor to provision the dedicated <code className="text-amber-300">user_message_settings</code> table and RLS permissions on your project.
-                  </p>
-                </div>
-              )}
+            <div className="p-3 rounded-2xl bg-purple-50/50 dark:bg-purple-950/20 border border-purple-200 dark:border-purple-900/50 flex items-center justify-between">
+              <span className="text-[11px] font-black uppercase tracking-wider text-purple-700 dark:text-purple-300 flex items-center gap-1.5">
+                <Shield className="w-3.5 h-3.5 text-purple-600" />
+                Live Messaging & Privacy Preferences
+              </span>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 font-bold">
+                Online
+              </span>
             </div>
           )}
 

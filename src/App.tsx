@@ -23,6 +23,7 @@ import type { AlumniProfile } from './types';
 import { LandingPage } from './components/LandingPage';
 import { AuthModal } from './components/AuthModal';
 import { UpcomingFeatureView } from './components/UpcomingFeatureView';
+import { EventsView } from './components/EventsView';
 import { CareerView } from './components/CareerView';
 import { MentorshipView } from './components/MentorshipView';
 import { ContactUsView } from './components/ContactUsView';
@@ -80,7 +81,11 @@ function AlumniAppContent() {
   const wasLoggedInRef = useRef(isLoggedIn);
   useEffect(() => {
     if (!wasLoggedInRef.current && isLoggedIn) {
-      // User just logged in — show the outstanding loading screen and navigate to central feed
+      // User just logged in — record login timestamp for 5-minute notification duration
+      try {
+        sessionStorage.setItem('szmc_login_timestamp', Date.now().toString());
+      } catch {}
+      // Show the outstanding loading screen and navigate to central feed
       setShowSplash(true);
       setRoute('feed');
       window.location.hash = 'feed';
@@ -361,7 +366,7 @@ function AlumniAppContent() {
               )}
 
               {route === 'events' && (
-                <UpcomingFeatureView type="events" onNavigate={navigateTo} />
+                <EventsView onNavigate={navigateTo} />
               )}
 
               {route === 'gallery' && (

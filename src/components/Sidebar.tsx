@@ -82,7 +82,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const communityNavItems: NavItemConfig[] = [
     { id: 'batches', label: 'Batch Directory', icon: BookOpen },
     { id: 'news', label: 'News & Blog', icon: Newspaper, badge: 'SOON', badgeType: 'soon' },
-    { id: 'events', label: 'Events', icon: Calendar, badge: 'SOON', badgeType: 'soon' },
+    { id: 'events', label: 'Events (SZMC DAY)', icon: Calendar, badge: 'NOV 4-5', badgeType: 'hot' },
     { id: 'gallery', label: 'Gallery', icon: Image },
     { id: 'messages', label: 'Messages', icon: MessageCircle },
     { id: 'institutions', label: 'Institutions', icon: Building2, badge: 'SOON', badgeType: 'soon' },
@@ -234,6 +234,49 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <div className="space-y-0.5">
                 {section.items.map(renderNavButton)}
               </div>
+
+              {/* Featured Event Card: SZMC DAY 2026 is on 4, 5th November */}
+              {section.id === 'community' && (
+                <div className="pt-2 px-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onSelectTab('events');
+                      onClose();
+                    }}
+                    className="w-full text-left p-3 rounded-2xl bg-gradient-to-br from-blue-700 via-indigo-700 to-sky-800 text-white shadow-md shadow-blue-900/25 border border-blue-400/40 relative overflow-hidden group hover:scale-[1.02] transition-all cursor-pointer"
+                  >
+                    <div className="flex items-center justify-between gap-1 mb-2">
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-400 text-slate-950 font-black text-[9px] uppercase tracking-wider animate-pulse">
+                        <Calendar className="w-2.5 h-2.5" />
+                        4, 5th Nov 2026
+                      </span>
+                      <span className="text-[10px] font-bold text-amber-300">Open Now</span>
+                    </div>
+
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-12 h-12 rounded-xl overflow-hidden shrink-0 border border-white/20 shadow-xs bg-slate-900">
+                        <img
+                          src="/assets/aistudio/844630102_122141641941179457_1692878458464947990_n_99cb78bb.jpg"
+                          alt="SZMC DAY 2026"
+                          className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300"
+                        />
+                      </div>
+                      <div className="min-w-0">
+                        <h4 className="font-black text-xs text-white tracking-tight leading-tight truncate">
+                          SZMC DAY 2026
+                        </h4>
+                        <p className="text-[10px] text-blue-200 mt-0.5 font-medium leading-tight">
+                          is on 4, 5th November
+                        </p>
+                        <p className="text-[9px] text-amber-200/90 italic font-serif truncate mt-0.5">
+                          &ldquo;এসো স্মৃতির প্রাঙ্গণে&rdquo;
+                        </p>
+                      </div>
+                    </div>
+                  </button>
+                </div>
+              )}
             </div>
           ))}
 

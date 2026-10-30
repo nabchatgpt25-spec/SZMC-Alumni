@@ -63,6 +63,8 @@ export interface PostItem {
   pinned?: boolean;
   isEdited?: boolean;
   comments?: PostComment[];
+  isBatchmate?: boolean;
+  isFriend?: boolean;
   // Legacy compatibility fields
   author?: string;
   authorAvatar?: string;

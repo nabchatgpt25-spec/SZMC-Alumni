@@ -575,7 +575,7 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
                   }}
                   className="text-xs font-bold text-purple-600 dark:text-purple-400 hover:underline cursor-pointer"
                 >
-                  Open Database SQL & Schema Tools
+                  Open Message Settings
                 </button>
                 <button
                   type="button"

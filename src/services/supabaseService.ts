@@ -2,6 +2,7 @@ import { supabase, isSupabaseConfigured, ALUMNI_PUBLIC_COLUMNS } from '../lib/su
 import { mapSupabaseRowToAlumniProfile, getOrCreateSupabaseProfile } from '../lib/supabase-auth';
 export { realtimeManager } from './supabaseRealtimeService';
 export type { RealtimeStatus, RealtimeFeedEvent, RealtimeBloodEvent, RealtimeAlumniEvent } from './supabaseRealtimeService';
+import { fetchFeedPosts } from './postService';
 import {
   AlumniProfile,
   BatchSummary,
@@ -270,183 +271,10 @@ export async function fetchFeedPostsFromDb(limit = 50, currentUserId?: number): 
   if (!isSupabaseConfigured) {
     return [];
   }
-
-  // 1. Directly fetch posts from public.posts table
-  let postsData: any[] | null = null;
-  const { data: directPosts, error: postsError } = await supabase
-    .from('posts')
-    .select(`
-      id,
-      author_id,
-      content,
-      category,
-      images,
-      videos,
-      likes_count,
-      comments_count,
-      is_pinned,
-      is_edited,
-      created_at
-    `)
-    .eq('is_deleted', false)
-    .order('created_at', { ascending: false })
-    .limit(limit);
-
-  if (!postsError && directPosts) {
-    postsData = directPosts;
-  } else {
-    // Resilient fallback: Try server endpoint /api/posts if direct Supabase PostgREST had RLS/permission issues
-    try {
-      const resp = await fetch(`/api/posts?limit=${limit}`);
-      if (resp.ok) {
-        const json = await resp.json();
-        if (Array.isArray(json?.posts) && json.posts.length > 0) {
-          postsData = json.posts;
-        }
-      }
-    } catch {}
-
-    if (!postsData || postsData.length === 0) {
-      console.warn(
-        'Supabase fetchFeedPosts note: remote query could not be completed, using resilient fallback:',
-        postsError?.message || postsError?.code
-      );
-      try {
-        if (typeof window !== 'undefined') {
-          const cached = localStorage.getItem('szmc_offline_posts') || localStorage.getItem('ndc_alumni_posts');
-          if (cached) {
-            const parsed = JSON.parse(cached);
-            if (Array.isArray(parsed) && parsed.length > 0) {
-              return parsed;
-            }
-          }
-        }
-      } catch {
-        // ignore
-      }
-      return [];
-    }
-  }
-
-  if (!postsData || postsData.length === 0) {
-    return [];
-  }
-
-  // 2. Collect author IDs and post IDs for batched queries
-  const authorIds = Array.from(
-    new Set(postsData.map((p) => Number(p.author_id)).filter((id) => id > 0))
-  );
-  const postIds = postsData.map((p) => Number(p.id));
-
-  // 3. Batch fetch author profiles
-  const authorMap = new Map<number, any>();
-  if (authorIds.length > 0) {
-    const { data: profiles, error: profilesError } = await supabase
-      .from('alumni_profiles')
-      .select('id, full_name, avatar_url, batch_year, verification_status, profession, institution')
-      .in('id', authorIds);
-
-    if (profilesError) {
-      console.warn('Supabase fetchFeedPosts warning loading author profiles:', profilesError.message);
-    } else if (profiles) {
-      profiles.forEach((p: any) => authorMap.set(Number(p.id), p));
-    }
-  }
-
-  // 4. Batch fetch comments for these posts
-  const commentsByPost = new Map<number, any[]>();
-  if (postIds.length > 0) {
-    const { data: comments, error: commentsError } = await supabase
-      .from('post_comments')
-      .select(`
-        id,
-        post_id,
-        user_id,
-        content,
-        likes_count,
-        created_at
-      `)
-      .in('post_id', postIds)
-      .eq('is_deleted', false)
-      .order('created_at', { ascending: true });
-
-    if (commentsError) {
-      console.warn('Supabase fetchFeedPosts warning loading post comments:', commentsError.message);
-    } else if (comments && comments.length > 0) {
-      // Find any commenters whose profiles we don't have yet
-      const commenterIds = Array.from(
-        new Set(
-          comments
-            .map((c: any) => Number(c.user_id))
-            .filter((id: number) => id > 0 && !authorMap.has(id))
-        )
-      );
-
-      if (commenterIds.length > 0) {
-        const { data: commenterProfiles } = await supabase
-          .from('alumni_profiles')
-          .select('id, full_name, avatar_url, batch_year, verification_status')
-          .in('id', commenterIds);
-
-        if (commenterProfiles) {
-          commenterProfiles.forEach((cp: any) => authorMap.set(Number(cp.id), cp));
-        }
-      }
-
-      // Group comments with attached author profile
-      for (const c of comments) {
-        const pId = Number(c.post_id);
-        const cAuthor = authorMap.get(Number(c.user_id)) || {};
-        const commentWithAuthor = { ...c, author: cAuthor };
-        const list = commentsByPost.get(pId) || [];
-        list.push(commentWithAuthor);
-        commentsByPost.set(pId, list);
-      }
-    }
-  }
-
-  // 5. Batch fetch likes for active user (if currentUserId provided)
-  const userLikesSet = new Set<number>();
-  if (currentUserId && postIds.length > 0) {
-    const { data: likes, error: likesError } = await supabase
-      .from('post_likes')
-      .select('post_id')
-      .eq('user_id', currentUserId)
-      .in('post_id', postIds);
-
-    if (!likesError && likes) {
-      likes.forEach((l: any) => userLikesSet.add(Number(l.post_id)));
-    }
-  }
-
-  // 6. Map and combine into complete PostItem array
-  const mapped = postsData.map((row: any) => {
-    const pId = Number(row.id);
-    const author = authorMap.get(Number(row.author_id)) || {};
-    const comments = commentsByPost.get(pId) || [];
-    const isLiked = userLikesSet.has(pId);
-
-    return mapRowToFeedPost(
-      {
-        ...row,
-        author,
-        post_comments: comments,
-        post_likes: isLiked ? [{ user_id: currentUserId }] : [],
-      },
-      currentUserId
-    );
-  });
-
-  try {
-    if (typeof window !== 'undefined' && mapped.length > 0) {
-      localStorage.setItem('szmc_offline_posts', JSON.stringify(mapped));
-    }
-  } catch {
-    // ignore
-  }
-
-  return mapped;
+  return fetchFeedPosts(limit, 0, currentUserId);
 }
+
+
 
 /**
  * Uploads a base64 Data URL or temporary Blob URL to Supabase Storage 'post-media' bucket,
@@ -745,32 +573,7 @@ export async function createFeedPostInDb(params: {
       insertError = e;
     }
 
-    // 7. If client-side direct insert failed (e.g. pending RLS policy update in Supabase), fallback to server endpoint /api/posts
-    if (insertError || !insertedRow) {
-      try {
-        const resp = await fetch('/api/posts', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            authorId: realAuthorId,
-            content: safeContent,
-            category: safeCategory,
-            images: uploadedImages,
-            videos: uploadedVideos,
-          }),
-        });
-        if (resp.ok) {
-          const json = await resp.json();
-          if (json?.post) {
-            insertedRow = json.post;
-            insertError = null;
-          }
-        }
-      } catch (proxyErr) {
-        // preserve insertError
-      }
-    }
-
+    // 7. Verify direct Supabase insert
     if (insertError || !insertedRow) {
       console.error('Supabase createFeedPost insert error:', insertError);
       return {

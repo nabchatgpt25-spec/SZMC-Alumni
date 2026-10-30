@@ -11,6 +11,8 @@ import {
   Check,
   X,
   Sparkles,
+  GraduationCap,
+  UserCheck,
 } from 'lucide-react';
 import { PostItem } from '../types/post';
 import { togglePostLike, addComment, toggleSavePost } from '../services/postService';
@@ -155,6 +157,18 @@ export const PostCard: React.FC<PostCardProps> = ({
                 {(post.batchYear || post.authorBatch) && (
                   <span className="px-2 py-0.5 rounded-full text-[9.5px] sm:text-[10px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
                     Batch {post.batchYear || post.authorBatch}
+                  </span>
+                )}
+                {post.isBatchmate && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9.5px] sm:text-[10px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                    <GraduationCap className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+                    Batchmate
+                  </span>
+                )}
+                {post.isFriend && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9.5px] sm:text-[10px] font-bold bg-blue-100 text-blue-800 dark:bg-blue-950/60 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
+                    <UserCheck className="w-3 h-3 text-blue-600 dark:text-blue-400" />
+                    Friend
                   </span>
                 )}
               </div>

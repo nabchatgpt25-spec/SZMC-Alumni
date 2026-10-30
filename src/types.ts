@@ -292,7 +292,7 @@ export interface PostItem {
   userId: number;
   fullName: string;
   avatarUrl: string;
-  batchYear: number;
+  batchYear?: number;
   content: string;
   images: string[];
   videos?: string[];
@@ -302,11 +302,26 @@ export interface PostItem {
   likesCount: number;
   commentsCount: number;
   createdAt: string;
-  likedByMe: boolean;
-  comments: PostComment[];
+  likedByMe?: boolean;
+  comments?: PostComment[];
   category?: 'General Update' | 'Tech & Innovation' | 'Professional Insights' | 'Reunion' | 'Achievement' | string;
   isEdited?: boolean;
   isSaved?: boolean;
+  isBatchmate?: boolean;
+  isFriend?: boolean;
+  pinned?: boolean;
+  verified?: boolean;
+  profession?: string;
+  institution?: string;
+  author?: string;
+  authorAvatar?: string;
+  authorBatch?: number;
+  authorRole?: string;
+  timestamp?: string;
+  likes?: number;
+  liked?: boolean;
+  commentsList?: any[];
+  shares?: number;
 }
 
 export type { NotificationItem, UserPreferences } from './types/notification.types';

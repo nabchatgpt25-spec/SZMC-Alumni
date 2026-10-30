@@ -1,10 +1,27 @@
+export type NotificationType =
+  | 'post_like'
+  | 'post_comment'
+  | 'post_reaction'
+  | 'connection_request'
+  | 'connection_accepted'
+  | 'new_message'
+  | 'blood_request'
+  | 'system'
+  | 'like'
+  | 'comment'
+  | 'post'
+  | 'blood'
+  | 'verification'
+  | 'mentorship'
+  | 'career';
+
 export interface NotificationItem {
   id: number;
   title: string;
   message: string;
   timeAgo: string;
   unread: boolean;
-  type: 'like' | 'comment' | 'post' | 'system' | 'blood' | 'verification' | 'mentorship' | 'career';
+  type: NotificationType;
   targetRoute?: string;
   bloodRequestId?: string;
   targetUserId?: number;

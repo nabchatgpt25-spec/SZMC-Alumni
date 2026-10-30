@@ -36,7 +36,11 @@ import {
   Video,
   Link2,
   Filter,
-  Check
+  Check,
+  GraduationCap,
+  UserCheck,
+  Calendar,
+  ChevronRight
 } from 'lucide-react';
 import { PostItem, PostComment } from '../types';
 import { CreatePostModal } from './CreatePostModal';
@@ -296,6 +300,50 @@ export const FeedView: React.FC<FeedViewProps> = ({
   // Delete Post Confirmation Dialog state
   const [postToDelete, setPostToDelete] = useState<PostItem | null>(null);
   const [isVerificationBannerClosed, setIsVerificationBannerClosed] = useState(false);
+
+  // 5-minute login duration timer: notification banners appear after 5 minutes of login
+  const FIVE_MINUTES_MS = 5 * 60 * 1000; // 300,000 ms (5 minutes)
+  const [showLoginNotification, setShowLoginNotification] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    try {
+      const stored = sessionStorage.getItem('szmc_login_timestamp') || localStorage.getItem('szmc_login_timestamp');
+      if (!stored) {
+        sessionStorage.setItem('szmc_login_timestamp', Date.now().toString());
+        return false;
+      }
+      return Date.now() - Number(stored) >= FIVE_MINUTES_MS;
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    if (showLoginNotification) return;
+
+    let loginTime = Date.now();
+    try {
+      const stored = sessionStorage.getItem('szmc_login_timestamp') || localStorage.getItem('szmc_login_timestamp');
+      if (stored) {
+        loginTime = Number(stored);
+      } else {
+        sessionStorage.setItem('szmc_login_timestamp', loginTime.toString());
+      }
+    } catch {}
+
+    const elapsed = Date.now() - loginTime;
+    const remaining = Math.max(0, FIVE_MINUTES_MS - elapsed);
+
+    if (remaining <= 0) {
+      setShowLoginNotification(true);
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      setShowLoginNotification(true);
+    }, remaining);
+
+    return () => clearTimeout(timer);
+  }, [showLoginNotification]);
 
   // Report Post Modal state
   const [postToReport, setPostToReport] = useState<PostItem | null>(null);
@@ -1041,7 +1089,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
   };
 
   return (
-    <div className="max-w-3xl mx-auto space-y-6">
+    <div className="max-w-6xl mx-auto space-y-6">
       {/* Toast Notification */}
       {toastMessage && (
         <div className="fixed top-16 sm:top-20 right-3 sm:right-5 max-w-[calc(100vw-1.5rem)] sm:max-w-md z-50 flex items-center gap-2.5 px-3.5 sm:px-4 py-2.5 sm:py-3 bg-slate-900/95 text-white dark:bg-white/95 dark:text-slate-900 rounded-2xl shadow-xl border border-slate-700/50 dark:border-slate-200 text-xs font-semibold animate-fade-in">
@@ -1064,6 +1112,43 @@ export const FeedView: React.FC<FeedViewProps> = ({
         </div>
       )}
 
+      {/* Mobile/Tablet Compact Event Alert Banner: SZMC DAY 2026 is on 4, 5th November */}
+      <div className="xl:hidden">
+        <button
+          type="button"
+          onClick={() => onNavigate && onNavigate('events')}
+          className="w-full text-left p-3 sm:p-3.5 rounded-2xl bg-gradient-to-r from-blue-700 via-indigo-700 to-sky-700 text-white shadow-md shadow-blue-900/20 border border-blue-400/40 flex items-center justify-between gap-3 cursor-pointer group transition-all hover:scale-[1.01]"
+        >
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-11 h-11 rounded-xl overflow-hidden shrink-0 border border-white/25 shadow-xs bg-slate-900">
+              <img
+                src="/assets/aistudio/844630102_122141641941179457_1692878458464947990_n_99cb78bb.jpg"
+                alt="SZMC DAY 2026 is on 4, 5th November"
+                className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300"
+              />
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="px-2 py-0.5 rounded-md bg-amber-400 text-slate-950 font-black text-[9px] uppercase tracking-wider">
+                  Event
+                </span>
+                <span className="text-[10px] text-amber-200 font-bold">4, 5th November, 2026</span>
+              </div>
+              <h4 className="font-black text-xs sm:text-sm text-white truncate">
+                SZMC DAY 2026 is on 4, 5th November
+              </h4>
+            </div>
+          </div>
+          <span className="shrink-0 px-2.5 py-1.5 rounded-xl bg-white/20 hover:bg-white/30 text-white text-[11px] font-bold transition-colors whitespace-nowrap">
+            View Event →
+          </span>
+        </button>
+      </div>
+
+      <div className="xl:grid xl:grid-cols-12 xl:gap-6 items-start">
+        {/* Main Feed Column */}
+        <div className="xl:col-span-8 space-y-6">
+
       {/* Offline Notice Banner */}
       {!isOnline && (
         <div className="p-4 rounded-3xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between gap-3 text-xs text-amber-800 dark:text-amber-300">
@@ -1076,108 +1161,113 @@ export const FeedView: React.FC<FeedViewProps> = ({
         </div>
       )}
 
-      {/* Emergency Blood Alert Banner (Dismissible with Cross button) */}
-      <BloodNeededNowSection
-        variant="feed"
-        onNavigateToBloodNetwork={() => onNavigate && onNavigate('emergency')}
-      />
+      {/* Notification Banners (Displayed after 5 minutes of login) */}
+      {showLoginNotification && (
+        <>
+          {/* Emergency Blood Alert Banner (Dismissible with Cross button) */}
+          <BloodNeededNowSection
+            variant="feed"
+            onNavigateToBloodNetwork={() => onNavigate && onNavigate('emergency')}
+          />
 
-      {/* Active Verification & Peer Vouch Banner (Dismissible with simple Cross button) */}
-      {!isVerificationBannerClosed && (
-        <div
-          className={`relative rounded-2xl p-4 pr-11 border shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
-            (currentUser.verificationStatus || 'verified') === 'verified'
-              ? 'bg-gradient-to-r from-emerald-50/90 via-teal-50/70 to-blue-50/80 dark:from-emerald-950/30 dark:via-slate-900 dark:to-blue-950/30 border-emerald-200/80 dark:border-emerald-800/60'
-              : 'bg-gradient-to-r from-amber-50/95 via-orange-50/80 to-amber-50/90 dark:from-amber-950/35 dark:via-slate-900 dark:to-orange-950/30 border-amber-300/80 dark:border-amber-800/60'
-          }`}
-        >
-          <div className="flex items-start sm:items-center gap-3">
+          {/* Active Verification & Peer Vouch Banner (Dismissible with simple Cross button) */}
+          {!isVerificationBannerClosed && (
             <div
-              className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+              className={`relative rounded-2xl p-4 pr-11 border shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
                 (currentUser.verificationStatus || 'verified') === 'verified'
-                  ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-600/20'
-                  : 'bg-amber-500 text-white shadow-sm shadow-amber-500/20'
+                  ? 'bg-gradient-to-r from-emerald-50/90 via-teal-50/70 to-blue-50/80 dark:from-emerald-950/30 dark:via-slate-900 dark:to-blue-950/30 border-emerald-200/80 dark:border-emerald-800/60'
+                  : 'bg-gradient-to-r from-amber-50/95 via-orange-50/80 to-amber-50/90 dark:from-amber-950/35 dark:via-slate-900 dark:to-orange-950/30 border-amber-300/80 dark:border-amber-800/60'
               }`}
             >
-              <ShieldCheck className="w-5 h-5" />
-            </div>
-            <div>
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-xs sm:text-sm font-black text-slate-900 dark:text-white">
-                  {(currentUser.verificationStatus || 'verified') === 'verified'
-                    ? 'SZMCian Verification Active'
-                    : `Verification Pending (${currentUser.vouchesCount || 0}/2 Peer Vouches)`}
-                </span>
-                <VerificationStatusBadge
-                  status={currentUser.verificationStatus || 'verified'}
-                  vouchesCount={currentUser.vouchesCount ?? 2}
-                  size="sm"
-                  onClick={() => onOpenVerificationCenter && onOpenVerificationCenter('status')}
-                />
+              <div className="flex items-start sm:items-center gap-3">
+                <div
+                  className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+                    (currentUser.verificationStatus || 'verified') === 'verified'
+                      ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-600/20'
+                      : 'bg-amber-500 text-white shadow-sm shadow-amber-500/20'
+                  }`}
+                >
+                  <ShieldCheck className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs sm:text-sm font-black text-slate-900 dark:text-white">
+                      {(currentUser.verificationStatus || 'verified') === 'verified'
+                        ? 'SZMCian Verification Active'
+                        : `Verification Pending (${currentUser.vouchesCount || 0}/2 Peer Vouches)`}
+                    </span>
+                    <VerificationStatusBadge
+                      status={currentUser.verificationStatus || 'verified'}
+                      vouchesCount={currentUser.vouchesCount ?? 2}
+                      size="sm"
+                      onClick={() => onOpenVerificationCenter && onOpenVerificationCenter('status')}
+                    />
+                  </div>
+                  <p className="text-[11px] text-slate-600 dark:text-slate-300 mt-0.5">
+                    {(currentUser.verificationStatus || 'verified') === 'verified'
+                      ? `${pendingVouchesCount} SZMC colleague${pendingVouchesCount === 1 ? ' is' : 's are'} awaiting peer verification. Vouch for your batchmates to keep the directory authentic.`
+                      : 'Complete your verification via 2 batchmate vouches or upload your BMDC Certificate / College ID for instant verification.'}
+                  </p>
+                </div>
               </div>
-              <p className="text-[11px] text-slate-600 dark:text-slate-300 mt-0.5">
-                {(currentUser.verificationStatus || 'verified') === 'verified'
-                  ? `${pendingVouchesCount} SZMC colleague${pendingVouchesCount === 1 ? ' is' : 's are'} awaiting peer verification. Vouch for your batchmates to keep the directory authentic.`
-                  : 'Complete your verification via 2 batchmate vouches or upload your BMDC Certificate / College ID for instant verification.'}
-              </p>
-            </div>
-          </div>
 
-          <div className="flex flex-wrap items-center gap-2 shrink-0">
-            {(currentUser.verificationStatus || 'verified') !== 'verified' && (
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                {(currentUser.verificationStatus || 'verified') !== 'verified' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const updated = simulateDemoVouchForUser(currentUser);
+                      updateProfile(updated);
+                      playSound('post');
+                      showToast(
+                        updated.verificationStatus === 'verified'
+                          ? '2/2 Vouches received! Your SZMCian profile is now Verified!'
+                          : `Colleague vouch recorded (${updated.vouchesCount}/2)! One more vouch needed.`
+                      );
+                    }}
+                    className="px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold shadow-xs transition-all cursor-pointer"
+                  >
+                    +1 Instant Vouch
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() =>
+                    onOpenVerificationCenter &&
+                    onOpenVerificationCenter(
+                      (currentUser.verificationStatus || 'verified') === 'verified'
+                        ? 'vouch_others'
+                        : 'status'
+                    )
+                  }
+                  className={`px-3.5 py-2 rounded-xl text-xs font-bold shadow-xs transition-all cursor-pointer inline-flex items-center gap-1.5 ${
+                    (currentUser.verificationStatus || 'verified') === 'verified'
+                      ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                      : 'bg-slate-900 hover:bg-slate-800 dark:bg-white dark:hover:bg-slate-100 text-white dark:text-slate-900'
+                  }`}
+                >
+                  <ShieldCheck className="w-3.5 h-3.5" />
+                  <span>
+                    {(currentUser.verificationStatus || 'verified') === 'verified'
+                      ? `Vouch for Classmates (${pendingVouchesCount})`
+                      : 'Open Verification Center'}
+                  </span>
+                </button>
+              </div>
+
+              {/* Simple Cross (X) Button to Close Verification Notification */}
               <button
                 type="button"
-                onClick={() => {
-                  const updated = simulateDemoVouchForUser(currentUser);
-                  updateProfile(updated);
-                  playSound('post');
-                  showToast(
-                    updated.verificationStatus === 'verified'
-                      ? '2/2 Vouches received! Your SZMCian profile is now Verified!'
-                      : `Colleague vouch recorded (${updated.vouchesCount}/2)! One more vouch needed.`
-                  );
-                }}
-                className="px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold shadow-xs transition-all cursor-pointer"
+                onClick={() => setIsVerificationBannerClosed(true)}
+                aria-label="Close verification notification"
+                title="Close verification notification"
+                className="absolute top-3 right-3 p-1.5 rounded-full bg-white/80 hover:bg-rose-600 dark:bg-slate-800/90 dark:hover:bg-rose-600 text-slate-500 hover:text-white dark:text-slate-300 dark:hover:text-white border border-slate-200/80 dark:border-slate-700 transition-all cursor-pointer shadow-xs"
               >
-                +1 Instant Vouch
+                <X className="w-4 h-4" />
               </button>
-            )}
-            <button
-              type="button"
-              onClick={() =>
-                onOpenVerificationCenter &&
-                onOpenVerificationCenter(
-                  (currentUser.verificationStatus || 'verified') === 'verified'
-                    ? 'vouch_others'
-                    : 'status'
-                )
-              }
-              className={`px-3.5 py-2 rounded-xl text-xs font-bold shadow-xs transition-all cursor-pointer inline-flex items-center gap-1.5 ${
-                (currentUser.verificationStatus || 'verified') === 'verified'
-                  ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                  : 'bg-slate-900 hover:bg-slate-800 dark:bg-white dark:hover:bg-slate-100 text-white dark:text-slate-900'
-              }`}
-            >
-              <ShieldCheck className="w-3.5 h-3.5" />
-              <span>
-                {(currentUser.verificationStatus || 'verified') === 'verified'
-                  ? `Vouch for Classmates (${pendingVouchesCount})`
-                  : 'Open Verification Center'}
-              </span>
-            </button>
-          </div>
-
-          {/* Simple Cross (X) Button to Close Verification Notification */}
-          <button
-            type="button"
-            onClick={() => setIsVerificationBannerClosed(true)}
-            aria-label="Close verification notification"
-            title="Close verification notification"
-            className="absolute top-3 right-3 p-1.5 rounded-full bg-white/80 hover:bg-rose-600 dark:bg-slate-800/90 dark:hover:bg-rose-600 text-slate-500 hover:text-white dark:text-slate-300 dark:hover:text-white border border-slate-200/80 dark:border-slate-700 transition-all cursor-pointer shadow-xs"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
+            </div>
+          )}
+        </>
       )}
 
       {/* Facebook-Style Create Post Box */}
@@ -2207,6 +2297,18 @@ export const FeedView: React.FC<FeedViewProps> = ({
                             (edited)
                           </span>
                         )}
+                        {post.isBatchmate && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9.5px] sm:text-[10px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                            <GraduationCap className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+                            Batchmate
+                          </span>
+                        )}
+                        {post.isFriend && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9.5px] sm:text-[10px] font-bold bg-blue-100 text-blue-800 dark:bg-blue-950/60 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
+                            <UserCheck className="w-3 h-3 text-blue-600 dark:text-blue-400" />
+                            Friend
+                          </span>
+                        )}
                       </div>
                       <div className="text-[10.5px] sm:text-[11px] text-slate-500 dark:text-slate-400 font-medium flex items-center gap-1 sm:gap-2 flex-wrap">
                         <span>Batch {post.batchYear}</span>
@@ -2582,6 +2684,101 @@ export const FeedView: React.FC<FeedViewProps> = ({
             );
           });
         })()}
+      </div>
+    </div>
+
+        {/* Right Events Sidebar */}
+        <aside className="hidden xl:block xl:col-span-4 space-y-4 sticky top-20 self-start">
+          <div className="p-5 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xs space-y-4">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800">
+              <div className="flex items-center gap-2">
+                <Calendar className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                <h3 className="text-xs font-black uppercase tracking-wider text-slate-900 dark:text-white">
+                  Events Sidebar
+                </h3>
+              </div>
+              <span className="px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 text-[10px] font-bold">
+                Upcoming
+              </span>
+            </div>
+
+            {/* Featured Event Card: SZMC DAY 2026 is on 4, 5th November */}
+            <div
+              onClick={() => onNavigate && onNavigate('events')}
+              className="group cursor-pointer rounded-2xl overflow-hidden border border-blue-200/80 dark:border-blue-800/60 bg-gradient-to-br from-blue-50/80 via-white to-indigo-50/60 dark:from-slate-800/80 dark:via-slate-900 dark:to-blue-950/40 shadow-xs hover:shadow-md transition-all p-3 space-y-3"
+            >
+              <div className="relative aspect-[16/10] rounded-xl overflow-hidden shadow-inner bg-slate-900">
+                <img
+                  src="/assets/aistudio/844630102_122141641941179457_1692878458464947990_n_99cb78bb.jpg"
+                  alt="SZMC DAY 2026 is on 4, 5th November"
+                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                />
+                <div className="absolute top-2 left-2">
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-400 text-slate-950 font-black text-[9px] uppercase tracking-wider shadow-sm animate-pulse">
+                    <Calendar className="w-2.5 h-2.5" />
+                    Nov 4 & 5, 2026
+                  </span>
+                </div>
+                <div className="absolute bottom-2 right-2">
+                  <span className="px-2 py-0.5 rounded-md bg-emerald-600 text-white text-[9px] font-bold shadow-xs">
+                    Registration Open
+                  </span>
+                </div>
+              </div>
+
+              <div>
+                <h4 className="font-black text-sm text-slate-900 dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
+                  SZMC DAY 2026
+                </h4>
+                <p className="text-xs font-bold text-blue-600 dark:text-blue-400 mt-0.5">
+                  is on 4, 5th November, 2026
+                </p>
+                <p className="text-[11px] text-slate-600 dark:text-slate-300 italic font-serif mt-1 line-clamp-1">
+                  &ldquo;এসো স্মৃতির প্রাঙ্গণে মিলি প্রীতির বন্ধনে&rdquo;
+                </p>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 flex items-center gap-1">
+                  <MapPin className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                  <span>Silimpur Campus, Bogura</span>
+                </p>
+              </div>
+
+              <button
+                type="button"
+                className="w-full py-2 px-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <span>View Event Details & Schedule</span>
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            {/* Quick mini-cards */}
+            <div className="space-y-2 pt-1 text-xs">
+              <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800 flex items-center justify-between">
+                <div>
+                  <div className="font-bold text-slate-900 dark:text-white text-[11px]">Nov 4: Campus Rally</div>
+                  <div className="text-[10px] text-slate-500">Flag Hoist & Batch Lounges</div>
+                </div>
+                <span className="text-[10px] font-bold text-blue-600 dark:text-blue-400">Day 1</span>
+              </div>
+              <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800 flex items-center justify-between">
+                <div>
+                  <div className="font-bold text-slate-900 dark:text-white text-[11px]">Nov 5: CME & Grand Gala</div>
+                  <div className="text-[10px] text-slate-500">Royal Feast & Concert</div>
+                </div>
+                <span className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400">Day 2</span>
+              </div>
+            </div>
+
+            {/* Quick Link to full events portal */}
+            <button
+              type="button"
+              onClick={() => onNavigate && onNavigate('events')}
+              className="w-full py-2 text-center text-xs font-bold text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
+            >
+              Explore Full 2-Day Schedule →
+            </button>
+          </div>
+        </aside>
       </div>
 
       {/* EDIT POST MODAL */}
