@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { MessageCircle } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
+import { supabase } from '../../lib/supabase';
 import {
   deleteMessage,
   editMessage,
@@ -29,6 +30,7 @@ export const MessengerView: React.FC = () => {
   const [threadLoading, setThreadLoading] = useState(false);
   const [threadError, setThreadError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+  const [hasSession, setHasSession] = useState<boolean | null>(null);
 
   const [showNewChat, setShowNewChat] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -48,8 +50,18 @@ export const MessengerView: React.FC = () => {
   }, [myId]);
 
   useEffect(() => {
-    void refreshConversations();
-  }, [refreshConversations]);
+    let active = true;
+    void supabase.auth.getSession().then(({ data }) => {
+      if (active) setHasSession(Boolean(data.session));
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (hasSession) void refreshConversations();
+  }, [hasSession, refreshConversations]);
 
   useEffect(() => {
     if (!activeId) {
@@ -78,6 +90,7 @@ export const MessengerView: React.FC = () => {
   }, [activeId, myId, refreshConversations]);
 
   useEffect(() => {
+    if (!hasSession) return;
     return subscribeToMessageChanges((message) => {
       void refreshConversations();
       if (message.conversationId !== activeIdRef.current) return;
@@ -92,7 +105,7 @@ export const MessengerView: React.FC = () => {
         void markConversationRead(message.conversationId, myId);
       }
     });
-  }, [myId, refreshConversations]);
+  }, [hasSession, myId, refreshConversations]);
 
   const activeConversation = conversations.find((c) => c.id === activeId) ?? null;
 
@@ -146,6 +159,25 @@ export const MessengerView: React.FC = () => {
     setActiveId(null);
     void refreshConversations();
   };
+
+  if (hasSession === false) {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="w-10 h-10 rounded-2xl bg-blue-600 text-white flex items-center justify-center shadow-md shadow-blue-600/25 shrink-0">
+            <MessageCircle className="w-5 h-5" />
+          </div>
+          <h1 className="text-lg sm:text-xl font-black text-slate-900 dark:text-white tracking-tight leading-tight">Messages</h1>
+        </div>
+        <div className="p-8 text-center rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 bg-white/60 dark:bg-slate-900/60">
+          <p className="text-sm font-bold text-slate-900 dark:text-white">Sign in again to use Messages</p>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-sm mx-auto">
+            Your current session does not include a secure connection for private messages. Sign in again with your account to continue.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   const showThreadOnMobile = Boolean(activeId);
 
