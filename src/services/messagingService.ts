@@ -1,3 +1,4 @@
+import type { RealtimeChannel } from '@supabase/supabase-js';
 import { supabase, ALUMNI_PUBLIC_COLUMNS, isSupabaseConfigured } from '../lib/supabase';
 import type { ChatConversation, ChatMessage, ChatPerson, UserMessageSettings } from '../types/messaging';
 
@@ -229,7 +230,9 @@ export async function sendMessage(conversationId: string, senderId: number, body
         .single();
 
       if (!error && data) {
-        return toChatMessage(data);
+        const msg = toChatMessage(data);
+        broadcastMessageEvent('new_message', msg);
+        return msg;
       }
     } catch {
       // Fall through
@@ -244,7 +247,10 @@ export async function sendMessage(conversationId: string, senderId: number, body
 
   if (resp.ok) {
     const json = await resp.json();
-    if (json.message) return json.message;
+    if (json.message) {
+      broadcastMessageEvent('new_message', json.message);
+      return json.message;
+    }
   }
 
   throw new Error('Could not send message. Please try again.');
@@ -265,7 +271,9 @@ export async function editMessage(messageId: string, body: string): Promise<Chat
         .maybeSingle();
 
       if (!error && data) {
-        return toChatMessage(data);
+        const msg = toChatMessage(data);
+        broadcastMessageEvent('edit_message', msg);
+        return msg;
       }
     } catch {
       // Fall through
@@ -280,7 +288,10 @@ export async function editMessage(messageId: string, body: string): Promise<Chat
 
   if (resp.ok) {
     const json = await resp.json();
-    if (json.message) return json.message;
+    if (json.message) {
+      broadcastMessageEvent('edit_message', json.message);
+      return json.message;
+    }
   }
 
   throw new Error('Could not edit message.');
@@ -300,7 +311,9 @@ export async function deleteMessage(messageId: string): Promise<ChatMessage> {
         .maybeSingle();
 
       if (!error && data) {
-        return toChatMessage(data);
+        const msg = toChatMessage(data);
+        broadcastMessageEvent('delete_message', msg);
+        return msg;
       }
     } catch {
       // Fall through
@@ -313,7 +326,10 @@ export async function deleteMessage(messageId: string): Promise<ChatMessage> {
 
   if (resp.ok) {
     const json = await resp.json();
-    if (json.message) return json.message;
+    if (json.message) {
+      broadcastMessageEvent('delete_message', json.message);
+      return json.message;
+    }
   }
 
   throw new Error('Could not delete message.');
@@ -395,15 +411,7 @@ const DEFAULT_USER_MESSAGE_SETTINGS: UserMessageSettings = {
 };
 
 export async function getUserMessageSettings(profileId: number): Promise<UserMessageSettings> {
-  // Check local cache first
-  try {
-    const raw = localStorage.getItem(`szmc_msg_settings_${profileId}`);
-    if (raw) {
-      return JSON.parse(raw);
-    }
-  } catch {}
-
-  // Try direct Supabase
+  // 1. Try direct Supabase query first for real-time consistency
   if (isSupabaseConfigured) {
     try {
       const { data, error } = await supabase
@@ -416,10 +424,10 @@ export async function getUserMessageSettings(profileId: number): Promise<UserMes
         const s: UserMessageSettings = {
           profileId: data.profile_id,
           whoCanMessage: data.who_can_message || 'everyone',
-          readReceiptsEnabled: Boolean(data.read_receipts_enabled),
-          soundEnabled: Boolean(data.sound_enabled),
-          notificationPreviewEnabled: Boolean(data.notification_preview_enabled),
-          emailNotificationDigest: Boolean(data.email_notification_digest),
+          readReceiptsEnabled: data.read_receipts_enabled ?? true,
+          soundEnabled: data.sound_enabled ?? true,
+          notificationPreviewEnabled: data.notification_preview_enabled ?? true,
+          emailNotificationDigest: data.email_notification_digest ?? false,
           updatedAt: data.updated_at,
         };
         try {
@@ -430,7 +438,7 @@ export async function getUserMessageSettings(profileId: number): Promise<UserMes
     } catch {}
   }
 
-  // Try server API
+  // 2. Try server API
   try {
     const resp = await fetch(`/api/messages/settings?profileId=${profileId}`);
     if (resp.ok) {
@@ -441,6 +449,14 @@ export async function getUserMessageSettings(profileId: number): Promise<UserMes
         } catch {}
         return json.settings;
       }
+    }
+  } catch {}
+
+  // 3. Fallback to local cache if offline
+  try {
+    const raw = localStorage.getItem(`szmc_msg_settings_${profileId}`);
+    if (raw) {
+      return JSON.parse(raw);
     }
   } catch {}
 
@@ -566,27 +582,171 @@ export async function searchAlumniForChat(query: string, myProfileId: number): P
   return [];
 }
 
-export function subscribeToMessageChanges(onChange: (message: ChatMessage) => void): () => void {
+// ---------------------------------------------------------------------------
+// 11. SUPABASE REALTIME MESSAGE ENGINE (BROADCAST + POSTGRES_CHANGES + PRESENCE)
+// ---------------------------------------------------------------------------
+
+let sharedMessagesChannel: RealtimeChannel | null = null;
+const messageListeners = new Set<(message: ChatMessage) => void>();
+const typingListeners = new Set<(data: { conversationId: string; profileId: number; fullName: string }) => void>();
+const realtimeStatusListeners = new Set<(status: 'SUBSCRIBED' | 'CONNECTING' | 'CLOSED' | 'OFFLINE') => void>();
+let realtimeChannelStatus: 'SUBSCRIBED' | 'CONNECTING' | 'CLOSED' | 'OFFLINE' = isSupabaseConfigured ? 'CONNECTING' : 'OFFLINE';
+
+export function getOrCreateMessagesChannel(): RealtimeChannel | null {
   if (!isSupabaseConfigured) {
-    return () => {};
+    realtimeChannelStatus = 'OFFLINE';
+    return null;
   }
+  if (sharedMessagesChannel) return sharedMessagesChannel;
 
   try {
-    const channel = supabase
-      .channel('messages-feed')
+    sharedMessagesChannel = supabase.channel('messages-realtime-feed', {
+      config: {
+        broadcast: { self: false },
+      },
+    });
+
+    sharedMessagesChannel
+      // 1. Listen to database-level changes replicated via PostgreSQL
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'messages' },
-        (payload) => {
-          if (payload.new && 'id' in payload.new) onChange(toChatMessage(payload.new));
+        (payload: any) => {
+          if (payload.new && 'id' in payload.new) {
+            const msg = toChatMessage(payload.new);
+            messageListeners.forEach((fn) => {
+              try { fn(msg); } catch (e) { console.warn('Message listener error:', e); }
+            });
+          } else if (payload.eventType === 'DELETE' && payload.old && 'id' in payload.old) {
+            const msg: ChatMessage = {
+              id: String(payload.old.id),
+              conversationId: String(payload.old.conversation_id || ''),
+              senderId: Number(payload.old.sender_id || 0),
+              body: 'Message deleted',
+              createdAt: new Date().toISOString(),
+              editedAt: null,
+              deletedAt: new Date().toISOString(),
+            };
+            messageListeners.forEach((fn) => {
+              try { fn(msg); } catch (e) { console.warn('Message delete listener error:', e); }
+            });
+          }
         }
       )
-      .subscribe();
+      // 2. Listen to instant sub-50ms peer broadcasts
+      .on('broadcast', { event: 'new_message' }, ({ payload }) => {
+        if (payload && payload.id) {
+          messageListeners.forEach((fn) => {
+            try { fn(payload as ChatMessage); } catch (e) { console.warn('Broadcast listener error:', e); }
+          });
+        }
+      })
+      .on('broadcast', { event: 'edit_message' }, ({ payload }) => {
+        if (payload && payload.id) {
+          messageListeners.forEach((fn) => {
+            try { fn(payload as ChatMessage); } catch (e) { console.warn('Broadcast edit error:', e); }
+          });
+        }
+      })
+      .on('broadcast', { event: 'delete_message' }, ({ payload }) => {
+        if (payload && payload.id) {
+          messageListeners.forEach((fn) => {
+            try { fn(payload as ChatMessage); } catch (e) { console.warn('Broadcast delete error:', e); }
+          });
+        }
+      })
+      .on('broadcast', { event: 'typing' }, ({ payload }) => {
+        if (payload && payload.conversationId) {
+          typingListeners.forEach((fn) => {
+            try { fn(payload); } catch {}
+          });
+        }
+      })
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          realtimeChannelStatus = 'SUBSCRIBED';
+        } else if (status === 'TIMED_OUT' || status === 'CLOSED') {
+          realtimeChannelStatus = 'CLOSED';
+        } else {
+          realtimeChannelStatus = 'CONNECTING';
+        }
+        realtimeStatusListeners.forEach((fn) => {
+          try { fn(realtimeChannelStatus); } catch {}
+        });
+      });
 
-    return () => {
-      void supabase.removeChannel(channel);
-    };
-  } catch {
-    return () => {};
+    return sharedMessagesChannel;
+  } catch (err) {
+    console.warn('Failed to initialize Supabase Realtime channel:', err);
+    return null;
   }
+}
+
+export function broadcastMessageEvent(
+  event: 'new_message' | 'edit_message' | 'delete_message',
+  message: ChatMessage
+) {
+  const channel = getOrCreateMessagesChannel();
+  if (channel && isSupabaseConfigured) {
+    try {
+      void channel.send({
+        type: 'broadcast',
+        event,
+        payload: message,
+      });
+    } catch (err) {
+      console.warn('Realtime broadcast error:', err);
+    }
+  }
+}
+
+export function sendTypingIndicator(
+  conversationId: string,
+  profileId: number,
+  fullName: string
+) {
+  const channel = getOrCreateMessagesChannel();
+  if (channel && isSupabaseConfigured) {
+    try {
+      void channel.send({
+        type: 'broadcast',
+        event: 'typing',
+        payload: { conversationId, profileId, fullName },
+      });
+    } catch {}
+  }
+}
+
+export function subscribeToTypingStatus(
+  onTyping: (data: { conversationId: string; profileId: number; fullName: string }) => void
+): () => void {
+  typingListeners.add(onTyping);
+  getOrCreateMessagesChannel();
+  return () => {
+    typingListeners.delete(onTyping);
+  };
+}
+
+export function subscribeToRealtimeConnectionStatus(
+  onStatus: (status: 'SUBSCRIBED' | 'CONNECTING' | 'CLOSED' | 'OFFLINE') => void
+): () => void {
+  realtimeStatusListeners.add(onStatus);
+  onStatus(realtimeChannelStatus);
+  getOrCreateMessagesChannel();
+  return () => {
+    realtimeStatusListeners.delete(onStatus);
+  };
+}
+
+export function getRealtimeChannelStatus(): 'SUBSCRIBED' | 'CONNECTING' | 'CLOSED' | 'OFFLINE' {
+  return realtimeChannelStatus;
+}
+
+export function subscribeToMessageChanges(onChange: (message: ChatMessage) => void): () => void {
+  messageListeners.add(onChange);
+  getOrCreateMessagesChannel();
+
+  return () => {
+    messageListeners.delete(onChange);
+  };
 }

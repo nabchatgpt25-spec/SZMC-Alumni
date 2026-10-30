@@ -38,6 +38,7 @@ import {
   adminVerifyAlumniPhoneOwnership,
   adminRevokeAlumniPhoneOwnership,
 } from './server/db/adminRepository.ts';
+import { attemptBootstrapMessagingTables } from './server/db/setupMessagingDb.ts';
 
 dotenv.config();
 
@@ -1081,15 +1082,19 @@ const memoryUserSettings = new Map<number, {
 app.get('/api/messages/status', async (_req: Request, res: Response) => {
   try {
     let tablesOnline = false;
+    let settingsTableOnline = false;
     let tablesCheckError: string | null = null;
 
     if (isSupabaseServerConfigured) {
       try {
-        const { error } = await supabaseServer.from('messages').select('id').limit(1);
-        if (!error) {
-          tablesOnline = true;
-        } else {
-          tablesCheckError = error.message;
+        const [msgRes, settingsRes] = await Promise.all([
+          supabaseServer.from('messages').select('id').limit(1),
+          supabaseServer.from('user_message_settings').select('profile_id').limit(1),
+        ]);
+        if (!msgRes.error) tablesOnline = true;
+        if (!settingsRes.error) settingsTableOnline = true;
+        if (msgRes.error && settingsRes.error) {
+          tablesCheckError = msgRes.error.message;
         }
       } catch (err: any) {
         tablesCheckError = err.message;
@@ -1100,13 +1105,24 @@ app.get('/api/messages/status', async (_req: Request, res: Response) => {
       configured: isSupabaseServerConfigured,
       supabaseUrl: isSupabaseServerConfigured ? 'https://hjuyiqyviohinbhzaipl.supabase.co' : null,
       publishKeyPrefix: 'sb_publishable_uTT8y...',
-      tablesOnline,
+      tablesOnline: tablesOnline || settingsTableOnline,
+      messagesTableOnline: tablesOnline,
+      settingsTableOnline,
       tablesCheckError,
       realtimeEnabled: true,
-      storageFallbackActive: !tablesOnline,
+      storageFallbackActive: !(tablesOnline || settingsTableOnline),
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/messages/run-setup', async (_req: Request, res: Response) => {
+  try {
+    const result = await attemptBootstrapMessagingTables();
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
@@ -1408,17 +1424,20 @@ app.post('/api/messages/conversations/:id', rateLimitGuard(60, 60_000), async (r
           .update({ last_message_at: data.created_at })
           .eq('id', convId);
 
-        return res.status(201).json({
-          message: {
-            id: data.id,
-            conversationId: data.conversation_id,
-            senderId: data.sender_id,
-            body: data.body,
-            createdAt: data.created_at,
-            editedAt: data.edited_at || null,
-            deletedAt: data.deleted_at || null,
-          },
-        });
+        const formatted = {
+          id: data.id,
+          conversationId: data.conversation_id,
+          senderId: data.sender_id,
+          body: data.body,
+          createdAt: data.created_at,
+          editedAt: data.edited_at || null,
+          deletedAt: data.deleted_at || null,
+        };
+        try {
+          const ch = supabaseServer.channel('messages-realtime-feed');
+          void ch.send({ type: 'broadcast', event: 'new_message', payload: formatted });
+        } catch {}
+        return res.status(201).json({ message: formatted });
       }
     } catch (err: any) {
       console.warn('Supabase send message fallback:', err.message);
@@ -1443,17 +1462,24 @@ app.post('/api/messages/conversations/:id', rateLimitGuard(60, 60_000), async (r
     conv.last_message_at = now;
   }
 
-  res.status(201).json({
-    message: {
-      id: newMsg.id,
-      conversationId: newMsg.conversation_id,
-      senderId: newMsg.sender_id,
-      body: newMsg.body,
-      createdAt: newMsg.created_at,
-      editedAt: newMsg.edited_at,
-      deletedAt: newMsg.deleted_at,
-    },
-  });
+  const formattedMsg = {
+    id: newMsg.id,
+    conversationId: newMsg.conversation_id,
+    senderId: newMsg.sender_id,
+    body: newMsg.body,
+    createdAt: newMsg.created_at,
+    editedAt: newMsg.edited_at,
+    deletedAt: newMsg.deleted_at,
+  };
+
+  if (isSupabaseServerConfigured) {
+    try {
+      const ch = supabaseServer.channel('messages-realtime-feed');
+      void ch.send({ type: 'broadcast', event: 'new_message', payload: formattedMsg });
+    } catch {}
+  }
+
+  res.status(201).json({ message: formattedMsg });
 });
 
 // 6. Edit a Message
@@ -2167,10 +2193,12 @@ async function startServer() {
   if (typeof PORT === 'number') {
     httpServer.listen(PORT, '0.0.0.0', () => {
       console.log(`SZMC Alumni Server running on http://0.0.0.0:${PORT}`);
+      void attemptBootstrapMessagingTables();
     });
   } else {
     httpServer.listen(PORT, () => {
       console.log(`SZMC Alumni Server running on cPanel socket ${PORT}`);
+      void attemptBootstrapMessagingTables();
     });
   }
 }

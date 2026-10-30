@@ -43,6 +43,7 @@ import { AlumniProfile, SPECIALTIES_LIST, DEGREES_LIST } from '../types';
 import { NDCLogo } from './NDCLogo';
 import { loadVouchRequests } from '../utils/verificationService';
 import { getDonorProfileByUserId } from '../utils/bloodDonationService';
+import { MessageSettingsModal } from './messenger/MessageSettingsModal';
 
 interface SettingsViewProps {
   onNavigate: (route: string) => void;
@@ -242,6 +243,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   });
 
   const [isCardExporting, setIsCardExporting] = useState(false);
+  const [isMessageSettingsOpen, setIsMessageSettingsOpen] = useState(false);
 
   // Trigger feedback toast
   const showToast = (msg: string) => {
@@ -1148,6 +1150,29 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       {institutionVisibility === 'public' ? 'Map Visible' : 'Restricted'}
                     </button>
                   </div>
+
+                  {/* Direct Messaging & Chat Privacy Settings */}
+                  <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-blue-50/70 to-indigo-50/40 dark:from-blue-950/20 dark:to-indigo-950/10 border border-blue-200/80 dark:border-blue-900/40 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div>
+                      <div className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                        <span>Direct Messaging &amp; Chat Privacy</span>
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-600 text-white">
+                          Supabase Live
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                        Choose who can direct message you (Everyone, Verified Alumni, or Batch only), manage read receipts, and sync settings to Supabase.
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setIsMessageSettingsOpen(true)}
+                      className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition-all shadow-sm shadow-blue-600/20 cursor-pointer shrink-0"
+                    >
+                      <Sliders className="w-3.5 h-3.5" />
+                      <span>Configure Chat Settings</span>
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
@@ -1851,6 +1876,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         </div>
       )}
+
+      <MessageSettingsModal
+        isOpen={isMessageSettingsOpen}
+        onClose={() => setIsMessageSettingsOpen(false)}
+        profileId={currentUser.id}
+        batchYear={currentUser.batchYear}
+      />
     </div>
   );
 };

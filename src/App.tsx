@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
-import { Home, Users, BookOpen, HeartHandshake, User as UserIcon } from 'lucide-react';
+import { Home, Users, BookOpen, HeartHandshake, User as UserIcon, MessageCircle } from 'lucide-react';
 import { ThemeProvider } from './context/ThemeContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { Header } from './components/Header';
@@ -485,23 +485,24 @@ function AlumniAppContent() {
             <span className="text-[10px] sm:text-[11px] mt-0.5 truncate max-w-[64px]">Directory</span>
           </button>
 
-          {/* 3. Batches */}
+          {/* 3. Messages (Meta Messenger) */}
           <button
             type="button"
-            onClick={() => navigateTo('batches')}
+            onClick={() => navigateTo('messages')}
             className={`flex flex-col items-center justify-center flex-1 py-1 px-1 rounded-xl transition-all cursor-pointer ${
-              route === 'batches' || route.startsWith('batch:')
-                ? 'text-blue-600 dark:text-blue-400 font-bold'
-                : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
+              route === 'messages'
+                ? 'text-[#0084FF] dark:text-[#0084FF] font-bold'
+                : 'text-slate-500 dark:text-slate-400 hover:text-[#0084FF] dark:hover:text-[#0084FF]'
             }`}
           >
             <div className="relative">
-              <BookOpen className={`w-5 h-5 transition-transform ${route === 'batches' || route.startsWith('batch:') ? 'scale-110' : ''}`} />
-              {(route === 'batches' || route.startsWith('batch:')) && (
-                <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-blue-600 dark:bg-blue-400" />
+              <MessageCircle className={`w-5 h-5 transition-transform ${route === 'messages' ? 'scale-110 text-[#0084FF]' : ''}`} />
+              <span className="absolute -top-0.5 -right-1 w-2 h-2 rounded-full bg-[#0084FF] ring-2 ring-white dark:ring-slate-900" />
+              {route === 'messages' && (
+                <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-[#0084FF]" />
               )}
             </div>
-            <span className="text-[10px] sm:text-[11px] mt-0.5 truncate max-w-[64px]">Batches</span>
+            <span className="text-[10px] sm:text-[11px] mt-0.5 truncate max-w-[64px]">Chats</span>
           </button>
 
           {/* 4. Blood Lifeline */}

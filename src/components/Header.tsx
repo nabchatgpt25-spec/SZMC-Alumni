@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Menu, Search, Mail, ChevronDown, User, LogOut, ShieldCheck, ShieldAlert, Clock, X, Settings } from 'lucide-react';
+import { Menu, Search, Mail, ChevronDown, User, LogOut, ShieldCheck, ShieldAlert, Clock, X, Settings, MessageCircle } from 'lucide-react';
 import { ThemeToggle } from './ThemeToggle';
 import { NDCLogo } from './NDCLogo';
 import { NotificationDropdown } from './NotificationDropdown';
@@ -121,15 +121,16 @@ export const Header: React.FC<HeaderProps> = ({
             onNavigate={onNavigate}
           />
 
-          {/* Messages Button (Placeholder / Teaser) */}
+          {/* Messages Button (Meta Messenger) */}
           <button
             type="button"
             onClick={() => onNavigate('messages')}
-            className="hidden sm:flex p-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-            title="Messages"
-            aria-label="Messages"
+            className="hidden sm:flex relative p-2 rounded-xl text-slate-600 dark:text-slate-300 hover:text-[#0084FF] hover:bg-blue-50 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+            title="Messenger"
+            aria-label="Messenger"
           >
-            <Mail className="w-5 h-5" />
+            <MessageCircle className="w-5 h-5 text-[#0084FF]" />
+            <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-[#0084FF] ring-2 ring-white dark:ring-slate-900" />
           </button>
 
           {/* User Profile Trigger & Dropdown */}
