@@ -34,7 +34,9 @@ import {
   UploadCloud,
   ArrowUpLeft,
   Video,
-  Link2
+  Link2,
+  Filter,
+  Check
 } from 'lucide-react';
 import { PostItem, PostComment } from '../types';
 import { useAuth } from '../context/AuthContext';
@@ -242,6 +244,8 @@ export const FeedView: React.FC<FeedViewProps> = ({
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
   const [activeFilterCategory, setActiveFilterCategory] = useState<string>('All');
+  const [isFilterDropdownOpen, setIsFilterDropdownOpen] = useState<boolean>(false);
+  const filterDropdownRef = useRef<HTMLDivElement>(null);
   const [autoPlayOnScroll, setAutoPlayOnScroll] = useState<boolean>(true);
 
   // Facebook-style "New Post" Modal state
@@ -319,6 +323,23 @@ export const FeedView: React.FC<FeedViewProps> = ({
     window.addEventListener('click', handleClickOutside);
     return () => window.removeEventListener('click', handleClickOutside);
   }, []);
+
+  useEffect(() => {
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (
+        filterDropdownRef.current &&
+        !filterDropdownRef.current.contains(e.target as Node)
+      ) {
+        setIsFilterDropdownOpen(false);
+      }
+    };
+    if (isFilterDropdownOpen) {
+      window.addEventListener('mousedown', handleOutsideClick);
+    }
+    return () => {
+      window.removeEventListener('mousedown', handleOutsideClick);
+    };
+  }, [isFilterDropdownOpen]);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -1853,32 +1874,158 @@ export const FeedView: React.FC<FeedViewProps> = ({
         </div>
       )}
 
-      {/* Category Filter Bar + Scroll Auto-Play Video Toggle */}
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
-          {['All', ...CATEGORIES.map((c) => c.label)].map((catLabel) => {
-            const active = activeFilterCategory === catLabel;
-            return (
+      {/* Category Filter Interactive Dropdown Menu + Scroll Auto-Play Video Toggle */}
+      <div className="relative z-20 flex flex-wrap items-center justify-between gap-2.5">
+        <div className="relative inline-block" ref={filterDropdownRef}>
+          <button
+            type="button"
+            id="feed-category-filter-dropdown-btn"
+            onClick={() => setIsFilterDropdownOpen((prev) => !prev)}
+            aria-expanded={isFilterDropdownOpen}
+            aria-haspopup="listbox"
+            className={`inline-flex items-center gap-2.5 px-4 py-2 rounded-2xl text-xs font-bold transition-all cursor-pointer shadow-xs border ${
+              activeFilterCategory !== 'All'
+                ? 'bg-blue-600 text-white border-blue-500 shadow-blue-600/20'
+                : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 border-slate-200/80 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'
+            }`}
+          >
+            <Filter className={`w-3.5 h-3.5 ${activeFilterCategory !== 'All' ? 'text-white' : 'text-blue-500'}`} />
+            <span>
+              Category: <span className="font-extrabold">{activeFilterCategory === 'All' ? 'All Posts' : activeFilterCategory}</span>
+            </span>
+            <span
+              className={`px-1.5 py-0.5 rounded-full text-[10px] font-black ${
+                activeFilterCategory !== 'All'
+                  ? 'bg-white/20 text-white'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+              }`}
+            >
+              {activeFilterCategory === 'All'
+                ? posts.length
+                : posts.filter((p) => p.category === activeFilterCategory).length}
+            </span>
+            <ChevronDown
+              className={`w-3.5 h-3.5 transition-transform duration-200 ${
+                isFilterDropdownOpen ? 'rotate-180' : ''
+              }`}
+            />
+          </button>
+
+          {/* Interactive Dropdown Menu Popover */}
+          {isFilterDropdownOpen && (
+            <div
+              role="listbox"
+              className="absolute left-0 top-full mt-1.5 w-64 sm:w-72 bg-white dark:bg-slate-900 rounded-2xl p-1.5 border border-slate-200 dark:border-slate-800 shadow-xl z-50 backdrop-blur-md animate-in fade-in zoom-in-95 duration-150"
+            >
+              <div className="px-3 py-1.5 text-[10px] font-black uppercase tracking-wider text-slate-400 dark:text-slate-500 border-b border-slate-100 dark:border-slate-800/80 mb-1 flex items-center justify-between">
+                <span>Filter Feed Categories</span>
+                <span>{posts.length} Total</span>
+              </div>
+
+              {/* All Posts Option */}
               <button
-                key={catLabel}
                 type="button"
-                onClick={() => setActiveFilterCategory(catLabel)}
-                className={`px-3.5 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
-                  active
-                    ? 'bg-blue-600 text-white shadow-xs'
-                    : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400 border border-slate-200/80 dark:border-slate-800 hover:border-blue-400'
+                role="option"
+                aria-selected={activeFilterCategory === 'All'}
+                onClick={() => {
+                  setActiveFilterCategory('All');
+                  setIsFilterDropdownOpen(false);
+                }}
+                className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                  activeFilterCategory === 'All'
+                    ? 'bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 font-bold'
+                    : 'text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800/60'
                 }`}
               >
-                {catLabel}
+                <div className="flex items-center gap-2.5">
+                  <div className="w-6 h-6 rounded-lg bg-blue-100 dark:bg-blue-950 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0">
+                    <Filter className="w-3 h-3" />
+                  </div>
+                  <span>All Posts</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] text-slate-400 font-medium">
+                    {posts.length}
+                  </span>
+                  {activeFilterCategory === 'All' && (
+                    <Check className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+                  )}
+                </div>
               </button>
-            );
-          })}
+
+              {/* Individual Categories */}
+              {CATEGORIES.map((cat) => {
+                const Icon = cat.icon;
+                const isSelected = activeFilterCategory === cat.label;
+                const count = posts.filter((p) => p.category === cat.label).length;
+                return (
+                  <button
+                    key={cat.label}
+                    type="button"
+                    role="option"
+                    aria-selected={isSelected}
+                    onClick={() => {
+                      setActiveFilterCategory(cat.label);
+                      setIsFilterDropdownOpen(false);
+                    }}
+                    className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                      isSelected
+                        ? 'bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 font-bold'
+                        : 'text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800/60'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <div className={`w-6 h-6 rounded-lg flex items-center justify-center shrink-0 ${cat.bg} ${cat.color}`}>
+                        <Icon className="w-3 h-3" />
+                      </div>
+                      <span>{cat.label}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] text-slate-400 font-medium">{count}</span>
+                      {isSelected && (
+                        <Check className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
+
+              {activeFilterCategory !== 'All' && (
+                <div className="pt-1 mt-1 border-t border-slate-100 dark:border-slate-800/80">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveFilterCategory('All');
+                      setIsFilterDropdownOpen(false);
+                    }}
+                    className="w-full text-center py-1.5 text-[11px] font-bold text-rose-600 dark:text-rose-400 hover:underline cursor-pointer"
+                  >
+                    Clear Filter
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
+        {/* Clear Filter Quick Tag if a category is selected */}
+        {activeFilterCategory !== 'All' && (
+          <button
+            type="button"
+            onClick={() => setActiveFilterCategory('All')}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors cursor-pointer"
+            title="Reset filter to all posts"
+          >
+            <span>Showing: {activeFilterCategory}</span>
+            <X className="w-3 h-3 text-slate-400 hover:text-rose-500" />
+          </button>
+        )}
+
+        {/* Video Auto-play Toggle */}
         <button
           type="button"
           onClick={() => setAutoPlayOnScroll((prev) => !prev)}
-          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-bold border transition-all cursor-pointer shrink-0 ${
+          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-2xl text-[11px] font-bold border transition-all cursor-pointer shrink-0 shadow-xs ml-auto ${
             autoPlayOnScroll
               ? 'bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800'
               : 'bg-white dark:bg-slate-900 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-800'
@@ -1886,7 +2033,9 @@ export const FeedView: React.FC<FeedViewProps> = ({
           title="Automatically play videos when scrolled into view and pause when scrolled away"
         >
           <Video className="w-3.5 h-3.5" />
-          <span>Auto-Video on Scroll: {autoPlayOnScroll ? 'ON' : 'OFF'}</span>
+          <span className="hidden sm:inline">Auto-Video on Scroll:</span>
+          <span className="sm:hidden">Auto-Play:</span>
+          <span>{autoPlayOnScroll ? 'ON' : 'OFF'}</span>
         </button>
       </div>
 

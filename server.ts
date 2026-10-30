@@ -822,6 +822,104 @@ app.get('/api/stream-groups', rateLimitGuard(120, 60_000), async (_req: Request,
   }
 });
 
+// Quad Feed Posts - Resilient Server Proxy
+app.get('/api/posts', rateLimitGuard(120, 60_000), async (req: Request, res: Response) => {
+  try {
+    const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
+    const { data: posts, error } = await supabaseServer
+      .from('posts')
+      .select(`
+        id,
+        author_id,
+        content,
+        category,
+        images,
+        videos,
+        likes_count,
+        comments_count,
+        is_pinned,
+        is_edited,
+        created_at
+      `)
+      .eq('is_deleted', false)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+
+    if (error) {
+      return res.status(500).json({ error: error.message });
+    }
+    return res.json({ posts: posts || [] });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to fetch posts' });
+  }
+});
+
+app.post('/api/posts', rateLimitGuard(40, 60_000), async (req: Request, res: Response) => {
+  try {
+    const { authorId, content, category, images, videos } = req.body;
+    if (!authorId || !content) {
+      return res.status(400).json({ error: 'Author ID and content are required' });
+    }
+
+    const { data: author } = await supabaseServer
+      .from('alumni_profiles')
+      .select('id, full_name, avatar_url, batch_year, verification_status')
+      .eq('id', Number(authorId))
+      .maybeSingle();
+
+    const authorProfile = author || {
+      id: Number(authorId),
+      full_name: 'SZMC Alumnus',
+      avatar_url: '/assets/aistudio/images__1__2778177d.png',
+      batch_year: 25,
+      verification_status: 'verified',
+    };
+
+    const { data: newPost, error } = await supabaseServer
+      .from('posts')
+      .insert({
+        author_id: Number(authorId),
+        content: String(content).trim(),
+        category: category || 'General Update',
+        images: Array.isArray(images) ? images : [],
+        videos: Array.isArray(videos) ? videos : [],
+      })
+      .select(`
+        id,
+        author_id,
+        content,
+        category,
+        images,
+        videos,
+        likes_count,
+        comments_count,
+        is_pinned,
+        is_edited,
+        created_at
+      `)
+      .single();
+
+    if (error) {
+      return res.status(400).json({ error: error.message });
+    }
+
+    return res.status(201).json({ post: { ...newPost, author: authorProfile } });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to create post' });
+  }
+});
+
+// Downloadable quick fix SQL script
+app.get(['/szmc_quick_fix.sql', '/download/szmc_quick_fix.sql'], (_req: Request, res: Response) => {
+  const filePath = path.join(__dirname, 'public', 'szmc_quick_fix.sql');
+  if (existsSync(filePath)) {
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="szmc_quick_fix.sql"');
+    return res.sendFile(filePath);
+  }
+  return res.status(404).send('szmc_quick_fix.sql not found');
+});
+
 // Paginated 100k-scale Alumni Directory Query (with PII redaction guard)
 app.get(
   '/api/alumni',

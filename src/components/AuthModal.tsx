@@ -637,7 +637,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               </div>
               <p className="text-[11px] sm:text-xs text-slate-600 dark:text-slate-300 mt-1 truncate">
                 {mode === 'login' && 'Shaheed Ziaur Rahman Medical College (SZMC Bogura) Alumni Network'}
-                {mode === 'register' && 'Join 75+ batches worldwide'}
+                {mode === 'register' && 'Join 35+ batches worldwide'}
                 {mode === 'forgot' && 'Verify mobile number to restore access'}
               </p>
             </div>

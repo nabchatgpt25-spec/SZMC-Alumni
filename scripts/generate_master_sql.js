@@ -308,6 +308,7 @@ CREATE TABLE IF NOT EXISTS public.notifications (
   link_url TEXT NULL,
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   is_read BOOLEAN NOT NULL DEFAULT FALSE,
+  unread BOOLEAN NOT NULL DEFAULT TRUE,
   read_at TIMESTAMPTZ NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

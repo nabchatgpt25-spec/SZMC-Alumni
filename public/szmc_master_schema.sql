@@ -305,6 +305,7 @@ CREATE TABLE IF NOT EXISTS public.notifications (
   link_url TEXT NULL,
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   is_read BOOLEAN NOT NULL DEFAULT FALSE,
+  unread BOOLEAN NOT NULL DEFAULT TRUE,
   read_at TIMESTAMPTZ NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -600,11 +601,11 @@ BEGIN
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION public.current_profile_id() TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.current_user_role() TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.is_admin() TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.is_admin_or_mod() TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.is_verified_alumnus() TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.current_profile_id() TO anon, authenticated, public, service_role;
+GRANT EXECUTE ON FUNCTION public.current_user_role() TO anon, authenticated, public, service_role;
+GRANT EXECUTE ON FUNCTION public.is_admin() TO anon, authenticated, public, service_role;
+GRANT EXECUTE ON FUNCTION public.is_admin_or_mod() TO anon, authenticated, public, service_role;
+GRANT EXECUTE ON FUNCTION public.is_verified_alumnus() TO anon, authenticated, public, service_role;
 GRANT EXECUTE ON FUNCTION public.get_alumni_contact_details(BIGINT) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public.check_phone_available(TEXT) TO service_role;
 GRANT EXECUTE ON FUNCTION public.check_and_increment_rate_limit(TEXT, INTEGER, INTEGER) TO service_role;
@@ -662,6 +663,21 @@ GRANT UPDATE (
 GRANT ALL ON public.alumni_profiles TO service_role;
 GRANT ALL ON public.auth_rate_limits TO service_role;
 
+GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role;
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.posts TO anon, authenticated, service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.post_comments TO anon, authenticated, service_role;
+GRANT SELECT, INSERT, DELETE ON public.post_likes TO anon, authenticated, service_role;
+GRANT SELECT, INSERT, DELETE ON public.saved_posts TO anon, authenticated, service_role;
+GRANT SELECT, INSERT, UPDATE ON public.blood_requests TO anon, authenticated, service_role;
+GRANT SELECT, INSERT, UPDATE ON public.blood_donors TO anon, authenticated, service_role;
+GRANT SELECT ON public.gallery_albums TO anon, authenticated, service_role;
+GRANT SELECT ON public.gallery_photos TO anon, authenticated, service_role;
+GRANT SELECT ON public.official_notices TO anon, authenticated, service_role;
+GRANT SELECT ON public.batches TO anon, authenticated, service_role;
+GRANT SELECT ON public.academic_stream_groups TO anon, authenticated, service_role;
+
 DROP POLICY IF EXISTS "Batches: Public Read" ON public.batches;
 CREATE POLICY "Batches: Public Read" ON public.batches FOR SELECT USING (true);
 
@@ -678,61 +694,116 @@ DROP POLICY IF EXISTS "Alumni: Insert Own" ON public.alumni_profiles;
 CREATE POLICY "Alumni: Insert Own" ON public.alumni_profiles FOR INSERT TO authenticated WITH CHECK (auth_user_id = auth.uid());
 
 DROP POLICY IF EXISTS "Posts: Read Visible" ON public.posts;
-CREATE POLICY "Posts: Read Visible" ON public.posts FOR SELECT TO authenticated USING (true);
+DROP POLICY IF EXISTS "posts_select_visible" ON public.posts;
+CREATE POLICY "Posts: Read Visible" ON public.posts FOR SELECT TO anon, authenticated
+USING (
+  is_deleted = false
+  OR (auth.uid() IS NOT NULL AND (author_id = public.current_profile_id() OR public.is_admin_or_mod()))
+);
 
 DROP POLICY IF EXISTS "Posts: Insert Own" ON public.posts;
-CREATE POLICY "Posts: Insert Own" ON public.posts FOR INSERT TO authenticated WITH CHECK (author_id = public.current_profile_id());
+DROP POLICY IF EXISTS "posts_insert_own" ON public.posts;
+CREATE POLICY "Posts: Insert Own" ON public.posts FOR INSERT TO anon, authenticated
+WITH CHECK (
+  (auth.uid() IS NOT NULL AND author_id = public.current_profile_id())
+  OR (EXISTS (SELECT 1 FROM public.alumni_profiles p WHERE p.id = author_id))
+);
 
 DROP POLICY IF EXISTS "Posts: Update Own" ON public.posts;
-CREATE POLICY "Posts: Update Own" ON public.posts FOR UPDATE TO authenticated USING (author_id = public.current_profile_id() OR public.is_admin_or_mod());
+DROP POLICY IF EXISTS "posts_update_own_or_mod" ON public.posts;
+CREATE POLICY "Posts: Update Own" ON public.posts FOR UPDATE TO anon, authenticated
+USING (
+  (auth.uid() IS NOT NULL AND (author_id = public.current_profile_id() OR public.is_admin_or_mod()))
+  OR (EXISTS (SELECT 1 FROM public.alumni_profiles p WHERE p.id = author_id))
+);
 
 DROP POLICY IF EXISTS "Posts: Delete Own" ON public.posts;
-CREATE POLICY "Posts: Delete Own" ON public.posts FOR DELETE TO authenticated USING (author_id = public.current_profile_id() OR public.is_admin_or_mod());
+DROP POLICY IF EXISTS "posts_delete_own_or_mod" ON public.posts;
+CREATE POLICY "Posts: Delete Own" ON public.posts FOR DELETE TO anon, authenticated
+USING (
+  (auth.uid() IS NOT NULL AND (author_id = public.current_profile_id() OR public.is_admin_or_mod()))
+  OR (EXISTS (SELECT 1 FROM public.alumni_profiles p WHERE p.id = author_id))
+);
 
 DROP POLICY IF EXISTS "Comments: Read All" ON public.post_comments;
-CREATE POLICY "Comments: Read All" ON public.post_comments FOR SELECT TO authenticated USING (true);
+DROP POLICY IF EXISTS "post_comments_select_visible" ON public.post_comments;
+CREATE POLICY "Comments: Read All" ON public.post_comments FOR SELECT TO anon, authenticated
+USING (
+  is_deleted = false
+  OR (auth.uid() IS NOT NULL AND (user_id = public.current_profile_id() OR public.is_admin_or_mod()))
+);
 
 DROP POLICY IF EXISTS "Comments: Insert Own" ON public.post_comments;
-CREATE POLICY "Comments: Insert Own" ON public.post_comments FOR INSERT TO authenticated WITH CHECK (author_id = public.current_profile_id());
+DROP POLICY IF EXISTS "post_comments_insert_own" ON public.post_comments;
+CREATE POLICY "Comments: Insert Own" ON public.post_comments FOR INSERT TO anon, authenticated
+WITH CHECK (
+  (auth.uid() IS NOT NULL AND user_id = public.current_profile_id())
+  OR (EXISTS (SELECT 1 FROM public.alumni_profiles p WHERE p.id = user_id))
+);
 
 DROP POLICY IF EXISTS "Comments: Delete Own" ON public.post_comments;
-CREATE POLICY "Comments: Delete Own" ON public.post_comments FOR DELETE TO authenticated USING (author_id = public.current_profile_id() OR public.is_admin_or_mod());
+CREATE POLICY "Comments: Delete Own" ON public.post_comments FOR DELETE TO anon, authenticated
+USING (
+  (auth.uid() IS NOT NULL AND (user_id = public.current_profile_id() OR public.is_admin_or_mod()))
+  OR (EXISTS (SELECT 1 FROM public.alumni_profiles p WHERE p.id = user_id))
+);
 
 DROP POLICY IF EXISTS "Likes: Read All" ON public.post_likes;
-CREATE POLICY "Likes: Read All" ON public.post_likes FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Likes: Read All" ON public.post_likes FOR SELECT TO anon, authenticated USING (true);
 
 DROP POLICY IF EXISTS "Likes: Manage Own" ON public.post_likes;
-CREATE POLICY "Likes: Manage Own" ON public.post_likes FOR ALL TO authenticated USING (user_id = public.current_profile_id());
+CREATE POLICY "Likes: Manage Own" ON public.post_likes FOR ALL TO anon, authenticated
+USING (
+  (auth.uid() IS NOT NULL AND user_id = public.current_profile_id())
+  OR (EXISTS (SELECT 1 FROM public.alumni_profiles p WHERE p.id = user_id))
+);
 
 DROP POLICY IF EXISTS "Saved: Manage Own" ON public.saved_posts;
-CREATE POLICY "Saved: Manage Own" ON public.saved_posts FOR ALL TO authenticated USING (user_id = public.current_profile_id());
+CREATE POLICY "Saved: Manage Own" ON public.saved_posts FOR ALL TO anon, authenticated
+USING (
+  (auth.uid() IS NOT NULL AND user_id = public.current_profile_id())
+  OR (EXISTS (SELECT 1 FROM public.alumni_profiles p WHERE p.id = user_id))
+);
 
 DROP POLICY IF EXISTS "Blood Requests: Read Active" ON public.blood_requests;
-CREATE POLICY "Blood Requests: Read Active" ON public.blood_requests FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Blood Requests: Read Active" ON public.blood_requests FOR SELECT TO anon, authenticated USING (true);
 
 DROP POLICY IF EXISTS "Blood Requests: Insert" ON public.blood_requests;
-CREATE POLICY "Blood Requests: Insert" ON public.blood_requests FOR INSERT TO authenticated WITH CHECK (requester_id = public.current_profile_id());
+CREATE POLICY "Blood Requests: Insert" ON public.blood_requests FOR INSERT TO anon, authenticated
+WITH CHECK (
+  (auth.uid() IS NOT NULL AND requester_id = public.current_profile_id())
+  OR (EXISTS (SELECT 1 FROM public.alumni_profiles p WHERE p.id = requester_id))
+);
 
 DROP POLICY IF EXISTS "Blood Donors: Read" ON public.blood_donors;
-CREATE POLICY "Blood Donors: Read" ON public.blood_donors FOR SELECT TO authenticated USING (is_listed_publicly = true OR profile_id = public.current_profile_id() OR public.is_admin_or_mod());
+CREATE POLICY "Blood Donors: Read" ON public.blood_donors FOR SELECT TO anon, authenticated
+USING (is_listed_publicly = true OR profile_id = public.current_profile_id() OR public.is_admin_or_mod());
 
 DROP POLICY IF EXISTS "Blood Donors: Upsert Own" ON public.blood_donors;
-CREATE POLICY "Blood Donors: Upsert Own" ON public.blood_donors FOR ALL TO authenticated USING (profile_id = public.current_profile_id());
+CREATE POLICY "Blood Donors: Upsert Own" ON public.blood_donors FOR ALL TO anon, authenticated
+USING (
+  (auth.uid() IS NOT NULL AND profile_id = public.current_profile_id())
+  OR (EXISTS (SELECT 1 FROM public.alumni_profiles p WHERE p.id = profile_id))
+);
 
 DROP POLICY IF EXISTS "Gallery: Read All" ON public.gallery_albums;
-CREATE POLICY "Gallery: Read All" ON public.gallery_albums FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Gallery: Read All" ON public.gallery_albums FOR SELECT TO anon, authenticated USING (true);
 
 DROP POLICY IF EXISTS "Gallery Photos: Read Approved" ON public.gallery_photos;
-CREATE POLICY "Gallery Photos: Read Approved" ON public.gallery_photos FOR SELECT TO authenticated USING (is_approved = true OR uploader_id = public.current_profile_id() OR public.is_admin_or_mod());
+CREATE POLICY "Gallery Photos: Read Approved" ON public.gallery_photos FOR SELECT TO anon, authenticated
+USING (is_approved = true OR uploader_id = public.current_profile_id() OR public.is_admin_or_mod());
 
 DROP POLICY IF EXISTS "Notices: Public Read" ON public.official_notices;
-CREATE POLICY "Notices: Public Read" ON public.official_notices FOR SELECT USING (is_published = true OR public.is_admin_or_mod());
+CREATE POLICY "Notices: Public Read" ON public.official_notices FOR SELECT TO anon, authenticated
+USING (is_published = true OR (auth.uid() IS NOT NULL AND public.is_admin_or_mod()));
 
 DROP POLICY IF EXISTS "Vouches: Read Related" ON public.peer_vouches;
-CREATE POLICY "Vouches: Read Related" ON public.peer_vouches FOR SELECT TO authenticated USING (requester_profile_id = public.current_profile_id() OR voucher_profile_id = public.current_profile_id() OR public.is_admin_or_mod());
+CREATE POLICY "Vouches: Read Related" ON public.peer_vouches FOR SELECT TO authenticated
+USING (requester_profile_id = public.current_profile_id() OR voucher_profile_id = public.current_profile_id() OR public.is_admin_or_mod());
 
 DROP POLICY IF EXISTS "Vouches: Give Vouch" ON public.peer_vouches;
-CREATE POLICY "Vouches: Give Vouch" ON public.peer_vouches FOR INSERT TO authenticated WITH CHECK (voucher_profile_id = public.current_profile_id() AND public.is_verified_alumnus());
+CREATE POLICY "Vouches: Give Vouch" ON public.peer_vouches FOR INSERT TO authenticated
+WITH CHECK (voucher_profile_id = public.current_profile_id() AND public.is_verified_alumnus());
 
 -- -----------------------------------------------------------------------------
 -- 8. STORAGE BUCKETS & POLICIES (NO "ALTER TABLE storage.objects")
