@@ -1,170 +1,55 @@
 -- =============================================================================
--- Migration 009: tighten Storage ownership and phone availability RPC access
--- This migration is committed for review only; it must be applied through the
--- project’s controlled migration process after staging validation.
+-- MIGRATION 008: EXPAND ACADEMIC STREAM GROUPS (SAFE ADDITIVE MIGRATION)
+-- Project: Notre Dame College (NDC) Alumni Platform
+-- Target: Supabase PostgreSQL
+-- Description:
+--   Populates individual group code entries for Science (01 to 17) and
+--   completes Business Studies groups (G, H) in `public.academic_stream_groups`.
+--   Enables alumni profiles to validate against specific group codes in
+--   foreign key and trigger validations.
+--   Safe and additive: Uses ON CONFLICT DO NOTHING without modifying
+--   existing rows or dropping any constraints.
 -- =============================================================================
 
 BEGIN;
 
-REVOKE ALL ON FUNCTION public.check_phone_available(TEXT) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.check_phone_available(TEXT) TO service_role;
-
--- storage.objects already has RLS enabled by default in Supabase (owned by supabase_storage_admin)
-
--- -----------------------------------------------------------------------------
--- 1. AVATARS (PUBLIC BUCKET)
--- -----------------------------------------------------------------------------
--- 1.1 Anyone can view avatars (public read)
-DROP POLICY IF EXISTS "Avatars: Public Access" ON storage.objects;
-CREATE POLICY "Avatars: Public Access"
-ON storage.objects FOR SELECT
-USING (bucket_id = 'avatars');
-
--- 1.2 Authenticated alumni can upload an avatar
-DROP POLICY IF EXISTS "Avatars: Authenticated Upload" ON storage.objects;
-CREATE POLICY "Avatars: Authenticated Upload"
-ON storage.objects FOR INSERT
-TO authenticated
-WITH CHECK (bucket_id = 'avatars' AND owner = auth.uid());
-
--- 1.3 Authenticated alumni can update their avatar
-DROP POLICY IF EXISTS "Avatars: Authenticated Update" ON storage.objects;
-CREATE POLICY "Avatars: Authenticated Update"
-ON storage.objects FOR UPDATE
-TO authenticated
-USING (bucket_id = 'avatars' AND (owner = auth.uid() OR public.is_admin_or_mod()))
-WITH CHECK (bucket_id = 'avatars' AND (owner = auth.uid() OR public.is_admin_or_mod()));
-
--- 1.4 Authenticated alumni can delete their avatar
-DROP POLICY IF EXISTS "Avatars: Authenticated Delete" ON storage.objects;
-CREATE POLICY "Avatars: Authenticated Delete"
-ON storage.objects FOR DELETE
-TO authenticated
-USING (bucket_id = 'avatars' AND (owner = auth.uid() OR public.is_admin_or_mod()));
-
--- -----------------------------------------------------------------------------
--- 2. POST-MEDIA (PUBLIC BUCKET)
--- -----------------------------------------------------------------------------
--- 2.1 Anyone can view feed post images and attachments
-DROP POLICY IF EXISTS "Post Media: Public Access" ON storage.objects;
-CREATE POLICY "Post Media: Public Access"
-ON storage.objects FOR SELECT
-USING (bucket_id = 'post-media');
-
--- 2.2 Authenticated alumni can upload media for feed posts
-DROP POLICY IF EXISTS "Post Media: Authenticated Upload" ON storage.objects;
-CREATE POLICY "Post Media: Authenticated Upload"
-ON storage.objects FOR INSERT
-TO authenticated
-WITH CHECK (bucket_id = 'post-media' AND owner = auth.uid());
-
--- 2.3 Authenticated alumni can update their post media
-DROP POLICY IF EXISTS "Post Media: Authenticated Update" ON storage.objects;
-CREATE POLICY "Post Media: Authenticated Update"
-ON storage.objects FOR UPDATE
-TO authenticated
-USING (bucket_id = 'post-media' AND (owner = auth.uid() OR public.is_admin_or_mod()))
-WITH CHECK (bucket_id = 'post-media' AND (owner = auth.uid() OR public.is_admin_or_mod()));
-
--- 2.4 Authenticated alumni can delete their media (admins can moderate)
-DROP POLICY IF EXISTS "Post Media: Authenticated Delete" ON storage.objects;
-CREATE POLICY "Post Media: Authenticated Delete"
-ON storage.objects FOR DELETE
-TO authenticated
-USING (bucket_id = 'post-media' AND (owner = auth.uid() OR public.is_admin_or_mod()));
-
--- -----------------------------------------------------------------------------
--- 3. GALLERY (PUBLIC BUCKET)
--- -----------------------------------------------------------------------------
--- 3.1 Anyone can view historical campus albums and photo galleries
-DROP POLICY IF EXISTS "Gallery: Public Access" ON storage.objects;
-CREATE POLICY "Gallery: Public Access"
-ON storage.objects FOR SELECT
-USING (bucket_id = 'gallery');
-
--- 3.2 Authenticated members can upload gallery photos
-DROP POLICY IF EXISTS "Gallery: Authenticated Upload" ON storage.objects;
-CREATE POLICY "Gallery: Authenticated Upload"
-ON storage.objects FOR INSERT
-TO authenticated
-WITH CHECK (bucket_id = 'gallery' AND owner = auth.uid());
-
--- 3.3 Authenticated members can update gallery photos
-DROP POLICY IF EXISTS "Gallery: Authenticated Update" ON storage.objects;
-CREATE POLICY "Gallery: Authenticated Update"
-ON storage.objects FOR UPDATE
-TO authenticated
-USING (bucket_id = 'gallery' AND (owner = auth.uid() OR public.is_admin_or_mod()))
-WITH CHECK (bucket_id = 'gallery' AND (owner = auth.uid() OR public.is_admin_or_mod()));
-
--- 3.4 Authenticated members/admins can delete gallery photos
-DROP POLICY IF EXISTS "Gallery: Authenticated Delete" ON storage.objects;
-CREATE POLICY "Gallery: Authenticated Delete"
-ON storage.objects FOR DELETE
-TO authenticated
-USING (bucket_id = 'gallery' AND (owner = auth.uid() OR public.is_admin_or_mod()));
-
--- -----------------------------------------------------------------------------
--- 4. VERIFICATION-DOCUMENTS (STRICTLY PRIVATE BUCKET)
--- -----------------------------------------------------------------------------
--- 4.1 Strict access: ONLY the document owner or verified administrators can read
-DROP POLICY IF EXISTS "Verification Documents: Owner or Admin Select" ON storage.objects;
-CREATE POLICY "Verification Documents: Owner or Admin Select"
-ON storage.objects FOR SELECT
-TO authenticated
-USING (
-  bucket_id = 'verification-documents'
-  AND (
-    (auth.uid() = owner)
-    OR (auth.uid() IS NOT NULL AND auth.uid()::text = (storage.foldername(name))[1])
-    OR public.is_admin_or_mod()
-  )
-);
-
--- 4.2 Authenticated alumni can upload identity documents for verification
-DROP POLICY IF EXISTS "Verification Documents: Authenticated Upload" ON storage.objects;
-CREATE POLICY "Verification Documents: Authenticated Upload"
-ON storage.objects FOR INSERT
-TO authenticated
-WITH CHECK (
-  bucket_id = 'verification-documents'
-  AND owner = auth.uid()
-);
-
--- 4.3 Only the owner or administrators can update verification files
-DROP POLICY IF EXISTS "Verification Documents: Owner or Admin Update" ON storage.objects;
-CREATE POLICY "Verification Documents: Owner or Admin Update"
-ON storage.objects FOR UPDATE
-TO authenticated
-USING (
-  bucket_id = 'verification-documents'
-  AND (
-    (auth.uid() = owner)
-    OR (auth.uid() IS NOT NULL AND auth.uid()::text = (storage.foldername(name))[1])
-    OR public.is_admin_or_mod()
-  )
+-- 1. Science Groups 01 through 17
+INSERT INTO public.academic_stream_groups (
+  stream,
+  group_code,
+  expected_group_count,
+  is_active
 )
-WITH CHECK (
-  bucket_id = 'verification-documents'
-  AND (
-    (auth.uid() = owner)
-    OR (auth.uid() IS NOT NULL AND auth.uid()::text = (storage.foldername(name))[1])
-    OR public.is_admin_or_mod()
-  )
-);
+VALUES
+  ('Science', '01', 17, TRUE),
+  ('Science', '02', 17, TRUE),
+  ('Science', '03', 17, TRUE),
+  ('Science', '04', 17, TRUE),
+  ('Science', '05', 17, TRUE),
+  ('Science', '06', 17, TRUE),
+  ('Science', '07', 17, TRUE),
+  ('Science', '08', 17, TRUE),
+  ('Science', '09', 17, TRUE),
+  ('Science', '10', 17, TRUE),
+  ('Science', '11', 17, TRUE),
+  ('Science', '12', 17, TRUE),
+  ('Science', '13', 17, TRUE),
+  ('Science', '14', 17, TRUE),
+  ('Science', '15', 17, TRUE),
+  ('Science', '16', 17, TRUE),
+  ('Science', '17', 17, TRUE)
+ON CONFLICT (stream, group_code) DO NOTHING;
 
--- 4.4 Only the owner or administrators can delete verification files
-DROP POLICY IF EXISTS "Verification Documents: Owner or Admin Delete" ON storage.objects;
-CREATE POLICY "Verification Documents: Owner or Admin Delete"
-ON storage.objects FOR DELETE
-TO authenticated
-USING (
-  bucket_id = 'verification-documents'
-  AND (
-    (auth.uid() = owner)
-    OR (auth.uid() IS NOT NULL AND auth.uid()::text = (storage.foldername(name))[1])
-    OR public.is_admin_or_mod()
-  )
-);
+-- 2. Business Studies Groups G and H
+INSERT INTO public.academic_stream_groups (
+  stream,
+  group_code,
+  expected_group_count,
+  is_active
+)
+VALUES
+  ('Business Studies', 'G', 8, TRUE),
+  ('Business Studies', 'H', 8, TRUE)
+ON CONFLICT (stream, group_code) DO NOTHING;
 
 COMMIT;

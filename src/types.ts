@@ -307,6 +307,7 @@ export interface PostItem {
   content: string;
   images: string[];
   videos?: string[];
+  layout_template?: 'carousel' | 'grid' | 'column' | 'hero';
   linked_url?: string;
   link_metadata?: any;
   likesCount: number;

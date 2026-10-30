@@ -102,6 +102,7 @@ export async function fetchFeedPosts(limit = 25, offset = 0, currentUserId?: num
         category: row.category || 'General Update',
         images: Array.isArray(row.images) ? row.images : [],
         videos: Array.isArray(row.videos) ? row.videos : [],
+        layout_template: row.layout_template || row.link_metadata?.layout_template || (Array.isArray(row.images) && row.images.length > 1 ? 'carousel' : 'grid'),
         linked_url: row.linked_url,
         link_metadata: row.link_metadata,
         likesCount: row.likes_count || 0,
@@ -136,6 +137,7 @@ export async function createPost(params: {
   category?: string;
   images?: string[];
   videos?: string[];
+  layout_template?: 'carousel' | 'grid' | 'column' | 'hero';
   linked_url?: string;
   link_metadata?: LinkMetadata;
 }): Promise<{ success: boolean; post?: PostItem; error?: string }> {
@@ -149,6 +151,11 @@ export async function createPost(params: {
     const cleanImages = (params.images || []).filter(Boolean);
     const cleanVideos = (params.videos || []).filter(Boolean);
 
+    const metadataWithLayout = {
+      ...(params.link_metadata || {}),
+      layout_template: params.layout_template || (cleanImages.length > 1 ? 'carousel' : 'grid'),
+    };
+
     const payload = {
       author_id: params.authorId,
       content: safeContent,
@@ -156,7 +163,7 @@ export async function createPost(params: {
       images: cleanImages,
       videos: cleanVideos,
       linked_url: params.linked_url || null,
-      link_metadata: params.link_metadata || null,
+      link_metadata: metadataWithLayout,
     };
 
     // First attempt: direct Supabase insert
@@ -215,6 +222,7 @@ export async function createPost(params: {
         category: insertedRow.category,
         images: insertedRow.images || [],
         videos: insertedRow.videos || [],
+        layout_template: insertedRow.layout_template || insertedRow.link_metadata?.layout_template || params.layout_template || (cleanImages.length > 1 ? 'carousel' : 'grid'),
         linked_url: insertedRow.linked_url,
         link_metadata: insertedRow.link_metadata,
         likesCount: 0,

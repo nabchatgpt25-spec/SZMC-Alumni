@@ -42,6 +42,7 @@ import { PostItem, PostComment } from '../types';
 import { CreatePostModal } from './CreatePostModal';
 import { PostCard } from './PostCard';
 import { LinkPreview } from './LinkPreview';
+import { PostMediaCarousel } from './PostMediaCarousel';
 import { useAuth } from '../context/AuthContext';
 import { playSound } from '../utils/audio';
 import { PostLightboxModal } from './PostLightboxModal';
@@ -253,6 +254,9 @@ export const FeedView: React.FC<FeedViewProps> = ({
 
   // Facebook-style "New Post" Modal state
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [composerInitialTab, setComposerInitialTab] = useState<'text' | 'photo' | 'video' | 'link'>('text');
+  const [composerInitialImages, setComposerInitialImages] = useState<string[]>([]);
+  const [composerInitialVideos, setComposerInitialVideos] = useState<string[]>([]);
   const [postBackground, setPostBackground] = useState<string>('default');
   const [showBgPicker, setShowBgPicker] = useState(false);
   const [postFeeling, setPostFeeling] = useState<string | null>(null);
@@ -1176,11 +1180,12 @@ export const FeedView: React.FC<FeedViewProps> = ({
         </div>
       )}
 
-      {/* Create Post Bar (Opens CreatePostModal) */}
+      {/* Facebook-Style Create Post Box */}
       <div
-        className="bg-white dark:bg-slate-900 rounded-3xl p-4 sm:p-5 border border-slate-200/80 dark:border-slate-800 shadow-xs transition-all hover:border-slate-300 dark:hover:border-slate-700"
+        className="bg-white dark:bg-slate-900 rounded-2xl sm:rounded-3xl p-3.5 sm:p-5 border border-slate-200/80 dark:border-slate-800/80 shadow-xs transition-all hover:border-slate-300 dark:hover:border-slate-700"
       >
-        <div className="flex items-center gap-3">
+        {/* Selector 3: div:nth-of-type(1) -> Avatar + Rounded Input Trigger */}
+        <div className="flex items-center gap-2.5 sm:gap-3">
           <img
             src={currentUser.avatarUrl || '/assets/aistudio/images__1__2778177d.png'}
             alt={currentUser.fullName}
@@ -1190,31 +1195,142 @@ export const FeedView: React.FC<FeedViewProps> = ({
           <button
             type="button"
             id="open-create-post-modal-btn"
-            onClick={() => setIsCreateModalOpen(true)}
-            className="flex-1 text-left px-4 py-3 rounded-full bg-slate-100 hover:bg-slate-200/75 dark:bg-slate-800/80 dark:hover:bg-slate-800 border border-slate-200/70 dark:border-slate-700/70 text-sm text-slate-500 dark:text-slate-400 transition-all cursor-pointer truncate"
+            onClick={() => {
+              setComposerInitialTab('text');
+              setIsCreateModalOpen(true);
+            }}
+            className="flex-1 text-left px-4 py-2.5 sm:py-3 rounded-full bg-slate-100 hover:bg-slate-200/75 dark:bg-slate-800/80 dark:hover:bg-slate-800 border border-slate-200/70 dark:border-slate-700/70 text-xs sm:text-sm text-slate-500 dark:text-slate-400 transition-all cursor-pointer truncate"
           >
-            What's on your mind, Dr. {currentUser.fullName.split(' ')[0] || 'Alumnus'}? Share updates, photos, or links...
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setIsCreateModalOpen(true)}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-full bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 text-xs font-bold transition-all cursor-pointer shrink-0"
-            title="Add Photos"
-          >
-            <ImageIcon className="w-4 h-4 text-emerald-500" />
-            <span className="hidden sm:inline">Photo</span>
+            What's on your mind, Dr. {currentUser.fullName.split(' ')[0] || 'Alumnus'}?
           </button>
         </div>
+
+        {/* Selector 2: div:nth-of-type(2) -> Divider */}
+        <div className="border-t border-slate-100 dark:border-slate-800/80 my-3" />
+
+        {/* Selector 1: div:nth-of-type(3) -> Facebook Style Action Buttons (Photo, Video, Link) */}
+        <div className="flex items-center justify-between sm:justify-around gap-1 text-xs font-bold">
+          {/* Photo Button - Opens Computer Storage */}
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            className="flex-1 flex items-center justify-center gap-1.5 sm:gap-2 py-2 px-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-emerald-50 hover:text-emerald-700 dark:hover:bg-emerald-950/40 dark:hover:text-emerald-300 transition-all cursor-pointer active:scale-95"
+            title="Upload photo from computer storage"
+          >
+            <ImageIcon className="w-5 h-5 text-emerald-500 shrink-0" />
+            <span className="truncate">Photo</span>
+          </button>
+
+          {/* Video Button - Opens Computer Storage directly to upload downloaded video like photo button */}
+          <button
+            type="button"
+            onClick={() => videoInputRef.current?.click()}
+            className="flex-1 flex items-center justify-center gap-1.5 sm:gap-2 py-2 px-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-rose-50 hover:text-rose-700 dark:hover:bg-rose-950/40 dark:hover:text-rose-300 transition-all cursor-pointer active:scale-95"
+            title="Upload downloaded video from computer storage"
+          >
+            <Video className="w-5 h-5 text-rose-500 shrink-0" />
+            <span className="truncate">Video</span>
+          </button>
+
+          {/* Link Button */}
+          <button
+            type="button"
+            onClick={() => {
+              setComposerInitialTab('link');
+              setIsCreateModalOpen(true);
+            }}
+            className="flex-1 flex items-center justify-center gap-1.5 sm:gap-2 py-2 px-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-blue-50 hover:text-blue-700 dark:hover:bg-blue-950/40 dark:hover:text-blue-300 transition-all cursor-pointer active:scale-95"
+            title="Share web link"
+          >
+            <Link2 className="w-5 h-5 text-blue-500 shrink-0" />
+            <span className="truncate">Link</span>
+          </button>
+        </div>
+
+        {/* Direct Computer Storage File Pickers */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          accept="image/*"
+          onChange={(e) => {
+            if (e.target.files && e.target.files.length > 0) {
+              const files = Array.from(e.target.files);
+              const loadedUrls: string[] = [];
+              files.forEach((f) => {
+                const reader = new FileReader();
+                reader.onload = (ev) => {
+                  if (ev.target?.result) {
+                    loadedUrls.push(ev.target.result as string);
+                    if (loadedUrls.length >= files.length) {
+                      setComposerInitialImages(loadedUrls);
+                      setComposerInitialTab('photo');
+                      setIsCreateModalOpen(true);
+                    }
+                  }
+                };
+                reader.readAsDataURL(f);
+              });
+            }
+            e.target.value = '';
+          }}
+          className="hidden"
+        />
+
+        <input
+          ref={videoInputRef}
+          type="file"
+          multiple
+          accept="video/*,video/mp4,video/webm,video/quicktime,video/x-matroska"
+          onChange={(e) => {
+            if (e.target.files && e.target.files.length > 0) {
+              const files = Array.from(e.target.files);
+              const loadedUrls: string[] = [];
+              files.forEach((f) => {
+                if (f.size <= 25 * 1024 * 1024) {
+                  const reader = new FileReader();
+                  reader.onload = (ev) => {
+                    if (ev.target?.result) {
+                      loadedUrls.push(ev.target.result as string);
+                      if (loadedUrls.length >= files.length) {
+                        setComposerInitialVideos(loadedUrls);
+                        setComposerInitialTab('video');
+                        setIsCreateModalOpen(true);
+                      }
+                    }
+                  };
+                  reader.readAsDataURL(f);
+                } else {
+                  const objUrl = URL.createObjectURL(f);
+                  loadedUrls.push(objUrl);
+                  if (loadedUrls.length >= files.length) {
+                    setComposerInitialVideos(loadedUrls);
+                    setComposerInitialTab('video');
+                    setIsCreateModalOpen(true);
+                  }
+                }
+              });
+            }
+            e.target.value = '';
+          }}
+          className="hidden"
+        />
       </div>
 
       {/* Uploaded Clean CreatePostModal Component */}
       <CreatePostModal
         isOpen={isCreateModalOpen}
-        onClose={() => setIsCreateModalOpen(false)}
+        onClose={() => {
+          setIsCreateModalOpen(false);
+          setComposerInitialImages([]);
+          setComposerInitialVideos([]);
+        }}
         authorId={currentUser.id}
         authorName={currentUser.fullName}
         authorAvatar={currentUser.avatarUrl}
+        initialTab={composerInitialTab}
+        initialImages={composerInitialImages}
+        initialVideos={composerInitialVideos}
         onPostCreated={(newPost) => {
           setPosts((prev) => [newPost as any, ...prev]);
           playSound('post');
@@ -2064,22 +2180,22 @@ export const FeedView: React.FC<FeedViewProps> = ({
               <article
                 key={post.id}
                 id={`post-${post.id}`}
-                className={`bg-white dark:bg-slate-900 rounded-3xl p-5 sm:p-6 border shadow-xs transition-all hover:shadow-sm ${
+                className={`bg-white dark:bg-slate-900 rounded-2xl sm:rounded-3xl p-3.5 sm:p-6 border shadow-xs transition-all hover:shadow-sm ${
                   highlightedPostId === post.id
                     ? 'border-blue-500 ring-2 ring-blue-500/30 dark:border-blue-400'
-                    : 'border-slate-200/80 dark:border-slate-800'
+                    : 'border-slate-200/80 dark:border-slate-800/80'
                 }`}
               >
                 {highlightedPostId === post.id && (
                   <div className="mb-3 px-3 py-1.5 rounded-xl bg-blue-50 dark:bg-blue-950/50 border border-blue-200/70 dark:border-blue-800/70 flex items-center justify-between text-xs text-blue-700 dark:text-blue-300 font-bold">
                     <span className="flex items-center gap-1.5">
-                      <Link2 className="w-3.5 h-3.5" />
-                      <span>Viewing shared post via direct link</span>
+                      <Link2 className="w-3.5 h-3.5 shrink-0" />
+                      <span className="truncate">Viewing shared post</span>
                     </span>
                     <button
                       type="button"
                       onClick={() => setHighlightedPostId(null)}
-                      className="text-[11px] underline hover:no-underline cursor-pointer"
+                      className="text-[11px] underline hover:no-underline cursor-pointer shrink-0 ml-2"
                     >
                       Dismiss
                     </button>
@@ -2087,36 +2203,36 @@ export const FeedView: React.FC<FeedViewProps> = ({
                 )}
 
                 {/* Post Header */}
-                <div className="flex items-center justify-between mb-3.5">
+                <div className="flex items-start justify-between gap-2 mb-3">
                   <div
-                    className="flex items-center gap-3 cursor-pointer group"
+                    className="flex items-center gap-2.5 sm:gap-3 cursor-pointer group min-w-0"
                     onClick={() => onViewProfile && onViewProfile(post.userId)}
                   >
                     <img
                       src={post.avatarUrl}
                       alt={post.fullName}
-                      className="w-10 h-10 rounded-full object-cover ring-2 ring-slate-100 dark:ring-slate-800 group-hover:ring-blue-500 transition-all"
+                      className="w-9 h-9 sm:w-10 sm:h-10 rounded-full object-cover ring-2 ring-slate-100 dark:ring-slate-800 group-hover:ring-blue-500 transition-all shrink-0"
                     />
-                    <div>
-                      <div className="flex items-center gap-1.5">
-                        <span className="font-bold text-sm text-slate-900 dark:text-slate-100 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="font-bold text-xs sm:text-sm text-slate-900 dark:text-slate-100 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors truncate">
                           {post.fullName}
                         </span>
-                        <ShieldCheck className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                        <ShieldCheck className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-blue-600 dark:text-blue-400 shrink-0" />
                         {post.isEdited && (
                           <span className="text-[10px] text-slate-400 dark:text-slate-500 font-medium">
                             (edited)
                           </span>
                         )}
                       </div>
-                      <div className="text-[11px] text-slate-500 dark:text-slate-400 font-medium flex items-center gap-2">
+                      <div className="text-[10.5px] sm:text-[11px] text-slate-500 dark:text-slate-400 font-medium flex items-center gap-1 sm:gap-2 flex-wrap">
                         <span>Batch {post.batchYear}</span>
                         <span>·</span>
                         <span>{post.createdAt}</span>
                         {post.category && (
                           <>
                             <span>·</span>
-                            <span className="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-semibold text-[10px]">
+                            <span className="px-1.5 py-0.2 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-semibold text-[9.5px] sm:text-[10px]">
                               {post.category}
                             </span>
                           </>
@@ -2126,7 +2242,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
                   </div>
 
                   {/* Post Options Dropdown Menu (Three-dot) */}
-                  <div className="relative post-menu-container">
+                  <div className="relative post-menu-container shrink-0">
                     <button
                       type="button"
                       onClick={(e) => {
@@ -2235,41 +2351,15 @@ export const FeedView: React.FC<FeedViewProps> = ({
                   </div>
                 )}
 
-                {/* Post Images Grid with Full-screen Lightbox trigger */}
-                {post.images && post.images.length > 0 && (
-                  <div
-                    className={`grid gap-2 mb-4 rounded-2xl overflow-hidden ${
-                      post.images.length === 1
-                        ? 'grid-cols-1'
-                        : post.images.length === 2
-                        ? 'grid-cols-2'
-                        : post.images.length === 3
-                        ? 'grid-cols-3'
-                        : 'grid-cols-2 sm:grid-cols-3'
-                    }`}
-                  >
-                    {post.images.map((imgUrl, idx) => (
-                      <div
-                        key={idx}
-                        className="relative group cursor-pointer overflow-hidden rounded-xl bg-slate-950"
-                        onClick={() => handleOpenLightbox(post, idx)}
-                      >
-                        <img
-                          src={imgUrl}
-                          alt={`Attached media ${idx + 1}`}
-                          className={`w-full object-cover group-hover:scale-103 transition-transform duration-300 ${
-                            post.images.length === 1 ? 'max-h-[440px]' : 'h-48 sm:h-56'
-                          }`}
-                          loading="lazy"
-                        />
-                        <div className="absolute inset-0 bg-black/35 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2 text-white">
-                          <span className="p-2 rounded-full bg-black/60 backdrop-blur-xs">
-                            <ZoomIn className="w-5 h-5 text-white" />
-                          </span>
-                          <span className="text-xs font-bold hidden sm:inline">View full screen</span>
-                        </div>
-                      </div>
-                    ))}
+                {/* Post Images & Videos Media with Carousel & Layout Templates */}
+                {((post.images && post.images.length > 0) || (post.videos && post.videos.length > 0)) && (
+                  <div className="mb-3.5 sm:mb-4">
+                    <PostMediaCarousel
+                      images={post.images}
+                      videos={post.videos}
+                      layout={post.layout_template || (post.images?.length > 1 ? 'carousel' : 'grid')}
+                      onPhotoClick={(idx) => handleOpenLightbox(post, idx)}
+                    />
                   </div>
                 )}
 
@@ -2293,36 +2383,33 @@ export const FeedView: React.FC<FeedViewProps> = ({
                   </div>
                 )}
 
-                {/* Stats Row */}
-                <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 py-2 border-t border-b border-slate-100 dark:border-slate-800/80 mb-2">
-                  <span className="flex items-center gap-1">
-                    <span className="w-4 h-4 rounded-full bg-rose-500 text-white flex items-center justify-center text-[9px]">
-                      ♥
-                    </span>
-                    {post.likesCount} {post.likesCount === 1 ? 'like' : 'likes'}
-                  </span>
-                  <span>
-                    {post.commentsCount} {post.commentsCount === 1 ? 'comment' : 'comments'}
-                  </span>
-                </div>
-
-                {/* Action Buttons */}
-                <div className="flex items-center gap-1 sm:gap-2">
+                {/* Action Buttons: Clean Facebook-style Icon-Only Bar */}
+                <div className="flex items-center justify-between sm:justify-start gap-1 sm:gap-2 pt-2 mt-1 border-t border-slate-100 dark:border-slate-800/80">
+                  {/* Like / React */}
                   <button
                     type="button"
                     onClick={() => handleToggleLike(post.id)}
-                    className={`flex-1 min-w-0 flex items-center justify-center gap-1 sm:gap-2 py-2 px-1 sm:px-2 rounded-xl text-xs font-bold transition-colors cursor-pointer ${
+                    aria-label={post.likedByMe ? 'Unlike' : 'Like'}
+                    title={post.likedByMe ? 'Liked' : 'Like'}
+                    className={`flex-1 sm:flex-initial flex items-center justify-center gap-1.5 py-2 px-2.5 sm:px-3.5 rounded-xl sm:rounded-full text-xs font-bold transition-all active:scale-90 cursor-pointer ${
                       post.likedByMe
-                        ? 'text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/30'
-                        : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                        ? 'text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/40 ring-1 ring-rose-200 dark:ring-rose-900/50 shadow-xs'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-rose-600 hover:bg-slate-100 dark:hover:bg-slate-800/80'
                     }`}
                   >
                     <Heart
-                      className={`w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0 ${post.likedByMe ? 'fill-rose-500 text-rose-500' : ''}`}
+                      className={`w-4.5 h-4.5 sm:w-5 sm:h-5 shrink-0 transition-transform ${
+                        post.likedByMe ? 'fill-rose-500 text-rose-500 scale-110' : ''
+                      }`}
                     />
-                    <span className="truncate">{post.likedByMe ? 'Liked' : 'Like'}</span>
+                    {post.likesCount > 0 && (
+                      <span className="text-xs font-bold leading-none">
+                        {post.likesCount}
+                      </span>
+                    )}
                   </button>
 
+                  {/* Comment */}
                   <button
                     type="button"
                     onClick={() =>
@@ -2330,50 +2417,57 @@ export const FeedView: React.FC<FeedViewProps> = ({
                         activeCommentPostId === post.id ? null : post.id
                       )
                     }
-                    className="flex-1 min-w-0 flex items-center justify-center gap-1 sm:gap-2 py-2 px-1 sm:px-2 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                    aria-label="Comments"
+                    title="Comments"
+                    className={`flex-1 sm:flex-initial flex items-center justify-center gap-1.5 py-2 px-2.5 sm:px-3.5 rounded-xl sm:rounded-full text-xs font-bold transition-all active:scale-90 cursor-pointer ${
+                      activeCommentPostId === post.id
+                        ? 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/40 ring-1 ring-blue-200 dark:ring-blue-900/50 shadow-xs'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-blue-600 hover:bg-slate-100 dark:hover:bg-slate-800/80'
+                    }`}
                   >
-                    <MessageCircle className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
-                    <span className="truncate">Comment</span>
+                    <MessageCircle className="w-4.5 h-4.5 sm:w-5 sm:h-5 shrink-0" />
+                    {Math.max(post.commentsCount || 0, post.comments?.length || 0) > 0 && (
+                      <span className="text-xs font-bold leading-none">
+                        {Math.max(post.commentsCount || 0, post.comments?.length || 0)}
+                      </span>
+                    )}
                   </button>
 
+                  {/* Save */}
                   <button
                     type="button"
                     onClick={() => handleToggleSave(post)}
-                    className={`flex-1 min-w-0 flex items-center justify-center gap-1 sm:gap-1.5 py-2 px-1 sm:px-2 rounded-xl text-xs font-bold transition-colors cursor-pointer ${
+                    aria-label={isPostSaved(post.id) || post.isSaved ? 'Remove from saved' : 'Save post'}
+                    title={isPostSaved(post.id) || post.isSaved ? 'Saved' : 'Save'}
+                    className={`flex-1 sm:flex-initial flex items-center justify-center py-2 px-2.5 sm:px-3.5 rounded-xl sm:rounded-full text-xs font-bold transition-all active:scale-90 cursor-pointer ${
                       isPostSaved(post.id) || post.isSaved
-                        ? 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/40'
-                        : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                        ? 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/40 ring-1 ring-blue-200 dark:ring-blue-900/50 shadow-xs'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-blue-600 hover:bg-slate-100 dark:hover:bg-slate-800/80'
                     }`}
-                    title={isPostSaved(post.id) || post.isSaved ? 'Saved to offline cache' : 'Save post for offline reading'}
                   >
                     {isPostSaved(post.id) || post.isSaved ? (
-                      <BookmarkCheck className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0 fill-current text-blue-600 dark:text-blue-400" />
+                      <BookmarkCheck className="w-4.5 h-4.5 sm:w-5 sm:h-5 shrink-0 fill-current text-blue-600 dark:text-blue-400" />
                     ) : (
-                      <Bookmark className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+                      <Bookmark className="w-4.5 h-4.5 sm:w-5 sm:h-5 shrink-0" />
                     )}
-                    <span className="truncate">{isPostSaved(post.id) || post.isSaved ? 'Saved' : 'Save'}</span>
                   </button>
 
+                  {/* Share */}
                   <button
                     type="button"
                     onClick={() => handleSharePost(post.id)}
-                    title="Copy direct link to this post"
-                    className={`flex-1 min-w-0 flex items-center justify-center gap-1 sm:gap-2 py-2 px-1 sm:px-2 rounded-xl text-xs font-bold transition-colors cursor-pointer ${
+                    aria-label="Share post"
+                    title={copiedPostId === post.id ? 'Copied link' : 'Share'}
+                    className={`flex-1 sm:flex-initial flex items-center justify-center py-2 px-2.5 sm:px-3.5 rounded-xl sm:rounded-full text-xs font-bold transition-all active:scale-90 cursor-pointer ${
                       copiedPostId === post.id
-                        ? 'text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/30'
-                        : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                        ? 'text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 ring-1 ring-emerald-200 dark:ring-emerald-900/50 shadow-xs'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-emerald-600 hover:bg-slate-100 dark:hover:bg-slate-800/80'
                     }`}
                   >
                     {copiedPostId === post.id ? (
-                      <>
-                        <CheckCircle2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
-                        <span className="truncate">Copied</span>
-                      </>
+                      <CheckCircle2 className="w-4.5 h-4.5 sm:w-5 sm:h-5 shrink-0 text-emerald-600 dark:text-emerald-400" />
                     ) : (
-                      <>
-                        <Share2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
-                        <span className="truncate">Share</span>
-                      </>
+                      <Share2 className="w-4.5 h-4.5 sm:w-5 sm:h-5 shrink-0" />
                     )}
                   </button>
                 </div>
@@ -2473,7 +2567,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
                     <img
                       src={currentUser.avatarUrl}
                       alt={currentUser.fullName}
-                      className="w-8 h-8 rounded-full object-cover"
+                      className="w-7 h-7 sm:w-8 sm:h-8 rounded-full object-cover shrink-0 ring-1 ring-slate-200 dark:ring-slate-700"
                     />
                     <div className="relative flex-1">
                       <input
