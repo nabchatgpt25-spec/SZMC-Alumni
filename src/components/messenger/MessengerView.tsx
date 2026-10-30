@@ -170,9 +170,9 @@ export const MessengerView: React.FC = () => {
           <h1 className="text-lg sm:text-xl font-black text-slate-900 dark:text-white tracking-tight leading-tight">Messages</h1>
         </div>
         <div className="p-8 text-center rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 bg-white/60 dark:bg-slate-900/60">
-          <p className="text-sm font-bold text-slate-900 dark:text-white">Sign in again to use Messages</p>
+          <p className="text-sm font-bold text-slate-900 dark:text-white">Create an account to use Messages</p>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-sm mx-auto">
-            Your current session does not include a secure connection for private messages. Sign in again with your account to continue.
+            Private messages need a registered account on the alumni network. Sign up or sign in with your email and password to start chatting.
           </p>
         </div>
       </div>
