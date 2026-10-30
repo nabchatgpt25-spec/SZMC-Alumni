@@ -600,7 +600,7 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
                 </span>
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                Logged in as <strong className="text-slate-800 dark:text-slate-200">{currentUser.fullName}</strong> ({isSuperAdmin ? (currentUser.email || 'nurulanambashir20@gmail.com') : isGeneralAdmin ? (currentUser.email || 'firstaidnetworkbd@gmail.com') : 'Sub-Admin / Moderator'})
+                Logged in as <strong className="text-slate-800 dark:text-slate-200">{currentUser.fullName}</strong> ({currentUser.email || 'Administrator'})
               </p>
             </div>
           </div>

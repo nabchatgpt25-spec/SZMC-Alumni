@@ -43,7 +43,7 @@ export const MessageSettingsModal: React.FC<MessageSettingsModalProps> = ({
   batchYear,
 }) => {
   const { currentUser, isAdminUser } = useAuth();
-  const isSuperAdmin = isUserSuperAdmin(currentUser) || isAdminUser || currentUser.email === 'nurulanambashir20@gmail.com' || currentUser.role === 'admin';
+  const isSuperAdmin = currentUser.role === 'admin' || isAdminUser;
 
   const [settings, setSettings] = useState<UserMessageSettings>({
     profileId,

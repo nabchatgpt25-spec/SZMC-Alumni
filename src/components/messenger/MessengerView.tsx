@@ -28,11 +28,7 @@ import { MessageSettingsModal } from './MessageSettingsModal';
 export const MessengerView: React.FC = () => {
   const { currentUser, isAdminUser } = useAuth();
   const myId = currentUser.id;
-  const isSuperAdmin =
-    isUserSuperAdmin(currentUser) ||
-    isAdminUser ||
-    currentUser.email === 'nurulanambashir20@gmail.com' ||
-    currentUser.role === 'admin';
+  const isSuperAdmin = currentUser.role === 'admin' || isAdminUser;
 
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
   const [listLoading, setListLoading] = useState(true);

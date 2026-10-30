@@ -319,8 +319,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 </button>
               )}
 
-              {/* Super Admin Command Hub - Strictly visible ONLY when logged in as nurulanambashir20@gmail.com */}
-              {isSuperAdmin && (
+              {/* Admin Command Hub - Strictly visible ONLY when logged in as role === 'admin' */}
+              {currentUser.role === 'admin' && (
                 <button
                   type="button"
                   onClick={() => {
@@ -336,40 +336,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   <div className="flex items-center gap-2.5 min-w-0">
                     <ShieldAlert
                       className={`w-4 h-4 shrink-0 transition-colors ${
-                        isItemActive('admin') ? 'text-white' : 'text-indigo-600 dark:text-indigo-400 animate-pulse'
+                        isItemActive('admin') ? 'text-white' : 'text-indigo-600 dark:text-indigo-400'
                       }`}
                     />
-                    <span className="truncate font-black tracking-tight">Super Admin</span>
+                    <span className="truncate font-black tracking-tight">Admin Portal</span>
                   </div>
                   <span className="shrink-0 text-[9px] font-black uppercase px-2 py-0.5 rounded-md border tracking-wider bg-indigo-500/20 text-indigo-700 dark:text-indigo-200 border-indigo-500/40 shadow-xs">
-                    SUPER ADMIN
-                  </span>
-                </button>
-              )}
-
-              {/* General Admin Hub - Strictly visible ONLY when logged in as firstaidnetworkbd@gmail.com */}
-              {isGeneralAdmin && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    onSelectTab('admin');
-                    onClose();
-                  }}
-                  className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-xl font-medium text-xs sm:text-[13px] transition-all text-left cursor-pointer group ${
-                    isItemActive('admin')
-                      ? 'bg-gradient-to-r from-blue-600 to-cyan-600 text-white font-bold shadow-md shadow-blue-600/30'
-                      : 'text-blue-700 dark:text-blue-300 hover:text-blue-950 dark:hover:text-white hover:bg-blue-100/70 dark:hover:bg-blue-950/60 border border-blue-200/50 dark:border-blue-800/40'
-                  }`}
-                >
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <ShieldCheck
-                      className={`w-4 h-4 shrink-0 transition-colors ${
-                        isItemActive('admin') ? 'text-white' : 'text-blue-600 dark:text-blue-400'
-                      }`}
-                    />
-                    <span className="truncate font-black tracking-tight">Admin</span>
-                  </div>
-                  <span className="shrink-0 text-[9px] font-black uppercase px-2 py-0.5 rounded-md border tracking-wider bg-blue-500/20 text-blue-700 dark:text-blue-200 border-blue-500/40 shadow-xs">
                     ADMIN
                   </span>
                 </button>

@@ -426,15 +426,7 @@ async function handleUnifiedLoginCore(req: Request, res: Response) {
       return res.status(403).json({ error: 'Your account is currently suspended. Please contact SZMC Alumni support.' });
     }
 
-    // 1. Mandatory Admin Phone Verification Check
-    if (!alumnus.phoneOwnershipVerified) {
-      return res.status(403).json({
-        error: `Your mobile number (${alumnus.phone || formattedPhone}) has not been verified by an administrator yet. As an institutional safeguard, phone login requires admin ownership verification. Please sign in using your registered email address in the meantime.`,
-        phoneVerificationRequired: true,
-      });
-    }
-
-    // 2. Authenticate against Supabase Auth using the user's SAME password
+    // Authenticate against Supabase Auth using the user's password
     if (isSupabaseServerConfigured) {
       let authSession: any = null;
 

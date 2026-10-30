@@ -77,48 +77,37 @@ export interface VouchRequest {
 
 export type UserRole = 'member' | 'batch_representative' | 'moderator' | 'admin';
 
-export const SUPER_ADMIN_EMAIL = 'nurulanambashir20@gmail.com';
-export const GENERAL_ADMIN_EMAIL = 'firstaidnetworkbd@gmail.com';
-
-export const SUPER_ADMIN_EMAILS: readonly string[] = [
-  'nurulanambashir20@gmail.com',
-];
-
-export const GENERAL_ADMIN_EMAILS: readonly string[] = [
-  'firstaidnetworkbd@gmail.com',
-];
-
 /**
- * Super Admin check: Strictly for Dr. Nurul Anam Bashir (nurulanambashir20@gmail.com)
+ * Administrator check: Verified via user role ('admin').
+ * Strictly role-authoritative; no hardcoded email bypasses.
  */
 export function isUserSuperAdmin(user?: { email?: string | null; role?: string | null } | null): boolean {
   if (!user) return false;
-  const cleanEmail = (user.email || '').toLowerCase().trim();
-  return cleanEmail === 'nurulanambashir20@gmail.com';
+  return user.role === 'admin';
 }
 
 /**
- * General Admin check: Strictly for firstaidnetworkbd@gmail.com
+ * General Admin check: Verified via user role ('admin').
  */
 export function isUserGeneralAdmin(user?: { email?: string | null; role?: string | null } | null): boolean {
   if (!user) return false;
-  const cleanEmail = (user.email || '').toLowerCase().trim();
-  return cleanEmail === 'firstaidnetworkbd@gmail.com';
+  return user.role === 'admin';
 }
 
 /**
- * Any admin check (Super Admin or General Admin)
+ * Any admin check (role === 'admin')
  */
 export function isUserAnyAdmin(user?: { email?: string | null; role?: string | null } | null): boolean {
-  return isUserSuperAdmin(user) || isUserGeneralAdmin(user);
+  if (!user) return false;
+  return user.role === 'admin';
 }
 
 /**
- * Sub-Admin / Moderator check (excluding Super Admin and General Admin)
+ * Sub-Admin / Moderator check (excluding full admins)
  */
 export function isUserSubAdmin(user?: { email?: string | null; role?: string | null } | null): boolean {
   if (!user) return false;
-  if (isUserSuperAdmin(user) || isUserGeneralAdmin(user)) return false;
+  if (user.role === 'admin') return false;
   return user.role === 'moderator' || user.role === 'batch_representative';
 }
 

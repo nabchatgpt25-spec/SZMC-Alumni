@@ -122,26 +122,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           const cleanEmail = directUser.email?.toLowerCase().trim();
           const isSuperAdmin = cleanEmail === 'nurulanambashir20@gmail.com';
           const isGeneralAdmin = cleanEmail === 'firstaidnetworkbd@gmail.com';
-          if (isSuperAdmin) {
-            directUser.role = 'admin';
-            directUser.verificationStatus = 'verified';
-            directUser.verificationMethod = 'admin';
-            directUser.verifiedBy = ['Super Administrator'];
-            directUser.phoneOwnershipVerified = true;
-          } else if (isGeneralAdmin) {
-            directUser.role = 'admin';
-            directUser.verificationStatus = 'verified';
-            directUser.verificationMethod = 'admin';
-            directUser.verifiedBy = ['Super Administrator'];
-            directUser.phoneOwnershipVerified = true;
+          // Admin accounts strictly require a valid, verified Supabase session
+          if (isSuperAdmin || isGeneralAdmin || directUser.role === 'admin') {
+            clearDirectAuthUser();
+          } else {
+            resolvedAuthUserIdRef.current = directUser.authUserId || String(directUser.id);
+            setCurrentUser(directUser);
+            setIsAdminUser(false);
+            setIsLoggedIn(true);
+            setAuthInitializationError(null);
+            setIsAuthInitializing(false);
+            return;
           }
-          resolvedAuthUserIdRef.current = directUser.authUserId || String(directUser.id);
-          setCurrentUser(directUser);
-          setIsAdminUser(isSuperAdmin || isGeneralAdmin || directUser.role === 'admin');
-          setIsLoggedIn(true);
-          setAuthInitializationError(null);
-          setIsAuthInitializing(false);
-          return;
         }
 
         resolvedAuthUserIdRef.current = null;
@@ -200,9 +192,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     if (!isSupabaseConfigured) {
       const directUser = getDirectAuthUser();
-      if (directUser) {
+      if (directUser && directUser.role !== 'admin') {
         setCurrentUser(directUser);
-        setIsAdminUser(directUser.role === 'admin');
+        setIsAdminUser(false);
         setIsLoggedIn(true);
       } else {
         setIsLoggedIn(false);
@@ -474,78 +466,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     }
 
-    if (cleanInput.toLowerCase() === 'nurulanambashir20@gmail.com') {
-      const superAdminProfile: AlumniProfile = {
-        ...DEFAULT_BLANK_USER,
-        id: 1,
-        userId: 1,
-        fullName: 'Dr. Nurul Anam Bashir',
-        email: 'nurulanambashir20@gmail.com',
-        batchYear: 34,
-        session: 'Session 2024-25 (MBBS)',
-        group: 'MBBS',
-        academicStream: 'Medicine',
-        section: 'MBBS',
-        profession: 'Super Administrator & Lead Architect',
-        position: 'Chief Portal Administrator',
-        institution: 'Shaheed Ziaur Rahman Medical College Hospital, Bogura',
-        city: 'Bogura',
-        country: 'Bangladesh',
-        phone: '+8801700000000',
-        phoneOwnershipVerified: true,
-        role: 'admin',
-        verificationStatus: 'verified',
-        verificationMethod: 'admin',
-        verifiedBy: ['Super Administrator'],
-        vouchesCount: 2,
-        isPublic: true,
-        online: true,
-        badges: ['Super Admin', 'Verified SZMCian', 'Pacesetter 34', 'Lead Architect'],
-        bio: 'Super Administrator of SZMC Alumni Portal. Full institutional governance and system authorization.',
-      };
-      setCurrentUser(superAdminProfile);
-      setIsAdminUser(true);
-      setIsLoggedIn(true);
-      saveDirectAuthUser(superAdminProfile);
-      return true;
-    }
-
-    if (cleanInput.toLowerCase() === 'firstaidnetworkbd@gmail.com') {
-      const generalAdminProfile: AlumniProfile = {
-        ...DEFAULT_BLANK_USER,
-        id: 2,
-        userId: 2,
-        fullName: 'SZMC Administrator',
-        email: 'firstaidnetworkbd@gmail.com',
-        batchYear: 26,
-        session: 'Session 2016-17 (MBBS)',
-        group: 'MBBS',
-        academicStream: 'MBBS',
-        section: 'MBBS',
-        profession: 'Portal Administrator',
-        position: 'System Administrator',
-        institution: 'Shaheed Ziaur Rahman Medical College Hospital, Bogura',
-        city: 'Bogura',
-        country: 'Bangladesh',
-        phone: '+8801811111111',
-        phoneOwnershipVerified: true,
-        role: 'admin',
-        verificationStatus: 'verified',
-        verificationMethod: 'admin',
-        verifiedBy: ['Super Administrator'],
-        vouchesCount: 2,
-        isPublic: true,
-        online: true,
-        badges: ['Admin', 'Verified SZMCian'],
-        bio: 'General Administrator of SZMC Alumni Portal.',
-      };
-      setCurrentUser(generalAdminProfile);
-      setIsAdminUser(true);
-      setIsLoggedIn(true);
-      saveDirectAuthUser(generalAdminProfile);
-      return true;
-    }
-
     if (authError) {
       const msg = authError.message.toLowerCase();
       if (msg.includes('invalid login credentials') || msg.includes('invalid_credentials')) {
@@ -757,19 +677,53 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       },
     });
 
-    if (signUpErr) {
-      const msg = signUpErr.message.toLowerCase();
-      if (msg.includes('rate limit')) {
-        throw new Error('Supabase email rate limit reached. Please wait a moment before trying again.');
-      }
+    let resolvedUser = signUpData?.user;
+
+    if (signUpErr || !resolvedUser) {
+      const msg = (signUpErr?.message || '').toLowerCase();
       if (msg.includes('already registered') || msg.includes('user already exists')) {
         throw new Error('An account with this email already exists. Please sign in directly.');
       }
-      throw new Error(signUpErr.message || 'Registration failed.');
-    }
 
-    if (!signUpData?.user) {
-      throw new Error('Failed to create account in Supabase. Please try again.');
+      // Try server registration fallback if direct Supabase signUp failed (e.g. email rate limit)
+      try {
+        const fallbackRes = await fetch('/api/auth/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fullName: profileData.fullName?.trim() || cleanEmail.split('@')[0],
+            email: cleanEmail,
+            phone: cleanPhone || undefined,
+            password: profileData.password,
+            batchYear: normalizedBatch,
+            collegeRoll: profileData.collegeRoll,
+            profession: profileData.profession,
+            position: profileData.position,
+            institution: profileData.institution,
+            city: profileData.city,
+            country: profileData.country,
+          }),
+        });
+        const fallbackJson = await fallbackRes.json();
+        if (fallbackRes.ok && fallbackJson?.profile) {
+          setCurrentUser(fallbackJson.profile);
+          setIsAdminUser(false);
+          setIsLoggedIn(true);
+          saveDirectAuthUser(fallbackJson.profile);
+          return true;
+        } else if (!fallbackRes.ok && fallbackJson?.error) {
+          throw new Error(fallbackJson.error);
+        }
+      } catch (fbErr: any) {
+        if (fbErr.message && !fbErr.message.includes('fetch')) {
+          throw fbErr;
+        }
+      }
+
+      if (msg.includes('rate limit')) {
+        throw new Error('Email service rate limit reached. Please wait a few moments or try again shortly.');
+      }
+      throw new Error(signUpErr?.message || 'Registration failed. Please check your credentials.');
     }
 
     if (signUpData.session?.access_token) {
@@ -780,8 +734,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // Direct Login after Registration:
     // Build user profile and log in directly without requiring email confirmation!
     let profile: AlumniProfile | null = null;
-    if (signUpData.session) {
-      profile = await getOrCreateSupabaseProfile(signUpData.user, {
+    if (signUpData?.session && resolvedUser) {
+      profile = await getOrCreateSupabaseProfile(resolvedUser, {
         ...profileData,
         email: cleanEmail,
         phone: cleanPhone || undefined,
@@ -789,11 +743,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       });
     }
 
-    if (!profile) {
+    if (!profile && resolvedUser) {
       profile = {
-        id: Number(signUpData.user.id.replace(/[^0-9]/g, '').slice(0, 10)) || Date.now(),
-        userId: Number(signUpData.user.id.replace(/[^0-9]/g, '').slice(0, 10)) || Date.now(),
-        authUserId: signUpData.user.id,
+        id: Number(resolvedUser.id.replace(/[^0-9]/g, '').slice(0, 10)) || Date.now(),
+        userId: Number(resolvedUser.id.replace(/[^0-9]/g, '').slice(0, 10)) || Date.now(),
+        authUserId: resolvedUser.id,
         fullName: profileData.fullName?.trim() || cleanEmail.split('@')[0],
         avatarUrl: profileData.avatarUrl || '/assets/aistudio/images__1__2778177d.png',
         batchYear: normalizedBatch,
@@ -823,40 +777,46 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       };
 
       try {
-        await supabase.from('alumni_profiles').upsert(
-          {
-            auth_user_id: signUpData.user.id,
-            full_name: profile.fullName,
-            avatar_url: profile.avatarUrl,
-            batch_year: profile.batchYear,
-            academic_stream: 'MBBS',
-            academic_group: null,
-            section: profile.section,
-            college_roll: profile.collegeRoll,
-            verification_status: 'unverified',
-            vouches_count: 0,
-            vouch_target_count: 2,
-            profession: profile.profession,
-            position: profile.position,
-            institution: profile.institution,
-            city: profile.city,
-            country: profile.country,
-            email: profile.email,
-            phone: profile.phone,
-            whatsapp: profile.whatsapp,
-          },
-          { onConflict: 'auth_user_id' }
-        );
+        if (resolvedUser?.id) {
+          await supabase.from('alumni_profiles').upsert(
+            {
+              auth_user_id: resolvedUser.id,
+              full_name: profile.fullName,
+              avatar_url: profile.avatarUrl,
+              batch_year: profile.batchYear,
+              academic_stream: 'MBBS',
+              academic_group: null,
+              section: profile.section,
+              college_roll: profile.collegeRoll,
+              verification_status: 'unverified',
+              vouches_count: 0,
+              vouch_target_count: 2,
+              profession: profile.profession,
+              position: profile.position,
+              institution: profile.institution,
+              city: profile.city,
+              country: profile.country,
+              email: profile.email,
+              phone: profile.phone,
+              whatsapp: profile.whatsapp,
+            },
+            { onConflict: 'auth_user_id' }
+          );
+        }
       } catch (upsertErr) {
         console.warn('Note on direct alumni_profiles insert:', upsertErr);
       }
     }
 
-    setCurrentUser(profile);
-    setIsAdminUser(profile.role === 'admin');
-    setIsLoggedIn(true);
-    saveDirectAuthUser(profile);
-    return true;
+    if (profile) {
+      setCurrentUser(profile);
+      setIsAdminUser(profile.role === 'admin');
+      setIsLoggedIn(true);
+      saveDirectAuthUser(profile);
+      return true;
+    }
+
+    throw new Error('Registration could not complete profile creation. Please try again.');
   };
 
   const updateProfile = async (updated: Partial<AlumniProfile>) => {

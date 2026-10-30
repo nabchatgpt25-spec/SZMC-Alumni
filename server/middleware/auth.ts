@@ -24,46 +24,38 @@ async function verifyAuthToken(token: string) {
 
     const user = data.user;
     const cleanEmail = (user.email || '').toLowerCase().trim();
-    const { data: profile, error: profileError } = await supabaseServer
+
+    // Verify role strictly from Supabase Auth metadata (app_metadata or user_metadata) or database profile
+    const metadataRole =
+      (user.app_metadata?.role as string) ||
+      (user.app_metadata?.claims_admin ? 'admin' : undefined) ||
+      ((user.user_metadata as any)?.role as string);
+
+    const { data: profile } = await supabaseServer
       .from(SUPABASE_TABLES.ALUMNI_PROFILES)
       .select('id, auth_user_id, email, full_name, role')
       .eq('auth_user_id', user.id)
       .maybeSingle();
 
-    const isSuperAdminEmail =
-      cleanEmail === 'nurulanambashir20@gmail.com' ||
-      cleanEmail === 'firstaidnetworkbd@gmail.com' ||
-      cleanEmail === 'admin@szmcalumni.net';
-
-    if (isSuperAdminEmail) {
-      return {
-        user,
-        dbUser: {
-          id: Number(profile?.id || 1),
-          uid: user.id,
-          email: cleanEmail,
-          fullName: profile?.full_name || 'Dr. Nurul Anam Bashir',
-          role: 'admin',
-          accountStatus: 'active',
-        },
-      };
-    }
-
-    if (profileError || !profile?.id) return null;
-
-    const role =
-      profile.role === 'admin' || profile.role === 'moderator'
-        ? profile.role
+    const profileRole = profile?.role;
+    const resolvedRole =
+      metadataRole === 'admin' || profileRole === 'admin'
+        ? 'admin'
+        : metadataRole === 'moderator' || profileRole === 'moderator'
+        ? 'moderator'
         : 'member';
 
     return {
       user,
       dbUser: {
-        id: Number(profile.id),
+        id: Number(profile?.id || 1),
         uid: user.id,
         email: cleanEmail || `${user.id}@szmcalumni.net`,
-        fullName: profile.full_name || (user.user_metadata as any)?.full_name || 'SZMC Alumnus',
-        role,
+        fullName:
+          profile?.full_name ||
+          (user.user_metadata as any)?.full_name ||
+          'SZMC User',
+        role: resolvedRole,
         accountStatus: 'active',
       },
     };

@@ -223,8 +223,8 @@ export const Header: React.FC<HeaderProps> = ({
                     </button>
                   )}
 
-                  {/* Super Admin Hub in profile dropdown - Strictly for nurulanambashir20@gmail.com */}
-                  {isSuperAdmin && (
+                  {/* Admin Portal in profile dropdown - Strictly for role === 'admin' */}
+                  {currentUser.role === 'admin' && (
                     <button
                       type="button"
                       onClick={() => {
@@ -235,29 +235,9 @@ export const Header: React.FC<HeaderProps> = ({
                     >
                       <span className="flex items-center gap-2.5">
                         <ShieldAlert className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                        <span className="font-bold">Super Admin</span>
+                        <span className="font-bold">Admin Portal</span>
                       </span>
                       <span className="text-[10px] font-black uppercase px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-600 dark:text-indigo-400">
-                        SUPER ADMIN
-                      </span>
-                    </button>
-                  )}
-
-                  {/* General Admin in profile dropdown - Strictly for firstaidnetworkbd@gmail.com */}
-                  {isGeneralAdmin && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onNavigate('admin');
-                        setShowProfileMenu(false);
-                      }}
-                      className="w-full flex items-center justify-between gap-2 px-3 py-2 text-xs font-medium text-blue-700 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-950/40 rounded-lg transition-colors text-left"
-                    >
-                      <span className="flex items-center gap-2.5">
-                        <ShieldCheck className="w-4 h-4 text-blue-600 dark:text-blue-400" />
-                        <span className="font-bold">Admin</span>
-                      </span>
-                      <span className="text-[10px] font-black uppercase px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-600 dark:text-blue-400">
                         ADMIN
                       </span>
                     </button>

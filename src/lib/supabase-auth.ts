@@ -1,50 +1,55 @@
 import { User } from '@supabase/supabase-js';
 import { supabase, isSupabaseConfigured, ALUMNI_PUBLIC_COLUMNS } from './supabase.ts';
-import { AlumniProfile, UserRole, SUPER_ADMIN_EMAILS } from '../types.ts';
+import { AlumniProfile, UserRole } from '../types.ts';
 import { formatToE164Phone } from '../utils/phone.ts';
 import { normalizeAcademicStreamAndGroup } from '../utils/academicGroupMapping.ts';
 
 /**
  * Format a database row from public.alumni_profiles into the application's AlumniProfile.
- * Role is strictly authoritative from the database; never elevated via email addresses.
+ * Role is strictly authoritative from Supabase Auth metadata and database; no hardcoded email bypasses.
  */
-export function mapSupabaseRowToAlumniProfile(row: any): AlumniProfile {
+export function mapSupabaseRowToAlumniProfile(row: any, authUser?: User): AlumniProfile {
   if (!row) {
     throw new Error('Cannot map empty row to AlumniProfile');
   }
 
   const email = (row.email || '').toLowerCase().trim();
-  const isSuperAdminEmail = SUPER_ADMIN_EMAILS.includes(email);
-  const resolvedRole: UserRole = isSuperAdminEmail
-    ? 'admin'
-    : (row.role === 'admin' || row.role === 'moderator' ? row.role : 'member');
+  const metadataRole =
+    (authUser?.app_metadata?.role as string) ||
+    (authUser?.app_metadata?.claims_admin ? 'admin' : undefined) ||
+    ((authUser?.user_metadata as any)?.role as string);
+
+  const resolvedRole: UserRole =
+    metadataRole === 'admin' || row.role === 'admin'
+      ? 'admin'
+      : metadataRole === 'moderator' || row.role === 'moderator'
+      ? 'moderator'
+      : 'member';
 
   return {
     id: Number(row.id),
     userId: Number(row.id),
     authUserId: row.auth_user_id || undefined,
     role: resolvedRole,
-    fullName: isSuperAdminEmail ? (row.full_name || 'Dr. Nurul Anam Bashir') : (row.full_name || 'SZMC Alumnus'),
+    fullName: row.full_name || (authUser?.user_metadata as any)?.full_name || 'SZMC Alumnus',
     avatarUrl:
       row.avatar_url ||
       '/assets/aistudio/images__1__2778177d.png',
     coverUrl: row.cover_url || undefined,
-    batchYear: isSuperAdminEmail ? (Number(row.batch_year) || 34) : (Number(row.batch_year) || 25),
+    batchYear: Number(row.batch_year) || 25,
     session: row.session || undefined,
     collegeRoll: row.college_roll || undefined,
     academicStream: row.academic_stream || 'Medicine',
     academicGroup: row.academic_group || undefined,
     group: row.academic_stream || 'MBBS',
     section: row.section || undefined,
-    verificationStatus: isSuperAdminEmail ? 'verified' : (row.verification_status || 'unverified'),
-    verificationMethod: isSuperAdminEmail ? 'admin' : (row.verification_method || undefined),
-    verifiedBy: isSuperAdminEmail
-      ? ['Super Administrator']
-      : (row.verified_by_profile_id ? [String(row.verified_by_profile_id)] : []),
-    vouchesCount: isSuperAdminEmail ? 2 : (Number(row.vouches_count) || 0),
+    verificationStatus: row.verification_status || (resolvedRole === 'admin' ? 'verified' : 'unverified'),
+    verificationMethod: row.verification_method || (resolvedRole === 'admin' ? 'admin' : undefined),
+    verifiedBy: row.verified_by_profile_id ? [String(row.verified_by_profile_id)] : (resolvedRole === 'admin' ? ['System Administrator'] : []),
+    vouchesCount: Number(row.vouches_count) || (resolvedRole === 'admin' ? 2 : 0),
     vouchTargetCount: Number(row.vouch_target_count) || 2,
-    verificationDate: isSuperAdminEmail ? (row.verified_at ? String(row.verified_at) : new Date().toISOString()) : (row.verified_at ? String(row.verified_at) : undefined),
-    profession: isSuperAdminEmail ? (row.profession || 'Super Administrator & Lead Architect') : (row.profession || 'Alumnus'),
+    verificationDate: row.verified_at ? String(row.verified_at) : undefined,
+    profession: row.profession || (resolvedRole === 'admin' ? 'Portal Administrator' : 'Medical Doctor / Physician'),
     position: row.position || '',
     institution: row.institution || '',
     cadre: row.cadre || undefined,
@@ -114,7 +119,7 @@ export async function getOrCreateSupabaseProfile(
       } catch {
         // graceful fallback if RPC unavailable
       }
-      return mapSupabaseRowToAlumniProfile(existing);
+      return mapSupabaseRowToAlumniProfile(existing, authUser);
     }
 
     // 2. Otherwise, insert a new profile record for the authenticated user
@@ -129,33 +134,42 @@ export async function getOrCreateSupabaseProfile(
       extraData?.academicStream;
     const streamGroup = normalizeAcademicStreamAndGroup(rawGroupInput);
 
-    const isSuperAdminEmail = SUPER_ADMIN_EMAILS.includes(cleanEmail);
+    const metadataRole =
+      (authUser.app_metadata?.role as string) ||
+      (authUser.app_metadata?.claims_admin ? 'admin' : undefined) ||
+      ((authUser.user_metadata as any)?.role as string);
 
-    // New profiles start with role = 'member' unless Super Admin email
+    const resolvedRole: UserRole =
+      metadataRole === 'admin' || extraData?.role === 'admin'
+        ? 'admin'
+        : metadataRole === 'moderator' || extraData?.role === 'moderator'
+        ? 'moderator'
+        : 'member';
+
+    // New profiles start with role = 'member' unless verified admin in Auth metadata
     const initialRecord: Record<string, any> = {
       auth_user_id: authUser.id,
-      role: isSuperAdminEmail ? 'admin' : 'member',
-      verification_status: isSuperAdminEmail ? 'verified' : 'unverified',
-      verification_method: isSuperAdminEmail ? 'admin' : null,
-      full_name: isSuperAdminEmail
-        ? (extraData?.fullName?.trim() || 'Dr. Nurul Anam Bashir')
-        : (extraData?.fullName?.trim() ||
-          (authUser.user_metadata as any)?.full_name ||
-          (authUser.user_metadata as any)?.name ||
-          (cleanEmail ? cleanEmail.split('@')[0] : null) ||
-          (authUser.phone ? `Doctor (${authUser.phone})` : 'SZMC Doctor')),
+      role: resolvedRole,
+      verification_status: resolvedRole === 'admin' ? 'verified' : 'unverified',
+      verification_method: resolvedRole === 'admin' ? 'admin' : null,
+      full_name:
+        extraData?.fullName?.trim() ||
+        (authUser.user_metadata as any)?.full_name ||
+        (authUser.user_metadata as any)?.name ||
+        (cleanEmail ? cleanEmail.split('@')[0] : null) ||
+        (authUser.phone ? `Doctor (${authUser.phone})` : 'SZMC Doctor'),
       avatar_url:
         extraData?.avatarUrl ||
         (authUser.user_metadata as any)?.avatar_url ||
         (authUser.user_metadata as any)?.picture ||
         '/assets/aistudio/images__1__2778177d.png',
-      batch_year: isSuperAdminEmail ? 34 : normalizedBatch,
+      batch_year: normalizedBatch,
       session: extraData?.session || `Session ${1990 + normalizedBatch}-${String(1991 + normalizedBatch).slice(-2)}`,
       academic_stream: streamGroup.academicStream,
       academic_group: streamGroup.academicGroup,
       section: extraData?.section || 'MBBS',
-      profession: isSuperAdminEmail ? 'Super Administrator & Lead Architect' : (extraData?.profession || 'Medical Doctor / Physician'),
-      position: isSuperAdminEmail ? 'Chief Portal Administrator' : (extraData?.position || 'Physician'),
+      profession: extraData?.profession || (resolvedRole === 'admin' ? 'Portal Administrator' : 'Medical Doctor / Physician'),
+      position: extraData?.position || (resolvedRole === 'admin' ? 'Administrator' : 'Physician'),
       institution: extraData?.institution || 'Shaheed Ziaur Rahman Medical College Hospital',
       city: extraData?.city || 'Bogura',
       country: extraData?.country || 'Bangladesh',
