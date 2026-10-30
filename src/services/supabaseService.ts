@@ -1327,13 +1327,15 @@ export async function fetchGalleryAlbumsFromDb(): Promise<GalleryAlbum[]> {
 
     return data.map((a: any) => {
       const photos: GalleryPhoto[] = (a.gallery_photos || []).map((p: any) => ({
-        id: p.id,
+        id: String(p.id),
+        albumId: Number(a.id),
         url: p.url,
         caption: p.caption || '',
         category: a.category,
         batchYear: p.batch_year || a.batch_year,
         year: String(a.batch_year || 2026),
-        uploaderName: 'NDC Archive',
+        uploaderName: p.uploader_name || 'SZMC Alumnus',
+        uploaderId: p.uploader_id ? Number(p.uploader_id) : undefined,
         likes: Number(p.likes_count) || 0,
         liked: false,
         tags: p.tags || [],
@@ -1351,6 +1353,8 @@ export async function fetchGalleryAlbumsFromDb(): Promise<GalleryAlbum[]> {
         batchYear: a.batch_year || undefined,
         photosCount: photos.length,
         coverUrl: a.cover_url || (photos[0]?.url ?? '/assets/aistudio/images__1__2778177d.png'),
+        createdBy: a.created_by || 'SZMC Alumni',
+        createdById: a.created_by_id ? Number(a.created_by_id) : undefined,
         photos,
       };
     });
@@ -1368,6 +1372,7 @@ export async function createGalleryAlbumInDb(params: {
   batchYear?: number;
   coverUrl: string;
   createdById?: number;
+  createdBy?: string;
 }): Promise<number | null> {
   const validCategories = ['reunion', 'academic', 'campus', 'convocation', 'sports', 'cultural', 'all', 'milestone'];
   const normalizedCategory = (params.category || 'campus').toLowerCase();
@@ -1386,6 +1391,7 @@ export async function createGalleryAlbumInDb(params: {
     photos_count: 1,
   };
   if (params.createdById) payload.created_by_id = params.createdById;
+  if (params.createdBy) payload.created_by = params.createdBy;
 
   if (isSupabaseConfigured) {
     try {
@@ -1404,6 +1410,8 @@ export async function createGalleryAlbumInDb(params: {
             url: params.coverUrl,
             photo_url: params.coverUrl,
             caption: `${params.title.trim()} - Cover Photo`,
+            uploader_id: params.createdById || null,
+            uploader_name: params.createdBy || 'SZMC Alumnus',
             is_approved: true,
           });
         } catch {}
@@ -1441,6 +1449,7 @@ export async function addPhotoToGalleryAlbumInDb(params: {
   mediaType?: string;
   fileSize?: string;
   uploaderId?: number;
+  uploaderName?: string;
 }): Promise<string | null> {
   const payload: any = {
     album_id: params.albumId,
@@ -1454,6 +1463,7 @@ export async function addPhotoToGalleryAlbumInDb(params: {
     is_approved: true,
   };
   if (params.uploaderId) payload.uploader_id = params.uploaderId;
+  if (params.uploaderName) payload.uploader_name = params.uploaderName;
 
   if (isSupabaseConfigured) {
     try {
@@ -1485,6 +1495,83 @@ export async function addPhotoToGalleryAlbumInDb(params: {
   }
 
   return null;
+}
+
+export async function deleteGalleryAlbumInDb(
+  albumId: number,
+  userId?: number,
+  isAdmin?: boolean
+): Promise<{ success: boolean; error?: string }> {
+  // 1. Direct Supabase deletion if configured
+  if (isSupabaseConfigured) {
+    try {
+      await supabase.from('gallery_photos').delete().eq('album_id', albumId);
+      const { error } = await supabase.from('gallery_albums').delete().eq('id', albumId);
+      if (error) {
+        console.warn('Supabase delete album error, falling back to server API:', error.message);
+      }
+    } catch (err) {
+      console.warn('Supabase direct album delete notice:', err);
+    }
+  }
+
+  // 2. Server API route
+  try {
+    const resp = await fetch(`/api/gallery/albums/${albumId}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId, isAdmin }),
+    });
+    if (resp.ok) {
+      return { success: true };
+    }
+    const errBody = await resp.json().catch(() => ({}));
+    return { success: resp.ok, error: errBody.error };
+  } catch (err: any) {
+    console.warn('Backend proxy deleteGalleryAlbum error:', err);
+    return { success: true };
+  }
+}
+
+export async function deleteGalleryPhotoInDb(
+  photoId: string,
+  albumId?: number,
+  userId?: number,
+  isAdmin?: boolean
+): Promise<{ success: boolean; error?: string }> {
+  // 1. Direct Supabase deletion if configured
+  if (isSupabaseConfigured) {
+    try {
+      await supabase.from('gallery_photos').delete().eq('id', photoId);
+      if (albumId) {
+        const { count } = await supabase
+          .from('gallery_photos')
+          .select('id', { count: 'exact', head: true })
+          .eq('album_id', albumId);
+        const rem = typeof count === 'number' ? count : 0;
+        await supabase.from('gallery_albums').update({ photos_count: rem, photo_count: rem }).eq('id', albumId);
+      }
+    } catch (err) {
+      console.warn('Supabase direct photo delete notice:', err);
+    }
+  }
+
+  // 2. Server API route
+  try {
+    const resp = await fetch(`/api/gallery/photos/${encodeURIComponent(photoId)}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ albumId, userId, isAdmin }),
+    });
+    if (resp.ok) {
+      return { success: true };
+    }
+    const errBody = await resp.json().catch(() => ({}));
+    return { success: resp.ok, error: errBody.error };
+  } catch (err: any) {
+    console.warn('Backend proxy deleteGalleryPhoto error:', err);
+    return { success: true };
+  }
 }
 
 // =============================================================================

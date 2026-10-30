@@ -37,6 +37,10 @@ import {
   deleteAlumniProfile,
   adminVerifyAlumniPhoneOwnership,
   adminRevokeAlumniPhoneOwnership,
+  isServerAutoVerifyActive,
+  serverAutoVerifyConfig,
+  setServerAutoVerifyConfig,
+  bulkVerifyAllAlumniProfiles,
 } from './server/db/adminRepository.ts';
 import { attemptBootstrapMessagingTables } from './server/db/setupMessagingDb.ts';
 
@@ -578,6 +582,70 @@ app.post(
     }
   }
 );
+
+// Admin: Query 7-Day Auto-Verification Status
+app.get('/api/admin/auto-verify-status', (_req: Request, res: Response) => {
+  const active = isServerAutoVerifyActive();
+  const expiry = new Date(serverAutoVerifyConfig.expiresAt).getTime();
+  const now = Date.now();
+  const diffMs = Math.max(0, expiry - now);
+  const remainingHours = Math.floor(diffMs / (1000 * 60 * 60));
+  const remainingDays = Math.floor(remainingHours / 24);
+
+  res.json({
+    active,
+    paused: serverAutoVerifyConfig.paused,
+    enabled: serverAutoVerifyConfig.enabled,
+    expiresAt: serverAutoVerifyConfig.expiresAt,
+    remainingDays,
+    remainingHours,
+  });
+});
+
+// Admin: Toggle Auto-Verification (Pause/Resume or Reset to 7 Days)
+app.post('/api/admin/auto-verify-toggle', rateLimitGuard(30, 60_000), requireAdmin, (req: AuthRequest, res: Response) => {
+  try {
+    const { paused, reset7Days } = req.body;
+    if (reset7Days) {
+      const newExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+      setServerAutoVerifyConfig({ enabled: true, paused: false, expiresAt: newExpiry });
+    } else if (typeof paused === 'boolean') {
+      setServerAutoVerifyConfig({ paused });
+    }
+
+    const active = isServerAutoVerifyActive();
+    res.json({
+      success: true,
+      message: serverAutoVerifyConfig.paused
+        ? 'Instant Auto-Verification paused by Super Admin.'
+        : 'Instant Auto-Verification is now active.',
+      config: serverAutoVerifyConfig,
+      active,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to toggle auto-verification' });
+  }
+});
+
+// Super Admin: Instant Bulk Verify All Unverified/Pending Alumni
+app.post('/api/admin/bulk-verify-all', rateLimitGuard(15, 60_000), requireAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const actor = resolveActor(req);
+    const result = await bulkVerifyAllAlumniProfiles({
+      actorUid: actor.uid,
+      actorEmail: actor.email,
+      actorRole: actor.role,
+    });
+
+    res.json({
+      success: true,
+      message: `Successfully verified all ${result.verifiedCount} alumni profiles!`,
+      verifiedCount: result.verifiedCount,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Failed to bulk verify profiles' });
+  }
+});
 
 // Global Cross-Device Password Reset Endpoint
 app.post('/api/auth/reset-password', rateLimitGuard(15, 60_000), async (req: Request, res: Response) => {
@@ -1162,13 +1230,15 @@ app.get('/api/gallery/albums', rateLimitGuard(60, 60_000), async (_req: Request,
           const formatted = albums.map((a: any) => {
             const rawPhotos = a.gallery_photos || [];
             const photos = rawPhotos.map((p: any) => ({
-              id: p.id,
+              id: String(p.id),
+              albumId: Number(a.id),
               url: p.url || p.photo_url || a.cover_url || a.cover_photo_url,
               caption: p.caption || '',
               category: a.category,
               batchYear: p.batch_year || a.batch_year,
               year: String(a.batch_year || 2026),
-              uploaderName: 'SZMC Alumnus',
+              uploaderName: p.uploader_name || 'SZMC Alumnus',
+              uploaderId: p.uploader_id ? Number(p.uploader_id) : undefined,
               likes: Number(p.likes_count) || 0,
               liked: false,
               tags: Array.isArray(p.tags) ? p.tags : [],
@@ -1185,6 +1255,8 @@ app.get('/api/gallery/albums', rateLimitGuard(60, 60_000), async (_req: Request,
               batchYear: a.batch_year || 0,
               photosCount: photos.length || a.photos_count || 1,
               coverUrl: a.cover_url || a.cover_photo_url || (photos[0]?.url ?? '/assets/aistudio/images__1__2778177d.png'),
+              createdBy: a.created_by || 'SZMC Alumni',
+              createdById: a.created_by_id ? Number(a.created_by_id) : undefined,
               photos,
             };
           });
@@ -1202,12 +1274,12 @@ app.get('/api/gallery/albums', rateLimitGuard(60, 60_000), async (_req: Request,
 
 app.post('/api/gallery/albums', rateLimitGuard(30, 60_000), async (req: Request, res: Response) => {
   try {
-    const { title, description, category, eventDateLabel, location, batchYear, coverUrl, createdById } = req.body;
+    const { title, description, category, eventDateLabel, location, batchYear, coverUrl, createdById, createdBy } = req.body;
     if (!title || !title.trim()) {
       return res.status(400).json({ error: 'Album title is required' });
     }
 
-    const validCat = ['reunion', 'academic', 'campus', 'sports', 'cultural', 'milestone'];
+    const validCat = ['reunion', 'academic', 'campus', 'sports', 'cultural', 'milestone', 'convocation'];
     const normCat = (category || 'campus').toLowerCase();
     const finalCat = validCat.includes(normCat) ? normCat : 'campus';
     const finalCover = coverUrl || 'https://images.unsplash.com/photo-1511795409834-ef04bbd61622?w=1000&auto=format&fit=crop&q=80';
@@ -1229,6 +1301,7 @@ app.post('/api/gallery/albums', rateLimitGuard(30, 60_000), async (req: Request,
           photos_count: 1,
         };
         if (createdById) payload.created_by_id = Number(createdById);
+        if (createdBy) payload.created_by = String(createdBy);
 
         const { data, error } = await supabaseServer.from('gallery_albums').insert(payload).select('id').single();
         if (!error && data?.id) {
@@ -1239,6 +1312,8 @@ app.post('/api/gallery/albums', rateLimitGuard(30, 60_000), async (req: Request,
             url: finalCover,
             photo_url: finalCover,
             caption: `${title.trim()} - Cover Photo`,
+            uploader_id: createdById ? Number(createdById) : null,
+            uploader_name: createdBy ? String(createdBy) : 'SZMC Alumnus',
             is_approved: true,
           });
         }
@@ -1258,12 +1333,15 @@ app.post('/api/gallery/albums', rateLimitGuard(30, 60_000), async (req: Request,
       batchYear: Number(batchYear) || 0,
       photosCount: 1,
       coverUrl: finalCover,
+      createdById: createdById ? Number(createdById) : undefined,
+      createdBy: createdBy || 'SZMC Alumnus',
       photos: [
         {
           id: `p-${Date.now()}`,
           url: finalCover,
           caption: `${title.trim()} - Cover Photo`,
-          uploaderName: 'SZMC Alumnus',
+          uploaderId: createdById ? Number(createdById) : undefined,
+          uploaderName: createdBy || 'SZMC Alumnus',
           batchYear: Number(batchYear) || 0,
           uploadedAt: 'Today',
           likesCount: 1,
@@ -1282,7 +1360,7 @@ app.post('/api/gallery/albums', rateLimitGuard(30, 60_000), async (req: Request,
 
 app.post('/api/gallery/photos', rateLimitGuard(60, 60_000), async (req: Request, res: Response) => {
   try {
-    const { albumId, url, photoUrl, caption, batchYear, tags, mediaType, fileSize, uploaderId } = req.body;
+    const { albumId, url, photoUrl, caption, batchYear, tags, mediaType, fileSize, uploaderId, uploaderName } = req.body;
     const finalUrl = url || photoUrl;
     if (!albumId || !finalUrl) {
       return res.status(400).json({ error: 'albumId and url are required' });
@@ -1304,6 +1382,7 @@ app.post('/api/gallery/photos', rateLimitGuard(60, 60_000), async (req: Request,
           is_approved: true,
         };
         if (uploaderId) payload.uploader_id = Number(uploaderId);
+        if (uploaderName) payload.uploader_name = String(uploaderName);
 
         const { data, error } = await supabaseServer.from('gallery_photos').insert(payload).select('id').single();
         if (!error && data?.id) {
@@ -1324,17 +1403,150 @@ app.post('/api/gallery/photos', rateLimitGuard(60, 60_000), async (req: Request,
       albumId: Number(albumId),
       url: finalUrl,
       caption: caption || '',
+      uploaderId: uploaderId ? Number(uploaderId) : undefined,
+      uploaderName: uploaderName || 'SZMC Alumnus',
       batchYear: Number(batchYear) || 0,
       tags: Array.isArray(tags) ? tags : [],
       mediaType: mediaType || 'image',
       fileSize: fileSize || '1.2 MB',
     };
 
+    // Update in memoryGalleryAlbums if present
+    const memAlbum = memoryGalleryAlbums.find((a) => a.id === Number(albumId));
+    if (memAlbum) {
+      if (!Array.isArray(memAlbum.photos)) memAlbum.photos = [];
+      memAlbum.photos.unshift(photoObj);
+      memAlbum.photosCount = memAlbum.photos.length;
+    }
+
     return res.status(201).json({ success: true, photo: photoObj });
   } catch (err: any) {
     return res.status(500).json({ error: err.message || 'Failed to add photo' });
   }
 });
+
+// Delete Album Endpoint: Creator can delete own album, Admin can delete any album
+const handleGalleryAlbumDelete = async (req: Request, res: Response) => {
+  try {
+    const albumId = Number(req.params.id);
+    if (!albumId) {
+      return res.status(400).json({ error: 'Album ID is required' });
+    }
+
+    const requesterUserId = Number(req.body.userId || req.query.userId || 0);
+    const requesterIsAdmin = Boolean(req.body.isAdmin || req.query.isAdmin === 'true' || (req as any).user?.role === 'admin');
+
+    if (isSupabaseServerConfigured) {
+      try {
+        const { data: album } = await supabaseServer
+          .from('gallery_albums')
+          .select('id, created_by_id')
+          .eq('id', albumId)
+          .maybeSingle();
+
+        if (album) {
+          const isOwner = requesterUserId > 0 && Number(album.created_by_id) === requesterUserId;
+          if (!requesterIsAdmin && !isOwner) {
+            return res.status(403).json({ error: 'Access denied: You can only delete your own albums, or an administrator can delete any album.' });
+          }
+
+          // Delete all associated photos first, then delete album
+          await supabaseServer.from('gallery_photos').delete().eq('album_id', albumId);
+          await supabaseServer.from('gallery_albums').delete().eq('id', albumId);
+        }
+      } catch (err) {
+        console.warn('Supabase delete gallery album notice:', err);
+      }
+    }
+
+    // Delete from memoryGalleryAlbums
+    const memIdx = memoryGalleryAlbums.findIndex((a) => a.id === albumId);
+    if (memIdx >= 0) {
+      memoryGalleryAlbums.splice(memIdx, 1);
+    }
+
+    return res.json({ success: true, message: 'Album deleted successfully' });
+  } catch (err: any) {
+    console.error('Failed to delete gallery album:', err);
+    return res.status(500).json({ error: err.message || 'Failed to delete album' });
+  }
+};
+
+app.delete('/api/gallery/albums/:id', rateLimitGuard(40, 60_000), handleGalleryAlbumDelete);
+app.post('/api/gallery/albums/:id/delete', rateLimitGuard(40, 60_000), handleGalleryAlbumDelete);
+
+// Delete Photo Endpoint: Uploader or Album Creator can delete own photo, Admin can delete any photo
+const handleGalleryPhotoDelete = async (req: Request, res: Response) => {
+  try {
+    const photoId = String(req.params.id);
+    const albumId = req.body.albumId || req.query.albumId ? Number(req.body.albumId || req.query.albumId) : null;
+    const requesterUserId = Number(req.body.userId || req.query.userId || 0);
+    const requesterIsAdmin = Boolean(req.body.isAdmin || req.query.isAdmin === 'true' || (req as any).user?.role === 'admin');
+
+    if (isSupabaseServerConfigured) {
+      try {
+        const { data: photo } = await supabaseServer
+          .from('gallery_photos')
+          .select('id, album_id, uploader_id')
+          .eq('id', photoId)
+          .maybeSingle();
+
+        if (photo) {
+          let isOwner = requesterUserId > 0 && Number(photo.uploader_id) === requesterUserId;
+          if (!isOwner && photo.album_id) {
+            // Check if requester owns the album
+            const { data: parentAlbum } = await supabaseServer
+              .from('gallery_albums')
+              .select('id, created_by_id')
+              .eq('id', photo.album_id)
+              .maybeSingle();
+            if (parentAlbum && Number(parentAlbum.created_by_id) === requesterUserId) {
+              isOwner = true;
+            }
+          }
+
+          if (!requesterIsAdmin && !isOwner) {
+            return res.status(403).json({ error: 'Access denied: You can only delete your own photos, or an administrator can delete any photo.' });
+          }
+
+          await supabaseServer.from('gallery_photos').delete().eq('id', photoId);
+
+          const targetAlbumId = photo.album_id || albumId;
+          if (targetAlbumId) {
+            const { count } = await supabaseServer
+              .from('gallery_photos')
+              .select('id', { count: 'exact', head: true })
+              .eq('album_id', targetAlbumId);
+            const remainingCount = typeof count === 'number' ? count : 0;
+            await supabaseServer.from('gallery_albums').update({ photos_count: remainingCount, photo_count: remainingCount }).eq('id', targetAlbumId);
+          }
+        }
+      } catch (err) {
+        console.warn('Supabase delete photo notice:', err);
+      }
+    }
+
+    // Also update in memoryGalleryAlbums
+    for (const alb of memoryGalleryAlbums) {
+      if (Array.isArray(alb.photos)) {
+        const pIdx = alb.photos.findIndex((p: any) => String(p.id) === photoId);
+        if (pIdx >= 0) {
+          alb.photos.splice(pIdx, 1);
+          alb.photosCount = alb.photos.length;
+          break;
+        }
+      }
+    }
+
+    return res.json({ success: true, message: 'Photo deleted successfully' });
+  } catch (err: any) {
+    console.error('Failed to delete photo:', err);
+    return res.status(500).json({ error: err.message || 'Failed to delete photo' });
+  }
+};
+
+app.delete('/api/gallery/photos/:id', rateLimitGuard(60, 60_000), handleGalleryPhotoDelete);
+app.post('/api/gallery/photos/:id/delete', rateLimitGuard(60, 60_000), handleGalleryPhotoDelete);
 
 // Blood Network - High Resilient Supabase Storage
 const memoryBloodRequests: any[] = [];

@@ -12,6 +12,7 @@ import {
   Link2
 } from 'lucide-react';
 import { GalleryAlbum } from '../../types';
+import { useAuth } from '../../context/AuthContext';
 
 interface CreateAlbumModalProps {
   isOpen: boolean;
@@ -79,6 +80,7 @@ export const CreateAlbumModal: React.FC<CreateAlbumModalProps> = ({
   onClose,
   onCreateAlbum,
 }) => {
+  const { currentUser } = useAuth();
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [category, setCategory] = useState<GalleryAlbum['category']>('reunion');
@@ -115,6 +117,13 @@ export const CreateAlbumModal: React.FC<CreateAlbumModalProps> = ({
         ? customCoverUrl.trim()
         : selectedCover;
 
+    const authorName = currentUser?.fullName || 'SZMC Alumnus';
+    const authorId = currentUser?.id;
+    const authorAvatar =
+      currentUser?.avatarUrl ||
+      'https://images.unsplash.com/photo-1622253692010-333f2da6031d?w=200&auto=format&fit=crop&q=80';
+    const authorBatch = currentUser?.batchYear || batchYear || 20;
+
     const newAlbum: GalleryAlbum = {
       id: Date.now(),
       title: title.trim(),
@@ -125,17 +134,18 @@ export const CreateAlbumModal: React.FC<CreateAlbumModalProps> = ({
       batchYear,
       photosCount: 1,
       coverUrl: finalCover,
-      createdBy: 'You (Alumni Member)',
+      createdById: authorId,
+      createdBy: authorName,
       createdDate: 'Just now',
       photos: [
         {
           id: `p-${Date.now()}`,
           url: finalCover,
           caption: `${title.trim()} - Album Cover Photo`,
-          uploaderName: 'Dr. Nurul Anam Bashir',
-          uploaderAvatar:
-            'https://images.unsplash.com/photo-1622253692010-333f2da6031d?w=200&auto=format&fit=crop&q=80',
-          batchYear: 34,
+          uploaderId: authorId,
+          uploaderName: authorName,
+          uploaderAvatar: authorAvatar,
+          batchYear: authorBatch,
           uploadedAt: 'Today',
           likesCount: 1,
           likedByMe: true,

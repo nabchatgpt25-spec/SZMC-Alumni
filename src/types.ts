@@ -20,7 +20,7 @@ export interface ThemeOption {
 }
 
 export type VerificationStatus = 'verified' | 'pending_vouch' | 'unverified';
-export type VerificationMethod = 'two_vouches' | 'id_card_upload' | 'souvenir_photo' | 'admin_verified' | 'admin';
+export type VerificationMethod = 'two_vouches' | 'id_card_upload' | 'souvenir_photo' | 'admin_verified' | 'admin' | 'admin_instant';
 export type VerificationDocType = 'id_card' | 'nid_card' | 'hsc_slip' | 'souvenir';
 
 export interface AdminDocSubmission {
@@ -140,6 +140,7 @@ export interface AlumniProfile {
   idSubmissionStatus?: 'pending' | 'approved' | 'rejected';
   adminReviewNote?: string;
   verificationDate?: string;
+  autoVerify?: boolean;
   profession: string;
   position: string;
   institution: string;
@@ -341,8 +342,10 @@ export interface BatchSummary {
 
 export interface GalleryPhoto {
   id: string;
+  albumId?: number;
   url: string;
   caption?: string;
+  uploaderId?: number;
   uploaderName?: string;
   uploaderAvatar?: string;
   batchYear?: number;
@@ -366,6 +369,7 @@ export interface GalleryAlbum {
   coverUrl: string;
   photos: GalleryPhoto[];
   createdBy?: string;
+  createdById?: number;
   createdDate?: string;
 }
 

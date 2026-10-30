@@ -37,6 +37,7 @@ export const PostCard: React.FC<PostCardProps> = ({
   currentUserName = 'SZMC Alumnus',
   currentUserAvatar = '/assets/aistudio/images__1__2778177d.png',
   onPostUpdated,
+  onNavigateToAlbum,
 }) => {
   const [liked, setLiked] = useState(post.likedByMe ?? false);
   const [likesCount, setLikesCount] = useState(post.likesCount || post.likes || 0);

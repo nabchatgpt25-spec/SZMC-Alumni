@@ -13,7 +13,8 @@ import {
   ZoomIn,
   ZoomOut,
   Maximize2,
-  Film
+  Film,
+  Trash2
 } from 'lucide-react';
 import { GalleryPhoto } from '../../types';
 import { isVideoUrl } from '../../utils/mediaStorage';
@@ -27,6 +28,8 @@ interface PhotoLightboxProps {
   onToggleLike: (photoId: string) => void;
   isPlayingSlideshow: boolean;
   onToggleSlideshow: () => void;
+  canDeleteCurrentPhoto?: boolean;
+  onDeletePhoto?: (photoId: string) => void;
 }
 
 export const PhotoLightbox: React.FC<PhotoLightboxProps> = ({
@@ -38,6 +41,8 @@ export const PhotoLightbox: React.FC<PhotoLightboxProps> = ({
   onToggleLike,
   isPlayingSlideshow,
   onToggleSlideshow,
+  canDeleteCurrentPhoto = false,
+  onDeletePhoto,
 }) => {
   const currentPhoto = photos[currentIndex];
 
@@ -142,6 +147,22 @@ export const PhotoLightbox: React.FC<PhotoLightboxProps> = ({
           >
             <Download className="w-4 h-4" />
           </button>
+
+          {/* Delete Photo for Owner or Admin */}
+          {canDeleteCurrentPhoto && (
+            <button
+              type="button"
+              onClick={() => {
+                if (window.confirm('Are you sure you want to delete this photograph? This cannot be undone.')) {
+                  onDeletePhoto?.(currentPhoto.id);
+                }
+              }}
+              title="Delete photograph (Owner or Admin)"
+              className="p-2 rounded-xl bg-rose-500/20 hover:bg-rose-600 text-rose-300 hover:text-white border border-rose-500/30 transition-colors cursor-pointer"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          )}
 
           {/* Close Lightbox */}
           <button

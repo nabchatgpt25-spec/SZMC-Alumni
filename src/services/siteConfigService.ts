@@ -70,6 +70,9 @@ export interface SiteConfig {
 
   // 4. System Controls & Auth Governance
   globalVerificationEnabled: boolean; // ON/OFF the verification system of whole website auth!
+  autoVerificationEnabled: boolean; // 7-day auto-verification for new profiles
+  autoVerificationUntil: string; // ISO date string: 7 days from activation
+  autoVerificationPaused: boolean; // Super admin can pause/resume anytime
   maintenanceMode: boolean;
   maintenanceMessage: string;
   publicRegistrationOpen: boolean;
@@ -141,6 +144,9 @@ export const FACTORY_DEFAULT_SITE_CONFIG: SiteConfig = {
   liveTickerActionUrl: '#blood',
 
   globalVerificationEnabled: true,
+  autoVerificationEnabled: true,
+  autoVerificationUntil: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+  autoVerificationPaused: false,
   maintenanceMode: false,
   maintenanceMessage: 'The portal is currently undergoing scheduled institutional maintenance. Please check back shortly.',
   publicRegistrationOpen: true,
@@ -374,3 +380,55 @@ export function useSiteConfig() {
     importJson: importSiteConfigJson,
   };
 }
+
+export function isInstantAutoVerificationActive(): boolean {
+  try {
+    const cfg = getSiteConfig();
+    if (!cfg.autoVerificationEnabled || cfg.autoVerificationPaused) return false;
+    const expiry = new Date(cfg.autoVerificationUntil).getTime();
+    return !isNaN(expiry) && Date.now() < expiry;
+  } catch {
+    return false;
+  }
+}
+
+export function getAutoVerificationRemainingTime(): {
+  isActive: boolean;
+  isPaused: boolean;
+  days: number;
+  hours: number;
+  minutes: number;
+  expiresAt: string;
+} {
+  const cfg = getSiteConfig();
+  const expiry = new Date(cfg.autoVerificationUntil || Date.now() + 7 * 24 * 60 * 60 * 1000).getTime();
+  const now = Date.now();
+  const diff = Math.max(0, expiry - now);
+
+  const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+  const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+  const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+
+  return {
+    isActive: cfg.autoVerificationEnabled && !cfg.autoVerificationPaused && diff > 0,
+    isPaused: Boolean(cfg.autoVerificationPaused),
+    days,
+    hours,
+    minutes,
+    expiresAt: cfg.autoVerificationUntil,
+  };
+}
+
+export function pauseAutoVerification(paused: boolean): SiteConfig {
+  return saveSiteConfig({ autoVerificationPaused: paused });
+}
+
+export function resetAutoVerification7Days(): SiteConfig {
+  const newExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  return saveSiteConfig({
+    autoVerificationEnabled: true,
+    autoVerificationPaused: false,
+    autoVerificationUntil: newExpiry,
+  });
+}
+

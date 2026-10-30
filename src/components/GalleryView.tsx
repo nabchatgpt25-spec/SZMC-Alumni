@@ -13,7 +13,8 @@ import {
   Users,
   Camera,
   Layers,
-  ArrowRight
+  ArrowRight,
+  Trash2
 } from 'lucide-react';
 import { GalleryAlbum, GalleryPhoto } from '../types';
 import { INITIAL_ALBUMS } from '../data/galleryData';
@@ -21,11 +22,14 @@ import { AlbumShowcaseView } from './gallery/AlbumShowcaseView';
 import { CreateAlbumModal } from './gallery/CreateAlbumModal';
 import { UploadPhotosModal } from './gallery/UploadPhotosModal';
 import { PhotoLightbox } from './gallery/PhotoLightbox';
+import { useAuth } from '../context/AuthContext';
 import {
   fetchGalleryAlbumsFromDb,
   createGalleryAlbumInDb,
   addPhotoToGalleryAlbumInDb,
   createFeedPostInDb,
+  deleteGalleryAlbumInDb,
+  deleteGalleryPhotoInDb,
 } from '../services/supabaseService';
 import { realtimeManager } from '../services/supabaseRealtimeService';
 
@@ -40,6 +44,44 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
   initialAlbumId = null,
   onBackToFeed,
 }) => {
+  const { currentUser, isAdminUser } = useAuth();
+
+  // Ownership & Administration permission helpers
+  const canDeleteAlbum = (album: GalleryAlbum): boolean => {
+    if (isAdminUser || currentUser?.role === 'admin') return true;
+    if (!currentUser?.id) return false;
+    if (album.createdById && Number(album.createdById) === Number(currentUser.id)) return true;
+    if (
+      album.createdBy &&
+      currentUser.fullName &&
+      album.createdBy.trim().toLowerCase() === currentUser.fullName.trim().toLowerCase()
+    ) {
+      return true;
+    }
+    if (album.createdBy && (album.createdBy.includes('You') || album.createdBy.includes('Current User'))) {
+      return true;
+    }
+    return false;
+  };
+
+  const canDeletePhoto = (photo: GalleryPhoto, album?: GalleryAlbum): boolean => {
+    if (isAdminUser || currentUser?.role === 'admin') return true;
+    if (!currentUser?.id) return false;
+    if (photo.uploaderId && Number(photo.uploaderId) === Number(currentUser.id)) return true;
+    if (album?.createdById && Number(album.createdById) === Number(currentUser.id)) return true;
+    if (
+      photo.uploaderName &&
+      currentUser.fullName &&
+      photo.uploaderName.trim().toLowerCase() === currentUser.fullName.trim().toLowerCase()
+    ) {
+      return true;
+    }
+    if (photo.uploaderName && photo.uploaderName.includes('You')) {
+      return true;
+    }
+    return false;
+  };
+
   // Load albums from localStorage or fallback to INITIAL_ALBUMS
   const [albums, setAlbums] = useState<GalleryAlbum[]>(() => {
     try {
@@ -202,25 +244,33 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
 
   // Handlers
   const handleCreateAlbum = async (newAlbum: GalleryAlbum) => {
+    const albumWithUser: GalleryAlbum = {
+      ...newAlbum,
+      createdById: newAlbum.createdById || currentUser?.id,
+      createdBy: newAlbum.createdBy || currentUser?.fullName || 'SZMC Alumnus',
+    };
+
     // 1. Optimistic UI insert
-    setAlbums((prev) => [newAlbum, ...prev]);
-    setSelectedAlbumId(newAlbum.id);
+    setAlbums((prev) => [albumWithUser, ...prev]);
+    setSelectedAlbumId(albumWithUser.id);
 
     let realId: number | null = null;
     try {
       realId = await createGalleryAlbumInDb({
-        title: newAlbum.title,
-        description: newAlbum.description,
-        category: newAlbum.category,
-        eventDateLabel: newAlbum.date,
-        location: newAlbum.location,
-        batchYear: newAlbum.batchYear,
-        coverUrl: newAlbum.coverUrl,
+        title: albumWithUser.title,
+        description: albumWithUser.description,
+        category: albumWithUser.category,
+        eventDateLabel: albumWithUser.date,
+        location: albumWithUser.location,
+        batchYear: albumWithUser.batchYear,
+        coverUrl: albumWithUser.coverUrl,
+        createdById: albumWithUser.createdById,
+        createdBy: albumWithUser.createdBy,
       });
 
-      if (realId && realId !== newAlbum.id) {
+      if (realId && realId !== albumWithUser.id) {
         setAlbums((prev) =>
-          prev.map((a) => (a.id === newAlbum.id ? { ...a, id: realId! } : a))
+          prev.map((a) => (a.id === albumWithUser.id ? { ...a, id: realId! } : a))
         );
         setSelectedAlbumId(realId);
       }
@@ -230,12 +280,12 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
 
     // 2. AUTOMATICALLY PUBLISH AS A PUBLIC FEED POST WITH "SEE ALBUM" ACTION
     try {
-      const targetAlbumId = realId || newAlbum.id;
-      const photoUrls = newAlbum.photos?.map((p) => p.url).filter(Boolean) || [];
-      const imagesToPost = photoUrls.length > 0 ? photoUrls : [newAlbum.coverUrl];
+      const targetAlbumId = realId || albumWithUser.id;
+      const photoUrls = albumWithUser.photos?.map((p) => p.url).filter(Boolean) || [];
+      const imagesToPost = photoUrls.length > 0 ? photoUrls : [albumWithUser.coverUrl];
 
-      const postContent = `📸 Added a new photo album: "${newAlbum.title}"\n\n${
-        newAlbum.description ? newAlbum.description + '\n\n' : ''
+      const postContent = `📸 Added a new photo album: "${albumWithUser.title}"\n\n${
+        albumWithUser.description ? albumWithUser.description + '\n\n' : ''
       }Click "See Album" below to browse the complete album photographs in the gallery!\n[szmc_album_ref:${targetAlbumId}]`;
 
       // A. Post to Express endpoint /api/posts for immediate availability to all users
@@ -244,13 +294,13 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            author_id: 10002,
+            author_id: currentUser?.id || 10002,
             content: postContent,
             category: 'Reunion',
             images: imagesToPost,
             albumId: targetAlbumId,
-            albumTitle: newAlbum.title,
-            albumCategory: newAlbum.category,
+            albumTitle: albumWithUser.title,
+            albumCategory: albumWithUser.category,
           }),
         });
       } catch (postFetchErr) {
@@ -270,9 +320,9 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
           new CustomEvent('szmc:album-posted', {
             detail: {
               albumId: targetAlbumId,
-              albumTitle: newAlbum.title,
-              category: newAlbum.category,
-              coverUrl: newAlbum.coverUrl,
+              albumTitle: albumWithUser.title,
+              category: albumWithUser.category,
+              coverUrl: albumWithUser.coverUrl,
               images: imagesToPost,
             },
           })
@@ -294,6 +344,8 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
         tags: photo.tags,
         mediaType: photo.mediaType,
         fileSize: photo.fileSize,
+        uploaderId: photo.uploaderId || currentUser?.id,
+        uploaderName: photo.uploaderName || currentUser?.fullName || 'SZMC Alumnus',
       }).catch((err) => {
         console.warn('addPhotoToGalleryAlbumInDb fallback:', err);
       });
@@ -312,6 +364,72 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
         return alb;
       })
     );
+  };
+
+  const handleDeleteAlbum = async (albumId: number) => {
+    // Optimistic removal from state
+    setAlbums((prev) => prev.filter((a) => a.id !== albumId && Number(a.id) !== Number(albumId)));
+    if (selectedAlbumId === albumId || Number(selectedAlbumId) === Number(albumId)) {
+      setSelectedAlbumId(null);
+      if (typeof window !== 'undefined' && window.location.hash.startsWith('#album-')) {
+        window.location.hash = 'gallery';
+      }
+    }
+
+    try {
+      await deleteGalleryAlbumInDb(
+        albumId,
+        currentUser?.id,
+        isAdminUser || currentUser?.role === 'admin'
+      );
+    } catch (err) {
+      console.warn('deleteGalleryAlbumInDb notice:', err);
+    }
+  };
+
+  const handleDeletePhoto = async (photoId: string) => {
+    let foundAlbumId: number | undefined;
+
+    setAlbums((prev) =>
+      prev.map((alb) => {
+        const hasPhoto = alb.photos.some((p) => String(p.id) === String(photoId));
+        if (hasPhoto) {
+          foundAlbumId = alb.id;
+          const remaining = alb.photos.filter((p) => String(p.id) !== String(photoId));
+          return {
+            ...alb,
+            photos: remaining,
+            photosCount: remaining.length,
+            coverUrl:
+              alb.photos[0]?.id === photoId && remaining[0] ? remaining[0].url : alb.coverUrl,
+          };
+        }
+        return alb;
+      })
+    );
+
+    // If lightbox is currently viewing this photo
+    if (lightboxState.isOpen) {
+      if (activeLightboxPhotos.length <= 1) {
+        setLightboxState((prev) => ({ ...prev, isOpen: false }));
+      } else {
+        setLightboxState((prev) => ({
+          ...prev,
+          currentIndex: Math.max(0, Math.min(prev.currentIndex, activeLightboxPhotos.length - 2)),
+        }));
+      }
+    }
+
+    try {
+      await deleteGalleryPhotoInDb(
+        photoId,
+        foundAlbumId || lightboxState.albumId || undefined,
+        currentUser?.id,
+        isAdminUser || currentUser?.role === 'admin'
+      );
+    } catch (err) {
+      console.warn('deleteGalleryPhotoInDb notice:', err);
+    }
   };
 
   const handleToggleLike = (photoId: string) => {
@@ -371,6 +489,10 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
           onToggleLike={handleToggleLike}
           onRequestUpload={(albumId) => openUploadModalForAlbum(albumId)}
           onStartSlideshow={() => startAlbumSlideshow(activeAlbum.id)}
+          canDeleteAlbum={canDeleteAlbum(activeAlbum)}
+          canDeletePhoto={(photo) => canDeletePhoto(photo, activeAlbum)}
+          onDeleteAlbum={handleDeleteAlbum}
+          onDeletePhoto={handleDeletePhoto}
         />
 
         {/* Lightbox */}
@@ -388,6 +510,11 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
           onToggleLike={handleToggleLike}
           isPlayingSlideshow={isPlayingSlideshow}
           onToggleSlideshow={() => setIsPlayingSlideshow((prev) => !prev)}
+          canDeleteCurrentPhoto={Boolean(
+            activeLightboxPhotos[lightboxState.currentIndex] &&
+              canDeletePhoto(activeLightboxPhotos[lightboxState.currentIndex], activeAlbum)
+          )}
+          onDeletePhoto={handleDeletePhoto}
         />
 
         {/* Upload Modal */}
@@ -576,16 +703,38 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/30 to-transparent" />
 
-                {/* Top Badge: Photo Count & Category */}
+                {/* Top Badge: Photo Count, Category & Delete Action */}
                 <div className="absolute top-3.5 inset-x-4 flex items-center justify-between">
                   <span className="text-[11px] font-black px-2.5 py-1 rounded-full bg-blue-600/90 text-white backdrop-blur-md shadow-xs flex items-center gap-1.5">
                     <Camera className="w-3 h-3" />
                     <span>{album.photos.length || album.photosCount} Photos</span>
                   </span>
 
-                  <span className="text-[10px] font-extrabold uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-black/50 text-slate-200 backdrop-blur-md border border-white/20">
-                    {album.category}
-                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[10px] font-extrabold uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-black/50 text-slate-200 backdrop-blur-md border border-white/20">
+                      {album.category}
+                    </span>
+
+                    {canDeleteAlbum(album) && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (
+                            window.confirm(
+                              `Are you sure you want to delete the album "${album.title}" and all its photos? This action cannot be undone.`
+                            )
+                          ) {
+                            handleDeleteAlbum(album.id);
+                          }
+                        }}
+                        title="Delete album (Owner or Admin)"
+                        className="w-7 h-7 rounded-full bg-rose-600/80 hover:bg-rose-600 text-white backdrop-blur-md flex items-center justify-center transition-all cursor-pointer shadow-md hover:scale-105"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 {/* Bottom Title & Details */}

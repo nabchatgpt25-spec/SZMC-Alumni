@@ -638,6 +638,8 @@ BEGIN
   ALTER TABLE public.gallery_albums ADD COLUMN IF NOT EXISTS event_date_label TEXT;
   ALTER TABLE public.gallery_albums ADD COLUMN IF NOT EXISTS photos_count INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE public.gallery_albums ADD COLUMN IF NOT EXISTS is_published BOOLEAN NOT NULL DEFAULT TRUE;
+  ALTER TABLE public.gallery_albums ADD COLUMN IF NOT EXISTS created_by TEXT;
+  ALTER TABLE public.gallery_albums ADD COLUMN IF NOT EXISTS created_by_id BIGINT;
 
   -- gallery_photos columns
   ALTER TABLE public.gallery_photos ADD COLUMN IF NOT EXISTS url TEXT;
@@ -648,6 +650,8 @@ BEGIN
   ALTER TABLE public.gallery_photos ADD COLUMN IF NOT EXISTS file_size TEXT;
   ALTER TABLE public.gallery_photos ADD COLUMN IF NOT EXISTS likes_count INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE public.gallery_photos ADD COLUMN IF NOT EXISTS is_approved BOOLEAN NOT NULL DEFAULT TRUE;
+  ALTER TABLE public.gallery_photos ADD COLUMN IF NOT EXISTS uploader_name TEXT;
+  ALTER TABLE public.gallery_photos ADD COLUMN IF NOT EXISTS uploader_id BIGINT;
 
   -- post_comments columns
   ALTER TABLE public.post_comments ADD COLUMN IF NOT EXISTS author_id BIGINT;
@@ -686,10 +690,14 @@ END $$;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.mentorship_requests TO anon, authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.mentor_offers TO anon, authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.career_opportunities TO anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.gallery_albums TO anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.gallery_photos TO anon, authenticated;
 
 ALTER TABLE public.mentorship_requests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.mentor_offers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.career_opportunities ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.gallery_albums ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.gallery_photos ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "mentorship_requests_all" ON public.mentorship_requests;
 CREATE POLICY "mentorship_requests_all" ON public.mentorship_requests FOR ALL USING (true) WITH CHECK (true);
@@ -699,6 +707,12 @@ CREATE POLICY "mentor_offers_all" ON public.mentor_offers FOR ALL USING (true) W
 
 DROP POLICY IF EXISTS "career_opportunities_all" ON public.career_opportunities;
 CREATE POLICY "career_opportunities_all" ON public.career_opportunities FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "gallery_albums_all" ON public.gallery_albums;
+CREATE POLICY "gallery_albums_all" ON public.gallery_albums FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "gallery_photos_all" ON public.gallery_photos;
+CREATE POLICY "gallery_photos_all" ON public.gallery_photos FOR ALL USING (true) WITH CHECK (true);
 
 -- 17. ENABLE REALTIME REPLICATION FOR ACTIVE MODULES
 DO $$

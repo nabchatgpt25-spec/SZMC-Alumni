@@ -34,6 +34,72 @@ const DEFAULT_STREAM_GROUPS = [
 
 export const inMemoryAlumniProfiles: any[] = [];
 
+// 7-Day Launch Instant Auto-Verification Configuration (Can be paused by Super Admin)
+export const serverAutoVerifyConfig = {
+  enabled: true,
+  paused: false,
+  expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+};
+
+export function isServerAutoVerifyActive(): boolean {
+  if (!serverAutoVerifyConfig.enabled || serverAutoVerifyConfig.paused) return false;
+  return new Date() < new Date(serverAutoVerifyConfig.expiresAt);
+}
+
+export function setServerAutoVerifyConfig(updates: Partial<typeof serverAutoVerifyConfig>) {
+  Object.assign(serverAutoVerifyConfig, updates);
+  return { ...serverAutoVerifyConfig };
+}
+
+export async function bulkVerifyAllAlumniProfiles(params: {
+  actorUid: string;
+  actorEmail: string;
+  actorRole: string;
+}) {
+  let verifiedCount = 0;
+  if (isSupabaseServerConfigured) {
+    try {
+      const { data, error } = await supabaseServer
+        .from(SUPABASE_TABLES.ALUMNI_PROFILES)
+        .update({
+          verification_status: 'verified',
+          verification_method: 'admin_instant',
+          vouches_count: 2,
+          verified_at: new Date().toISOString(),
+        })
+        .neq('verification_status', 'verified')
+        .select('id');
+      if (!error && data) {
+        verifiedCount = data.length;
+      }
+    } catch (err) {
+      console.warn('Supabase bulk verify notice:', err);
+    }
+  }
+
+  for (const p of inMemoryAlumniProfiles) {
+    if (p.verificationStatus !== 'verified') {
+      p.verificationStatus = 'verified';
+      p.verificationMethod = 'admin_instant';
+      p.vouchesCount = 2;
+      p.verifiedAt = new Date().toISOString();
+      verifiedCount++;
+    }
+  }
+
+  await recordSecurityAuditLog({
+    actorUid: params.actorUid,
+    actorEmail: params.actorEmail,
+    actorRole: params.actorRole,
+    action: 'BULK_VERIFY_ALUMNI',
+    targetType: 'alumni_profiles',
+    targetId: 'ALL_PENDING',
+    summary: `Super Admin bulk verified all ${verifiedCount} pending alumni profiles during launch window.`,
+  });
+
+  return { verifiedCount };
+}
+
 export async function recordSecurityAuditLog(params: {
   actorUid: string;
   actorEmail: string;
@@ -572,7 +638,11 @@ export async function createOrRegisterAlumniProfile(input: {
               email: cleanEmail,
               blood_group: input.bloodGroup || null,
               role: 'member',
-              verification_status: 'unverified',
+              verification_status: isServerAutoVerifyActive() ? 'verified' : 'unverified',
+              verification_method: isServerAutoVerifyActive() ? 'admin_instant' : null,
+              vouches_count: isServerAutoVerifyActive() ? 2 : 0,
+              vouch_target_count: 2,
+              verified_at: isServerAutoVerifyActive() ? new Date().toISOString() : null,
               is_public: true,
             },
             { onConflict: 'auth_user_id' }
@@ -648,7 +718,11 @@ export async function createOrRegisterAlumniProfile(input: {
     passwordHash: input.passwordHash || null,
     bloodGroup: input.bloodGroup || null,
     role: 'member',
-    verificationStatus: 'unverified',
+    verificationStatus: isServerAutoVerifyActive() ? 'verified' : 'unverified',
+    verificationMethod: isServerAutoVerifyActive() ? 'admin_instant' : null,
+    vouchesCount: isServerAutoVerifyActive() ? 2 : 0,
+    vouchTargetCount: 2,
+    verifiedAt: isServerAutoVerifyActive() ? new Date().toISOString() : null,
     accountStatus: 'active',
     isPublic: true,
     authUserId: effectiveAuthUid || `local-${fallbackId}`,

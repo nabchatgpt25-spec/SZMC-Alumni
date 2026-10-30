@@ -18,7 +18,8 @@ import {
   Maximize2,
   Eye,
   Camera,
-  Layers
+  Layers,
+  Trash2
 } from 'lucide-react';
 import { GalleryAlbum, GalleryPhoto } from '../../types';
 
@@ -30,6 +31,10 @@ interface AlbumShowcaseViewProps {
   onToggleLike: (photoId: string) => void;
   onRequestUpload: (albumId: number) => void;
   onStartSlideshow: () => void;
+  canDeleteAlbum?: boolean;
+  canDeletePhoto?: (photo: GalleryPhoto) => boolean;
+  onDeleteAlbum?: (albumId: number) => void;
+  onDeletePhoto?: (photoId: string) => void;
 }
 
 export const AlbumShowcaseView: React.FC<AlbumShowcaseViewProps> = ({
@@ -40,6 +45,10 @@ export const AlbumShowcaseView: React.FC<AlbumShowcaseViewProps> = ({
   onToggleLike,
   onRequestUpload,
   onStartSlideshow,
+  canDeleteAlbum = false,
+  canDeletePhoto,
+  onDeleteAlbum,
+  onDeletePhoto,
 }) => {
   const [selectedTag, setSelectedTag] = useState<string>('All');
   const [viewLayout, setViewLayout] = useState<'masonry' | 'grid' | 'filmstrip'>('masonry');
@@ -214,6 +223,22 @@ export const AlbumShowcaseView: React.FC<AlbumShowcaseViewProps> = ({
               <Download className="w-4 h-4" />
             </button>
 
+            {canDeleteAlbum && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (window.confirm(`Are you sure you want to delete the album "${album.title}" and all its photos? This action cannot be undone.`)) {
+                    onDeleteAlbum?.(album.id);
+                  }
+                }}
+                className="px-4 py-2.5 bg-rose-600/90 hover:bg-rose-600 text-white text-xs font-bold rounded-2xl transition-colors flex items-center gap-2 cursor-pointer shadow-md"
+                title="Delete album (Owner or Admin)"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>Delete Album</span>
+              </button>
+            )}
+
             {copiedLink && (
               <span className="text-xs font-bold text-emerald-400 bg-emerald-950/80 px-2.5 py-1 rounded-xl border border-emerald-800">
                 Link copied to clipboard!
@@ -315,6 +340,23 @@ export const AlbumShowcaseView: React.FC<AlbumShowcaseViewProps> = ({
                 {displayedPhotos[filmstripIndex]?.caption}
               </div>
             )}
+
+            {displayedPhotos[filmstripIndex] && canDeletePhoto?.(displayedPhotos[filmstripIndex]) && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (window.confirm('Delete this photograph from the album?')) {
+                    onDeletePhoto?.(displayedPhotos[filmstripIndex].id);
+                  }
+                }}
+                title="Delete photograph (Owner or Admin)"
+                className="absolute top-4 left-4 z-10 p-2 rounded-xl bg-rose-600/80 hover:bg-rose-600 text-white backdrop-blur-md transition-colors cursor-pointer shadow-md flex items-center gap-1.5 text-xs font-bold"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>Delete Photo</span>
+              </button>
+            )}
           </div>
 
           {/* Filmstrip Strip */}
@@ -378,6 +420,23 @@ export const AlbumShowcaseView: React.FC<AlbumShowcaseViewProps> = ({
                   <div className="absolute top-3 right-3 w-8 h-8 rounded-full bg-black/40 text-white backdrop-blur-md opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                     <Maximize2 className="w-4 h-4" />
                   </div>
+
+                  {/* Delete Photo Button if Owner or Admin */}
+                  {canDeletePhoto?.(photo) && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (window.confirm('Are you sure you want to delete this photograph? This cannot be undone.')) {
+                          onDeletePhoto?.(photo.id);
+                        }
+                      }}
+                      title="Delete photograph (Owner or Admin)"
+                      className="absolute top-3 left-3 z-10 w-8 h-8 rounded-full bg-rose-600/80 hover:bg-rose-600 text-white backdrop-blur-md opacity-90 hover:opacity-100 transition-all flex items-center justify-center cursor-pointer shadow-md hover:scale-105"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
 
                   {/* Caption & Uploader on Card Bottom */}
                   <div className="absolute bottom-3 left-3 right-3 text-white space-y-1">

@@ -97,10 +97,14 @@ import {
   SiteNotice,
   FeaturedAlumnus,
   BatchMetadata,
+  getAutoVerificationRemainingTime,
+  pauseAutoVerification,
+  resetAutoVerification7Days,
 } from '../../services/siteConfigService';
 import { NDCLogo } from '../NDCLogo';
 import { compressImageFileToDataUrl } from '../../utils/mediaStorage';
 import { loadStoredAlumniProfiles } from '../../data/mockData';
+import { supabase } from '../../lib/supabase';
 import { AlumniProfile, isUserSuperAdmin, isUserGeneralAdmin, isUserSubAdmin } from '../../types';
 
 interface AdminHubViewProps {
@@ -228,6 +232,8 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
   const [auditCategoryFilter, setAuditCategoryFilter] = useState('all');
   const [selectedLogPayload, setSelectedLogPayload] = useState<SystemAuditLogItem | null>(null);
   const [contactInquiries, setContactInquiries] = useState<any[]>([]);
+
+  const [isBulkVerifying, setIsBulkVerifying] = useState(false);
 
   // 8. Customizer Active Subtab
   const [customizerSubtab, setCustomizerSubtab] = useState<
@@ -550,6 +556,8 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
     );
   }, [submissions, submissionSearch]);
 
+  const autoRemaining = getAutoVerificationRemainingTime();
+
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 p-3 sm:p-6 lg:p-8">
       {/* Toast Alert */}
@@ -674,6 +682,193 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
           </div>
         )}
       </div>
+
+      {/* =====================================================================
+          SUPER ADMIN 7-DAY INSTANT AUTO-VERIFICATION & GOVERNANCE COMMAND CONSOLE
+         ===================================================================== */}
+      {isSuperAdmin && (
+        <div className="max-w-7xl mx-auto mb-6">
+          <div className="bg-gradient-to-r from-emerald-950/40 via-slate-900 to-indigo-950/40 border border-emerald-500/30 rounded-3xl p-5 sm:p-6 shadow-xl relative overflow-hidden text-white">
+            <div className="absolute top-0 right-0 w-80 h-80 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none" />
+
+            <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-5 relative z-10">
+              <div className="space-y-1.5 max-w-2xl">
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <span className="px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 animate-pulse" />
+                    <span>7-Day Launch Window Engine</span>
+                  </span>
+
+                  <span
+                    className={`px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider border flex items-center gap-1.5 ${
+                      autoRemaining.isActive
+                        ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                        : autoRemaining.isPaused
+                        ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                        : 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                    }`}
+                  >
+                    <span
+                      className={`w-2 h-2 rounded-full ${
+                        autoRemaining.isActive ? 'bg-emerald-400 animate-ping' : 'bg-current'
+                      }`}
+                    />
+                    <span>
+                      {autoRemaining.isActive
+                        ? `ACTIVE: ${autoRemaining.days}d ${autoRemaining.hours}h ${autoRemaining.minutes}m Left`
+                        : autoRemaining.isPaused
+                        ? 'PAUSED BY SUPER ADMIN'
+                        : 'EXPIRED (7-Day Period Ended)'}
+                    </span>
+                  </span>
+                </div>
+
+                <h2 className="text-lg sm:text-xl font-black text-white tracking-tight flex items-center gap-2">
+                  <ShieldCheck className="w-6 h-6 text-emerald-400 shrink-0" />
+                  <span>Instant Automatic Profile Verification for All New Alumni</span>
+                </h2>
+
+                <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
+                  {autoRemaining.isActive
+                    ? 'Every new alumni registration is verified automatically upon creation. They do not need to request peer vouches or submit ID cards, gaining immediate access to the doctor directory, batch lounges, and blood network.'
+                    : autoRemaining.isPaused
+                    ? 'Instant auto-verification is currently paused. New alumni must follow standard verification (2 batchmate vouches or ID document upload).'
+                    : 'The initial 7-day launch window has ended. You can extend or reset it for another 7 days below at any time.'}
+                </p>
+              </div>
+
+              {/* Super Admin Control Actions */}
+              <div className="flex flex-wrap items-center gap-2.5 w-full lg:w-auto shrink-0">
+                {/* 1. Pause / Resume Toggle */}
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const nextPaused = !autoRemaining.isPaused;
+                    pauseAutoVerification(nextPaused);
+                    try {
+                      await fetch('/api/admin/auto-verify-toggle', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ paused: nextPaused }),
+                      });
+                    } catch {}
+                    showToast(
+                      nextPaused
+                        ? '⏸️ Instant Auto-Verification is now PAUSED. Registrations will require vouches or ID.'
+                        : '▶️ Instant Auto-Verification is now RESUMED and ACTIVE for 7 days!',
+                      nextPaused ? 'info' : 'success'
+                    );
+                  }}
+                  className={`px-4 py-2.5 rounded-2xl text-xs font-black transition-all cursor-pointer flex items-center gap-2 shadow-md ${
+                    autoRemaining.isPaused
+                      ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/30'
+                      : 'bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-amber-500/30'
+                  }`}
+                  title="Pause or Resume instant verification for new alumni"
+                >
+                  {autoRemaining.isPaused ? (
+                    <>
+                      <Sparkles className="w-4 h-4" />
+                      <span>Resume Auto-Verify (7 Days)</span>
+                    </>
+                  ) : (
+                    <>
+                      <Clock className="w-4 h-4" />
+                      <span>Pause Auto-Verification</span>
+                    </>
+                  )}
+                </button>
+
+                {/* 2. Reset / Extend for 7 Days */}
+                <button
+                  type="button"
+                  onClick={async () => {
+                    resetAutoVerification7Days();
+                    try {
+                      await fetch('/api/admin/auto-verify-toggle', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ reset7Days: true }),
+                      });
+                    } catch {}
+                    showToast('🔄 Timer reset to a full 7-day auto-verification period (168 hours)!', 'success');
+                  }}
+                  className="px-4 py-2.5 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-black transition-all cursor-pointer flex items-center gap-2 shadow-md shadow-indigo-600/30"
+                  title="Reset timer to 7 full days from now"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                  <span>Reset / Extend 7 Days</span>
+                </button>
+
+                {/* 3. Instant Bulk Verify All Unverified/Pending Alumni */}
+                <button
+                  type="button"
+                  disabled={isBulkVerifying}
+                  onClick={async () => {
+                    if (
+                      !confirm(
+                        '⚡ Super Admin Superpower:\n\nAre you sure you want to INSTANTLY VERIFY all currently unverified/pending alumni accounts across the database?'
+                      )
+                    ) {
+                      return;
+                    }
+                    setIsBulkVerifying(true);
+                    try {
+                      // Server API
+                      try {
+                        const r = await fetch('/api/admin/bulk-verify-all', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                        });
+                        if (r.ok) {
+                          const data = await r.json();
+                          showToast(data.message || 'All alumni verified!', 'success');
+                        }
+                      } catch {}
+
+                      // Direct Supabase update
+                      try {
+                        await supabase
+                          .from('alumni_profiles')
+                          .update({
+                            verification_status: 'verified',
+                            verification_method: 'admin_instant',
+                            vouches_count: 2,
+                            verified_at: new Date().toISOString(),
+                          })
+                          .neq('verification_status', 'verified');
+                      } catch {}
+
+                      // Update local state
+                      setAlumniList((prev) =>
+                        prev.map((a) => ({
+                          ...a,
+                          verificationStatus: 'verified',
+                          vouchesCount: 2,
+                          isVerified: true,
+                        }))
+                      );
+
+                      await loadStats();
+                      await loadAlumni();
+                      showToast('⚡ All unverified alumni profiles are now officially VERIFIED!', 'success');
+                    } catch (err: any) {
+                      showToast('Bulk verification finished with local updates.', 'info');
+                    } finally {
+                      setIsBulkVerifying(false);
+                    }
+                  }}
+                  className="px-4 py-2.5 rounded-2xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-black transition-all cursor-pointer flex items-center gap-2 shadow-md shadow-rose-600/30 disabled:opacity-50"
+                  title="Instantly verify all existing unverified alumni accounts with 1 click"
+                >
+                  <BadgeCheck className="w-4 h-4" />
+                  <span>{isBulkVerifying ? 'Verifying All...' : '⚡ Bulk Verify ALL Unverified Alumni'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Global Module Navigation Tabs - Filtered strictly by role */}
       <div className="max-w-7xl mx-auto mb-6">

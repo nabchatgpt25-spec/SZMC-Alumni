@@ -22,7 +22,8 @@ import {
   Heart,
   HelpCircle,
   KeyRound,
-  UserPlus
+  UserPlus,
+  CheckCircle2
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { BATCH_LIST } from '../data/mockData';
@@ -34,6 +35,7 @@ import { normalizeAcademicStreamAndGroup } from '../utils/academicGroupMapping';
 import { uploadVerificationDocumentToStorage, submitAdminDocSubmissionInDb } from '../services/supabaseService';
 import { supabase } from '../lib/supabase';
 import { OutstandingLoadingScreen } from './OutstandingLoadingScreen';
+import { isInstantAutoVerificationActive } from '../services/siteConfigService';
 
 interface AuthModalProps {
   initialMode: 'login' | 'register' | 'forgot';
@@ -455,6 +457,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
       const cleanWhatsapp = whatsapp.trim() ? formatToE164Phone(whatsapp) : '';
 
+      const autoVerify = isInstantAutoVerificationActive();
       await register({
         fullName: fullName.trim(),
         avatarUrl: selectedAvatar,
@@ -464,10 +467,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         group: 'MBBS',
         section: `SZMC-${parsedBatchNum < 10 ? '0' + parsedBatchNum : parsedBatchNum}`,
         collegeRoll: bmdcNumber.trim(),
-        verificationMethod,
-        verificationStatus: 'unverified',
-        vouchesCount: 0,
+        verificationMethod: autoVerify ? 'admin_instant' : verificationMethod,
+        verificationStatus: autoVerify ? 'verified' : 'unverified',
+        vouchesCount: autoVerify ? 2 : 0,
         vouchTargetCount: 2,
+        autoVerify,
         badges: ['SZMCian'],
         profession: position.trim() || 'Medical Doctor',
         position: position.trim(),
@@ -1102,85 +1106,103 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   </span>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                  <button
-                    type="button"
-                    onClick={() => setVerificationMethod('two_vouches')}
-                    className={`p-3 rounded-2xl border text-left transition-all cursor-pointer ${
-                      verificationMethod === 'two_vouches'
-                        ? 'bg-blue-600/15 dark:bg-blue-500/20 border-blue-500 ring-1 ring-blue-500/30'
-                        : 'bg-white/45 dark:bg-white/[0.06] border-white/60 dark:border-white/15 hover:border-blue-400'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-xs font-extrabold text-slate-900 dark:text-white">
-                        Method A: 2-Brother Vouch
+                {isInstantAutoVerificationActive() ? (
+                  <div className="p-4 rounded-2xl bg-gradient-to-r from-emerald-500/15 via-teal-500/15 to-blue-500/15 border border-emerald-500/35 flex items-start gap-3 shadow-xs">
+                    <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
+                      <Sparkles className="w-4 h-4 animate-pulse" />
+                    </div>
+                    <div className="text-xs space-y-1">
+                      <span className="font-black text-emerald-700 dark:text-emerald-300 block text-xs sm:text-sm">
+                        🎉 7-Day Launch Period: Instant Auto-Verification Active
                       </span>
-                      {verificationMethod === 'two_vouches' && (
-                        <Check className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400 stroke-[3]" />
-                      )}
+                      <p className="text-slate-600 dark:text-slate-300 leading-relaxed text-[11px] sm:text-xs">
+                        You are registering during the official launch window! Your alumni profile will be <strong>verified automatically upon sign up</strong>. No peer vouches or ID card uploads are required. You will receive immediate full access to doctor directory, batch lounges, and the blood network.
+                      </p>
                     </div>
-                    <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-snug">
-                      Request 2 verified batchmates to vouch for your roll in the Verification Center.
-                    </p>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setVerificationMethod('id_card_upload')}
-                    className={`p-3 rounded-2xl border text-left transition-all cursor-pointer ${
-                      verificationMethod === 'id_card_upload'
-                        ? 'bg-emerald-600/15 dark:bg-emerald-500/20 border-emerald-500 ring-1 ring-emerald-500/30'
-                        : 'bg-white/45 dark:bg-white/[0.06] border-white/60 dark:border-white/15 hover:border-emerald-400'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-xs font-extrabold text-slate-900 dark:text-white">
-                        Method B: SZMC ID / BMDC
-                      </span>
-                      {verificationMethod === 'id_card_upload' && (
-                        <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 stroke-[3]" />
-                      )}
-                    </div>
-                    <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-snug">
-                      Submit your SZMC student card, intern ID, BMDC certificate, or souvenir for verification by administrators.
-                    </p>
-                  </button>
-                </div>
-
-                {verificationMethod === 'id_card_upload' && (
-                  <div className="p-3 rounded-2xl bg-white/50 dark:bg-slate-900/50 border border-dashed border-emerald-500/50 flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      {idProofPreview ? (
-                        <img
-                          src={idProofPreview}
-                          alt="ID Proof"
-                          className="w-10 h-10 rounded-xl object-cover border border-emerald-500/40 shrink-0"
-                        />
-                      ) : (
-                        <div className="w-10 h-10 rounded-xl bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
-                          <Camera className="w-5 h-5" />
-                        </div>
-                      )}
-                      <div className="min-w-0">
-                        <div className="text-xs font-bold text-slate-900 dark:text-white truncate">
-                          {idProofPreview ? 'SZMC / BMDC Document Attached (Pending Review)' : 'Attach SZMC ID / BMDC Certificate / Intern Card'}
-                        </div>
-                        <div className="text-[10px] text-slate-500 dark:text-slate-400">
-                          {idProofPreview ? 'Will be submitted for administrator review on sign up' : 'Or upload later from the Verification Center'}
-                        </div>
-                      </div>
-                    </div>
-                    <label className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold cursor-pointer shrink-0 transition-colors">
-                      <span>{idProofPreview ? 'Change' : 'Upload Photo'}</span>
-                      <input
-                        type="file"
-                        accept="image/*"
-                        onChange={handleIdProofUpload}
-                        className="hidden"
-                      />
-                    </label>
                   </div>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      <button
+                        type="button"
+                        onClick={() => setVerificationMethod('two_vouches')}
+                        className={`p-3 rounded-2xl border text-left transition-all cursor-pointer ${
+                          verificationMethod === 'two_vouches'
+                            ? 'bg-blue-600/15 dark:bg-blue-500/20 border-blue-500 ring-1 ring-blue-500/30'
+                            : 'bg-white/45 dark:bg-white/[0.06] border-white/60 dark:border-white/15 hover:border-blue-400'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-xs font-extrabold text-slate-900 dark:text-white">
+                            Method A: 2-Brother Vouch
+                          </span>
+                          {verificationMethod === 'two_vouches' && (
+                            <Check className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400 stroke-[3]" />
+                          )}
+                        </div>
+                        <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-snug">
+                          Request 2 verified batchmates to vouch for your roll in the Verification Center.
+                        </p>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setVerificationMethod('id_card_upload')}
+                        className={`p-3 rounded-2xl border text-left transition-all cursor-pointer ${
+                          verificationMethod === 'id_card_upload'
+                            ? 'bg-emerald-600/15 dark:bg-emerald-500/20 border-emerald-500 ring-1 ring-emerald-500/30'
+                            : 'bg-white/45 dark:bg-white/[0.06] border-white/60 dark:border-white/15 hover:border-emerald-400'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-xs font-extrabold text-slate-900 dark:text-white">
+                            Method B: SZMC ID / BMDC
+                          </span>
+                          {verificationMethod === 'id_card_upload' && (
+                            <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 stroke-[3]" />
+                          )}
+                        </div>
+                        <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-snug">
+                          Submit your SZMC student card, intern ID, BMDC certificate, or souvenir for verification by administrators.
+                        </p>
+                      </button>
+                    </div>
+
+                    {verificationMethod === 'id_card_upload' && (
+                      <div className="p-3 rounded-2xl bg-white/50 dark:bg-slate-900/50 border border-dashed border-emerald-500/50 flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          {idProofPreview ? (
+                            <img
+                              src={idProofPreview}
+                              alt="ID Proof"
+                              className="w-10 h-10 rounded-xl object-cover border border-emerald-500/40 shrink-0"
+                            />
+                          ) : (
+                            <div className="w-10 h-10 rounded-xl bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
+                              <Camera className="w-5 h-5" />
+                            </div>
+                          )}
+                          <div className="min-w-0">
+                            <div className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                              {idProofPreview ? 'SZMC / BMDC Document Attached (Pending Review)' : 'Attach SZMC ID / BMDC Certificate / Intern Card'}
+                            </div>
+                            <div className="text-[10px] text-slate-500 dark:text-slate-400">
+                              {idProofPreview ? 'Will be submitted for administrator review on sign up' : 'Or upload later from the Verification Center'}
+                            </div>
+                          </div>
+                        </div>
+                        <label className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold cursor-pointer shrink-0 transition-colors">
+                          <span>{idProofPreview ? 'Change' : 'Upload Photo'}</span>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            onChange={handleIdProofUpload}
+                            className="hidden"
+                          />
+                        </label>
+                      </div>
+                    )}
+                  </>
                 )}
               </motion.div>
 

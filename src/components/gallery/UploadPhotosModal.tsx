@@ -148,8 +148,10 @@ export const UploadPhotosModal: React.FC<UploadPhotosModalProps> = ({
           setTimeout(() => {
             const formattedPhotos: GalleryPhoto[] = pendingPhotos.map((p) => ({
               id: p.id,
+              albumId: targetAlbumId,
               url: p.url,
               caption: p.caption.trim() || (p.isVideo ? 'SZMC Video Memory' : 'SZMC Alumni Memory'),
+              uploaderId: currentUser?.id,
               uploaderName: contributorName.trim() || currentUser?.fullName || 'SZMC Alumnus',
               uploaderAvatar:
                 currentUser?.avatarUrl ||
