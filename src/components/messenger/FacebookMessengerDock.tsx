@@ -19,6 +19,7 @@ import {
   ExternalLink,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
+import { useMessagingProfileId } from '../../hooks/useMessagingProfileId';
 import {
   findOrCreateDirectConversation,
   listMessages,
@@ -54,7 +55,9 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
   onOpenFullMessenger,
 }) => {
   const { currentUser } = useAuth();
-  const myId = currentUser.id;
+  // public.profiles.id is the FK target for messages.sender_id / participants.profile_id
+  const { effectiveProfileId } = useMessagingProfileId(currentUser.id);
+  const myId = effectiveProfileId ?? currentUser.id;
 
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -179,14 +182,11 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
         playSound('send');
       }
 
-      // If sending image, payload contains markdown image or direct data URL
-      const finalBody = imageToSend
-        ? text
-          ? `${text}\n\n[image]:${imageToSend}`
-          : `[image]:${imageToSend}`
-        : text;
-
-      const sent = await sendMessage(conversationId, myId, finalBody);
+      // Attachments go to public.messages.media_url with type='image' (no body hacks)
+      const sent = await sendMessage(conversationId, myId, text, {
+        type: imageToSend ? 'image' : text === '👍' ? 'like' : 'text',
+        mediaUrl: imageToSend,
+      });
       setMessages((prev) => {
         if (prev.some((m) => m.id === sent.id)) return prev;
         return [...prev, sent];
@@ -454,16 +454,17 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
 
             {messages.map((m) => {
               const fromMe = m.senderId === myId;
-              const isLike = m.body === '👍' || (m as any).type === 'like';
+              const isLike = m.body === '👍' || m.type === 'like';
 
-              // Parse optional image payload
+              // Image attachments live in public.messages.media_url
               let textContent = m.body;
-              let imagePayload: string | null = null;
-              if (m.body.includes('[image]:')) {
+              let imagePayload: string | null = m.mediaUrl ?? null;
+              if (!imagePayload && m.body.includes('[image]:')) {
+                // Legacy rows written before the media_url migration
                 const parts = m.body.split('[image]:');
-                textContent = parts[0]?.trim();
-                imagePayload = parts[1]?.trim();
-              } else if (m.body.startsWith('data:image/') || (m as any).type === 'image') {
+                textContent = parts[0]?.trim() || '';
+                imagePayload = parts[1]?.trim() || null;
+              } else if (!imagePayload && (m.body.startsWith('data:image/') || m.type === 'image')) {
                 imagePayload = m.body;
                 textContent = '';
               }

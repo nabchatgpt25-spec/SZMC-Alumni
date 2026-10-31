@@ -226,6 +226,25 @@ AS $$
   SELECT id FROM public.profiles WHERE user_id = auth.uid() LIMIT 1;
 $$;
 
+-- Fast helper: recursion-free conversation membership check (SECURITY DEFINER).
+-- A policy on conversation_participants must NOT query conversation_participants
+-- directly: PostgreSQL raises 42P17 "infinite recursion detected in policy".
+CREATE OR REPLACE FUNCTION public.is_conversation_participant(p_conversation_id TEXT)
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM public.conversation_participants cp
+    WHERE cp.conversation_id = p_conversation_id
+      AND cp.profile_id = public.get_current_profile_id()
+  );
+$$;
+
+GRANT EXECUTE ON FUNCTION public.is_conversation_participant(TEXT) TO authenticated, service_role;
+
 -- Fast helper: checks if caller is super_admin
 CREATE OR REPLACE FUNCTION public.is_current_user_super_admin()
 RETURNS BOOLEAN
@@ -414,11 +433,8 @@ DROP POLICY IF EXISTS "conversations_select_participant" ON public.conversations
 CREATE POLICY "conversations_select_participant" ON public.conversations
   FOR SELECT TO authenticated
   USING (
-    EXISTS (
-      SELECT 1 FROM public.conversation_participants cp
-      WHERE cp.conversation_id = conversations.id
-        AND cp.profile_id = public.get_current_profile_id()
-    )
+    public.is_conversation_participant(id)
+    OR created_by = public.get_current_profile_id()
     OR public.is_current_user_super_admin()
   );
 
@@ -435,11 +451,8 @@ DROP POLICY IF EXISTS "participants_select_in_conversation" ON public.conversati
 CREATE POLICY "participants_select_in_conversation" ON public.conversation_participants
   FOR SELECT TO authenticated
   USING (
-    EXISTS (
-      SELECT 1 FROM public.conversation_participants my_cp
-      WHERE my_cp.conversation_id = conversation_participants.conversation_id
-        AND my_cp.profile_id = public.get_current_profile_id()
-    )
+    profile_id = public.get_current_profile_id()
+    OR public.is_conversation_participant(conversation_id)
     OR public.is_current_user_super_admin()
   );
 
@@ -448,6 +461,7 @@ CREATE POLICY "participants_insert_participant" ON public.conversation_participa
   FOR INSERT TO authenticated
   WITH CHECK (
     profile_id = public.get_current_profile_id()
+    OR public.is_conversation_participant(conversation_id)
     OR EXISTS (
       SELECT 1 FROM public.conversations c
       WHERE c.id = conversation_participants.conversation_id
@@ -475,11 +489,7 @@ DROP POLICY IF EXISTS "messages_select_participant" ON public.messages;
 CREATE POLICY "messages_select_participant" ON public.messages
   FOR SELECT TO authenticated
   USING (
-    EXISTS (
-      SELECT 1 FROM public.conversation_participants cp
-      WHERE cp.conversation_id = messages.conversation_id
-        AND cp.profile_id = public.get_current_profile_id()
-    )
+    public.is_conversation_participant(conversation_id)
     OR public.is_current_user_super_admin()
   );
 
@@ -488,11 +498,7 @@ CREATE POLICY "messages_insert_sender" ON public.messages
   FOR INSERT TO authenticated
   WITH CHECK (
     sender_id = public.get_current_profile_id()
-    AND EXISTS (
-      SELECT 1 FROM public.conversation_participants cp
-      WHERE cp.conversation_id = messages.conversation_id
-        AND cp.profile_id = public.get_current_profile_id()
-    )
+    AND public.is_conversation_participant(conversation_id)
   );
 
 DROP POLICY IF EXISTS "messages_update_sender" ON public.messages;
