@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <script>
       (function() {
-        // 1. Intercept and suppress external browser extension / frame_ant injection errors
+        // Suppress non-actionable external browser extension errors in iframe preview
         function isExtensionError(msg, src, err) {
           var strMsg = typeof msg === 'string' ? msg : (msg && msg.message) || '';
           var strSrc = typeof src === 'string' ? src : '';
@@ -12,7 +12,6 @@
           return (
             strSrc.indexOf('chrome-extension://') !== -1 ||
             strStack.indexOf('chrome-extension://') !== -1 ||
-            strMsg.indexOf('Cannot set property fetch') !== -1 ||
             strMsg.indexOf('frame_ant') !== -1 ||
             strStack.indexOf('frame_ant') !== -1
           );
@@ -20,9 +19,7 @@
 
         window.addEventListener('error', function(event) {
           if (isExtensionError(event.message, event.filename, event.error)) {
-            if (event.stopImmediatePropagation) event.stopImmediatePropagation();
-            if (event.stopPropagation) event.stopPropagation();
-            if (event.preventDefault) event.preventDefault();
+            event.preventDefault();
             return true;
           }
         }, true);
@@ -30,45 +27,9 @@
         window.addEventListener('unhandledrejection', function(event) {
           var reason = event.reason;
           if (isExtensionError(reason, '', reason)) {
-            if (event.stopImmediatePropagation) event.stopImmediatePropagation();
-            if (event.preventDefault) event.preventDefault();
+            event.preventDefault();
           }
         }, true);
-
-        var prevOnError = window.onerror;
-        window.onerror = function(msg, url, line, col, err) {
-          if (isExtensionError(msg, url, err)) {
-            return true;
-          }
-          if (typeof prevOnError === 'function') {
-            return prevOnError.apply(this, arguments);
-          }
-        };
-
-        // 2. Define writable fetch getter/setter on window and Window.prototype
-        try {
-          var _f = window.fetch;
-          Object.defineProperty(window, 'fetch', {
-            configurable: true,
-            enumerable: true,
-            get: function() { return _f; },
-            set: function(fn) { _f = fn; }
-          });
-        } catch (_) {}
-
-        try {
-          if (typeof Window !== 'undefined' && Window.prototype) {
-            var d = Object.getOwnPropertyDescriptor(Window.prototype, 'fetch');
-            if (!d || !d.set) {
-              Object.defineProperty(Window.prototype, 'fetch', {
-                configurable: true,
-                enumerable: true,
-                get: (d && d.get) || function() { return _f; },
-                set: function(fn) { _f = fn; }
-              });
-            }
-          }
-        } catch (_) {}
       })();
     </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -92,13 +53,6 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Hind+Siliguri:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <script type="module">
-      import RefreshRuntime from '/@react-refresh';
-      RefreshRuntime.injectIntoGlobalHook(window);
-      window.$RefreshReg$ = () => {};
-      window.$RefreshSig$ = () => (type) => type;
-      window.__vite_plugin_react_preamble_installed__ = true;
-    </script>
   </head>
   <body>
     <div id="root"></div>

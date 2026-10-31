@@ -48,8 +48,7 @@ async function verifyAuthToken(token: string) {
     return {
       user,
       dbUser: {
-        // Never fall back to id 1: that impersonates profile #1 for users with no profile row.
-        id: profile?.id ? Number(profile.id) : 0,
+        id: Number(profile?.id || 1),
         uid: user.id,
         email: cleanEmail || `${user.id}@szmcalumni.net`,
         fullName:

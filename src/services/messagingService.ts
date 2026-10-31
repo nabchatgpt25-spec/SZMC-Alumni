@@ -40,7 +40,7 @@ const CONVERSATION_COLUMNS = 'id, type, title, last_message, last_message_at, cr
 const PARTICIPANT_COLUMNS = 'conversation_id, profile_id, joined_at, last_read_at, is_muted';
 const PROFILE_COLUMNS = 'id, user_id, full_name, avatar_url, batch, is_verified, last_seen_at';
 const PREVIEW_LENGTH = 120;
-const FALLBACK_AVATAR = '/ndc-logo.png';
+const FALLBACK_AVATAR = '/szmc-logo.png';
 
 // ---------------------------------------------------------------------------
 // ERROR HANDLING
