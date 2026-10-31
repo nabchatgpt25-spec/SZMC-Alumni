@@ -147,15 +147,20 @@ function resolveActor(req: AuthRequest) {
     return {
       uid: req.dbUser.uid,
       email: req.dbUser.email,
-      role: req.dbUser.role || 'admin',
+      // Never default to admin: a missing role is least-privilege 'member'.
+      role: req.dbUser.role || 'member',
     };
   }
   if (req.user) {
     const user = req.user as any;
+    const role =
+      (user.app_metadata?.role as string) ||
+      ((user.user_metadata as any)?.role as string) ||
+      'member';
     return {
-      uid: user.uid || user.id || 'admin-user',
-      email: user.email || 'admin@szmcalumni.net',
-      role: 'admin',
+      uid: user.uid || user.id || user.sub || 'unknown',
+      email: user.email || 'unknown',
+      role,
     };
   }
   throw new Error('Unauthorized: Valid admin credentials required on backend');
@@ -238,11 +243,12 @@ function hashPasswordServer(raw: string): string {
 }
 
 function verifyPasswordServer(storedHash: string | null | undefined, inputPass: string): boolean {
-  if (!storedHash) return true;
+  // No stored hash means no valid account: reject. Previously returned true,
+  // letting any password log into password-less accounts.
+  if (!storedHash) return false;
   const hashedInput = hashPasswordServer(inputPass);
-  if (storedHash === hashedInput) return true;
-  if (storedHash === inputPass) return true;
-  return false;
+  // Compare only against the salted hash; never accept a plaintext match.
+  return storedHash === hashedInput;
 }
 
 // Global Cross-Device Registration Endpoint (stores directly in Cloud SQL)
