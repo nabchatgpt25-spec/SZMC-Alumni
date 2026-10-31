@@ -64,11 +64,13 @@ export const MessageSettingsModal: React.FC<MessageSettingsModalProps> = ({
     supabaseUrl: string;
     tablesOnline: boolean;
     storageFallbackActive: boolean;
+    realtimeEnabled: boolean;
   }>({
     connected: true,
     supabaseUrl: 'https://hjuyiqyviohinbhzaipl.supabase.co',
     tablesOnline: false,
     storageFallbackActive: true,
+    realtimeEnabled: false,
   });
 
   const [checkingDb, setCheckingDb] = useState(false);
@@ -172,6 +174,46 @@ export const MessageSettingsModal: React.FC<MessageSettingsModalProps> = ({
 
         {/* Content Body */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
+          {/* Supabase connection status (probed directly against the database) */}
+          <div className="p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/60 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] font-black uppercase tracking-wider text-slate-600 dark:text-slate-300 flex items-center gap-1.5">
+                <Database className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+                Supabase Direct Connection
+              </span>
+              <button
+                type="button"
+                onClick={() => void handleRefreshStatus()}
+                disabled={checkingDb}
+                className="inline-flex items-center gap-1 text-[11px] font-bold text-blue-600 dark:text-blue-400 hover:underline disabled:opacity-50 cursor-pointer"
+              >
+                <RefreshCw className={`w-3 h-3 ${checkingDb ? 'animate-spin' : ''}`} />
+                Recheck
+              </button>
+            </div>
+            <div className="flex items-center justify-between text-[11px] text-slate-600 dark:text-slate-400">
+              <span>Messaging tables</span>
+              <span
+                className={`font-bold ${
+                  dbStatus.tablesOnline
+                    ? 'text-emerald-600 dark:text-emerald-400'
+                    : 'text-rose-600 dark:text-rose-400'
+                }`}
+              >
+                {dbStatus.tablesOnline ? 'Online' : 'Unavailable'}
+              </span>
+            </div>
+            <div className="flex items-center justify-between text-[11px] text-slate-600 dark:text-slate-400">
+              <span>Realtime channel</span>
+              <span className="font-mono text-[10px] text-slate-700 dark:text-slate-300">
+                messages-realtime-feed
+              </span>
+            </div>
+            <p className="text-[10px] font-mono text-slate-500 dark:text-slate-500 truncate">
+              {dbStatus.supabaseUrl}
+            </p>
+          </div>
+
           {/* Institutional Status Banner */}
           {isSuperAdmin && (
             <div className="p-3 rounded-2xl bg-purple-50/50 dark:bg-purple-950/20 border border-purple-200 dark:border-purple-900/50 flex items-center justify-between">

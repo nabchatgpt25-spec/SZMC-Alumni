@@ -315,18 +315,38 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
                   ) : (
                     <div className="relative group/msg">
                       {/* Meta Messenger Chat Bubble */}
+                      {!deleted && (message.mediaUrl || message.type === 'image') && (
+                        <div className="rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 shadow-sm mb-1">
+                          <img
+                            src={message.mediaUrl || message.body}
+                            alt="Attachment"
+                            loading="lazy"
+                            className="w-full max-h-64 object-cover cursor-pointer hover:opacity-95"
+                            onClick={() => window.open(message.mediaUrl || message.body, '_blank')}
+                          />
+                        </div>
+                      )}
+
                       <div
                         className={`text-[14px] leading-relaxed whitespace-pre-wrap break-words transition-all ${
                           deleted
                             ? 'italic text-slate-500 dark:text-slate-400 bg-slate-200/60 dark:bg-slate-800 px-4 py-2.5 rounded-2xl'
-                            : message.body === '👍'
+                            : message.type === 'like' || message.body === '👍'
                             ? 'text-4xl py-1'
                             : mine
                             ? 'bg-gradient-to-r from-[#0084FF] to-[#0099FF] text-white rounded-[20px] rounded-br-[4px] px-4 py-2.5 shadow-sm shadow-[#0084FF]/25'
                             : 'bg-[#F0F2F5] dark:bg-slate-800 text-slate-900 dark:text-slate-100 rounded-[20px] rounded-bl-[4px] px-4 py-2.5'
                         }`}
                       >
-                        {deleted ? 'This message was deleted' : message.body}
+                        {deleted
+                          ? 'This message was deleted'
+                          : message.type === 'image' && message.mediaUrl
+                          ? message.body && message.body !== 'Photo'
+                            ? message.body
+                            : null
+                          : message.type === 'like'
+                          ? '👍'
+                          : message.body}
                       </div>
 
                       {/* Message Actions (Edit / Delete) */}

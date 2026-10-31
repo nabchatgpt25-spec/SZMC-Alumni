@@ -4,6 +4,7 @@ export interface ChatPerson {
   avatarUrl: string;
   batchYear: number;
   profession: string;
+  verificationStatus?: string;
 }
 
 export interface ChatConversation {
@@ -14,6 +15,8 @@ export interface ChatConversation {
   lastMessageFromMe: boolean;
   unreadCount: number;
   isMuted: boolean;
+  type?: 'direct' | 'group' | 'announcement';
+  title?: string | null;
 }
 
 export interface ChatMessage {
@@ -24,6 +27,10 @@ export interface ChatMessage {
   createdAt: string;
   editedAt: string | null;
   deletedAt: string | null;
+  /** public.messages.type: 'text' | 'like' | 'system' | 'image' */
+  type?: string;
+  /** public.messages.media_url (image attachments stored as public URLs) */
+  mediaUrl?: string | null;
 }
 
 export interface UserMessageSettings {
@@ -35,4 +42,3 @@ export interface UserMessageSettings {
   emailNotificationDigest: boolean;
   updatedAt?: string;
 }
-

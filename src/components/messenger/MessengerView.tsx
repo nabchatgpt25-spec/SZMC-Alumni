@@ -1,7 +1,23 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { MessageCircle, Sliders, X, ArrowRight, Shield, RefreshCw, Send, CheckCircle2 } from 'lucide-react';
+import {
+  MessageCircle,
+  Sliders,
+  X,
+  ArrowRight,
+  Shield,
+  RefreshCw,
+  Send,
+  CheckCircle2,
+  AlertTriangle,
+  Database,
+} from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
+import { useMessagingProfileId } from '../../hooks/useMessagingProfileId';
 import { isUserSuperAdmin } from '../../types';
+import {
+  checkMessagingHealth,
+  type MessagingHealth,
+} from '../../services/messagingService';
 import {
   deleteMessage,
   editMessage,
@@ -14,6 +30,7 @@ import {
   subscribeToTypingStatus,
   sendTypingIndicator,
   subscribeToRealtimeConnectionStatus,
+  subscribeToConversationChanges,
   getRealtimeChannelStatus,
   getUserMessageSettings,
   broadcastMessageEvent,
@@ -36,12 +53,16 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
   onClearInitialTarget,
 }) => {
   const { currentUser, isAdminUser } = useAuth();
-  const myId = currentUser.id;
+  // public.messages.sender_id → public.profiles(id); resolve it from Supabase.
+  const { effectiveProfileId } = useMessagingProfileId(currentUser.id);
+  const myId = effectiveProfileId ?? currentUser.id;
   const isSuperAdmin = currentUser.role === 'admin' || isAdminUser;
 
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
   const [listLoading, setListLoading] = useState(true);
   const [listError, setListError] = useState<string | null>(null);
+  const [health, setHealth] = useState<MessagingHealth | null>(null);
+  const [healthChecking, setHealthChecking] = useState(false);
 
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -76,12 +97,33 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
       setListError(null);
       const data = await listConversations(myId);
       setConversations(data);
+      setHealth(null);
     } catch (err) {
       setListError(err instanceof Error ? err.message : 'Could not load your conversations.');
+      // Diagnose the real cause (missing tables, recursive RLS, unlinked profile…)
+      // so the user is told exactly what to fix instead of a generic failure.
+      try {
+        setHealth(await checkMessagingHealth());
+      } catch {
+        /* diagnostics are best-effort */
+      }
     } finally {
       setListLoading(false);
     }
   }, [myId]);
+
+  const runHealthCheck = useCallback(async () => {
+    setHealthChecking(true);
+    try {
+      const result = await checkMessagingHealth();
+      setHealth(result);
+      if (result.healthy) {
+        await refreshConversations();
+      }
+    } finally {
+      setHealthChecking(false);
+    }
+  }, [refreshConversations]);
 
   // Load conversations on mount
   useEffect(() => {
@@ -116,6 +158,14 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
       setRealtimeStatus(status);
     });
   }, []);
+
+  // 1b. Refresh the inbox whenever the user's chat memberships change in Postgres
+  //     (e.g. a peer starts a new conversation with them).
+  useEffect(() => {
+    return subscribeToConversationChanges(() => {
+      void refreshConversations();
+    });
+  }, [refreshConversations]);
 
   // 2. Subscribe to Supabase Realtime typing events
   useEffect(() => {
@@ -374,6 +424,52 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
           )}
         </div>
       </div>
+
+      {/* Supabase diagnostics — shown when Messenger cannot reach the database */}
+      {health && !health.healthy && (
+        <div className="rounded-2xl border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 p-3.5 space-y-2.5">
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <Database className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+              <p className="text-xs font-bold text-amber-900 dark:text-amber-200">
+                Messenger cannot reach Supabase
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => void runHealthCheck()}
+              disabled={healthChecking}
+              className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-800 dark:text-amber-300 hover:underline disabled:opacity-50 shrink-0 cursor-pointer"
+            >
+              <RefreshCw className={`w-3 h-3 ${healthChecking ? 'animate-spin' : ''}`} />
+              Recheck
+            </button>
+          </div>
+
+          <ul className="space-y-2">
+            {health.issues.map((issue, index) => (
+              <li key={`${issue.code}-${index}`} className="flex items-start gap-2">
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                <div className="min-w-0">
+                  <p className="text-[11px] font-bold text-amber-900 dark:text-amber-200">{issue.title}</p>
+                  <p className="text-[11px] text-amber-800/90 dark:text-amber-300/80 break-words">
+                    {issue.detail}
+                  </p>
+                  {issue.fix && (
+                    <p className="text-[10px] font-mono mt-0.5 text-amber-700 dark:text-amber-400/80 break-all">
+                      Apply: {issue.fix}
+                    </p>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+
+          <p className="text-[10px] font-mono text-amber-700/80 dark:text-amber-400/70 truncate">
+            {health.supabaseUrl}
+          </p>
+        </div>
+      )}
 
       {/* Main Two-Column Meta Messenger Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-4 h-[calc(100vh-210px)] min-h-[540px]">
