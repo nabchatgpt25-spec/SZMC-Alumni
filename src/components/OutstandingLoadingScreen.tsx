@@ -23,11 +23,24 @@ export const OutstandingLoadingScreen: React.FC<OutstandingLoadingScreenProps> =
   const { config } = useSiteConfig();
   const [progress, setProgress] = useState(0);
   const [isFadingOut, setIsFadingOut] = useState(false);
+  const onCompleteRef = React.useRef(onComplete);
+  onCompleteRef.current = onComplete;
 
   // Smooth progress animation from 0% to 100%
   useEffect(() => {
     const startTime = performance.now();
     let animationFrameId: number;
+    let fallbackTimeoutId: any;
+    let fadeTimeoutId: any;
+    let completeTimeoutId: any;
+
+    const finish = () => {
+      setProgress(100);
+      setIsFadingOut(true);
+      completeTimeoutId = setTimeout(() => {
+        onCompleteRef.current?.();
+      }, 300);
+    };
 
     const update = (now: number) => {
       const elapsed = now - startTime;
@@ -38,25 +51,27 @@ export const OutstandingLoadingScreen: React.FC<OutstandingLoadingScreenProps> =
         animationFrameId = requestAnimationFrame(update);
       } else {
         setProgress(100);
-        // Brief pause at 100% before smooth fade out
-        setTimeout(() => {
-          setIsFadingOut(true);
-          setTimeout(() => {
-            onComplete?.();
-          }, 400);
-        }, 200);
+        fadeTimeoutId = setTimeout(finish, 150);
       }
     };
 
     animationFrameId = requestAnimationFrame(update);
-    return () => cancelAnimationFrame(animationFrameId);
-  }, [minDuration, onComplete]);
+    // Hard fallback timeout ensures loading screen ALWAYS finishes even if tab/iframe throttles rAF
+    fallbackTimeoutId = setTimeout(finish, minDuration + 400);
+
+    return () => {
+      cancelAnimationFrame(animationFrameId);
+      clearTimeout(fallbackTimeoutId);
+      clearTimeout(fadeTimeoutId);
+      clearTimeout(completeTimeoutId);
+    };
+  }, [minDuration]);
 
   const handleSkip = () => {
     setIsFadingOut(true);
     setTimeout(() => {
-      onComplete?.();
-    }, 200);
+      onCompleteRef.current?.();
+    }, 150);
   };
 
   const motto = config.collegeMotto || 'Once a SZMCian, Always a SZMCian';

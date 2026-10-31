@@ -3309,6 +3309,9 @@ async function startServer() {
     app.use(vite.middlewares);
 
     app.use('*', async (req: Request, res: Response, next: NextFunction) => {
+      if (req.originalUrl.startsWith('/api/')) {
+        return res.status(404).json({ error: 'Endpoint not found' });
+      }
       const url = req.originalUrl;
       try {
         let template = await readFile(path.resolve(__dirname, 'index.html'), 'utf-8');

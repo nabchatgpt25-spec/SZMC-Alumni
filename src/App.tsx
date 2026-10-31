@@ -42,13 +42,13 @@ function AlumniAppContent() {
   const { isLoggedIn, currentUser, isAuthInitializing, authInitializationError } = useAuth();
   const prefersReducedMotion = useReducedMotion();
 
-  // Outstanding Institutional Splash / Loading Screen state
+  // Outstanding Institutional Splash / Loading Screen state (default off for instant preview; enabled with ?splash=1)
   const [showSplash, setShowSplash] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
-      if (params.get('splash') === '0') return false;
+      if (params.get('splash') === '1') return true;
     }
-    return true;
+    return false;
   });
 
   useEffect(() => {
