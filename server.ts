@@ -9,6 +9,7 @@ if (typeof (globalThis as any).__filename !== 'undefined') {
 
 import 'dotenv/config';
 import express, { type Request, type Response, type NextFunction } from 'express';
+import compression from 'compression';
 import { createServer as createHttpServer } from 'http';
 import { existsSync } from 'fs';
 import { readFile } from 'fs/promises';
@@ -96,6 +97,15 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   }
   next();
 });
+
+// Enable high-performance HTTP compression (gzip/deflate)
+app.use(compression({
+  threshold: 1024,
+  filter: (req, res) => {
+    if (req.headers['x-no-compression']) return false;
+    return compression.filter(req, res);
+  }
+}));
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
@@ -3293,9 +3303,12 @@ app.get(['/szmc_full_schema.sql', '/download/szmc_full_schema.sql'], (_req: Requ
 async function startServer() {
   const httpServer = createHttpServer(app);
 
-  // Serve static assets from public directory (images, fonts, favicons, logos)
+  // Serve static assets from public directory (images, fonts, favicons, logos) with browser caching
   const publicPath = path.resolve(__dirname, 'public');
-  app.use(express.static(publicPath));
+  app.use(express.static(publicPath, {
+    maxAge: '7d',
+    etag: true,
+  }));
 
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
@@ -3316,7 +3329,10 @@ async function startServer() {
       try {
         let template = await readFile(path.resolve(__dirname, 'index.html'), 'utf-8');
         template = await vite.transformIndexHtml(url, template);
-        res.status(200).set({ 'Content-Type': 'text/html' }).end(template);
+        res.status(200).set({ 
+          'Content-Type': 'text/html',
+          'Cache-Control': 'no-cache, no-store, must-revalidate'
+        }).end(template);
       } catch (e) {
         vite.ssrFixStacktrace(e as Error);
         next(e);
@@ -3324,8 +3340,18 @@ async function startServer() {
     });
   } else {
     const distPath = path.resolve(__dirname, 'dist');
-    app.use(express.static(distPath));
+    app.use(express.static(distPath, {
+      maxAge: '1y',
+      etag: true,
+      immutable: true,
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith('.html')) {
+          res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        }
+      }
+    }));
     app.get('*', (_req: Request, res: Response) => {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }

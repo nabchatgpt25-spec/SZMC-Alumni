@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { Home, Users, BookOpen, HeartHandshake, User as UserIcon, MessageCircle } from 'lucide-react';
 import { ThemeProvider } from './context/ThemeContext';
@@ -11,32 +11,43 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
 import { FeedView } from './components/FeedView';
-import { DirectoryView } from './components/DirectoryView';
-import { AlumniDirectoryView } from './components/AlumniDirectoryView';
-import { BatchesView } from './components/BatchesView';
-import { MapView } from './components/MapView';
-import { ProfileView } from './components/ProfileView';
-import { GalleryView } from './components/GalleryView';
-import { MessengerView } from './components/messenger/MessengerView';
-import { FacebookMessengerDock } from './components/messenger/FacebookMessengerDock';
 import type { AlumniProfile } from './types';
 import { LandingPage } from './components/LandingPage';
-import { AuthModal } from './components/AuthModal';
-import { UpcomingFeatureView } from './components/UpcomingFeatureView';
-import { EventsView } from './components/EventsView';
-import { CareerView } from './components/CareerView';
-import { MentorshipView } from './components/MentorshipView';
-import { ContactUsView } from './components/ContactUsView';
-import { SavedPostsView } from './components/SavedPostsView';
 import { OfflineIndicator } from './components/OfflineIndicator';
-import { VerificationCenterModal } from './components/verification/VerificationCenterModal';
-import { BloodNetworkView } from './components/BloodNetworkView';
 import { ensureVouchRequestFromUrlParams } from './utils/verificationService';
 import { CursorSpotlight } from './components/motion/CinematicMotion';
 import { NDCLogo } from './components/NDCLogo';
-import { AdminPage } from './components/admin/AdminPage';
-import { SettingsView } from './components/SettingsView';
 import { OutstandingLoadingScreen } from './components/OutstandingLoadingScreen';
+
+// Code-split dynamic views for instant snappy initial page load
+const DirectoryView = lazy(() => import('./components/DirectoryView').then(m => ({ default: m.DirectoryView })));
+const AlumniDirectoryView = lazy(() => import('./components/AlumniDirectoryView').then(m => ({ default: m.AlumniDirectoryView })));
+const BatchesView = lazy(() => import('./components/BatchesView').then(m => ({ default: m.BatchesView })));
+const MapView = lazy(() => import('./components/MapView').then(m => ({ default: m.MapView })));
+const ProfileView = lazy(() => import('./components/ProfileView').then(m => ({ default: m.ProfileView })));
+const GalleryView = lazy(() => import('./components/GalleryView').then(m => ({ default: m.GalleryView })));
+const MessengerView = lazy(() => import('./components/messenger/MessengerView').then(m => ({ default: m.MessengerView })));
+const FacebookMessengerDock = lazy(() => import('./components/messenger/FacebookMessengerDock').then(m => ({ default: m.FacebookMessengerDock })));
+const AuthModal = lazy(() => import('./components/AuthModal').then(m => ({ default: m.AuthModal })));
+const UpcomingFeatureView = lazy(() => import('./components/UpcomingFeatureView').then(m => ({ default: m.UpcomingFeatureView })));
+const EventsView = lazy(() => import('./components/EventsView').then(m => ({ default: m.EventsView })));
+const CareerView = lazy(() => import('./components/CareerView').then(m => ({ default: m.CareerView })));
+const MentorshipView = lazy(() => import('./components/MentorshipView').then(m => ({ default: m.MentorshipView })));
+const ContactUsView = lazy(() => import('./components/ContactUsView').then(m => ({ default: m.ContactUsView })));
+const SavedPostsView = lazy(() => import('./components/SavedPostsView').then(m => ({ default: m.SavedPostsView })));
+const VerificationCenterModal = lazy(() => import('./components/verification/VerificationCenterModal').then(m => ({ default: m.VerificationCenterModal })));
+const BloodNetworkView = lazy(() => import('./components/BloodNetworkView').then(m => ({ default: m.BloodNetworkView })));
+const AdminPage = lazy(() => import('./components/admin/AdminPage').then(m => ({ default: m.AdminPage })));
+const SettingsView = lazy(() => import('./components/SettingsView').then(m => ({ default: m.SettingsView })));
+
+const ViewSkeletonFallback: React.FC = () => (
+  <div className="w-full min-h-[380px] flex items-center justify-center p-8">
+    <div className="flex flex-col items-center gap-3">
+      <div className="w-8 h-8 rounded-full border-2 border-blue-500/20 border-t-blue-600 animate-spin" />
+      <span className="text-xs font-medium text-slate-400">Loading module...</span>
+    </div>
+  </div>
+);
 
 function AlumniAppContent() {
   const { isLoggedIn, currentUser, isAuthInitializing, authInitializationError } = useAuth();
@@ -266,15 +277,17 @@ function AlumniAppContent() {
         />
 
         {authModalMode && (
-          <AuthModal
-            initialMode={authModalMode}
-            onClose={() => setAuthModalMode(null)}
-            onSuccess={() => {
-              setAuthModalMode(null);
-              setShowSplash(true);
-              navigateTo('feed');
-            }}
-          />
+          <Suspense fallback={null}>
+            <AuthModal
+              initialMode={authModalMode}
+              onClose={() => setAuthModalMode(null)}
+              onSuccess={() => {
+                setAuthModalMode(null);
+                setShowSplash(true);
+                navigateTo('feed');
+              }}
+            />
+          </Suspense>
         )}
       </>
     );
@@ -338,133 +351,135 @@ function AlumniAppContent() {
               exit={prefersReducedMotion ? { opacity: 0 } : { opacity: 0, y: -8 }}
               transition={{ duration: 0.26, ease: [0.16, 1, 0.3, 1] }}
             >
-              {(route === 'feed' || route === 'dashboard') && (
-                <FeedView
-                  onViewProfile={handleViewProfile}
-                  onOpenVerificationCenter={openVerificationCenter}
-                  onNavigate={navigateTo}
-                />
-              )}
+              <Suspense fallback={<ViewSkeletonFallback />}>
+                {(route === 'feed' || route === 'dashboard') && (
+                  <FeedView
+                    onViewProfile={handleViewProfile}
+                    onOpenVerificationCenter={openVerificationCenter}
+                    onNavigate={navigateTo}
+                  />
+                )}
 
-              {(route === 'alumni' || (route === 'directory' && !globalSearch)) && (
-                <AlumniDirectoryView
-                  onViewProfile={handleViewProfile}
-                  onNavigateToFind={() => navigateTo('find')}
-                  onOpenVerificationCenter={openVerificationCenter}
-                />
-              )}
+                {(route === 'alumni' || (route === 'directory' && !globalSearch)) && (
+                  <AlumniDirectoryView
+                    onViewProfile={handleViewProfile}
+                    onNavigateToFind={() => navigateTo('find')}
+                    onOpenVerificationCenter={openVerificationCenter}
+                  />
+                )}
 
-              {(route === 'find' || (route === 'directory' && !!globalSearch)) && (
-                <DirectoryView
-                  onViewProfile={handleViewProfile}
-                  initialSearch={globalSearch}
-                  initialBatch={selectedBatchFilter}
-                  onOpenVerificationCenter={openVerificationCenter}
-                />
-              )}
+                {(route === 'find' || (route === 'directory' && !!globalSearch)) && (
+                  <DirectoryView
+                    onViewProfile={handleViewProfile}
+                    initialSearch={globalSearch}
+                    initialBatch={selectedBatchFilter}
+                    onOpenVerificationCenter={openVerificationCenter}
+                  />
+                )}
 
-              {route === 'batches' && (
-                <BatchesView
-                  onSelectBatch={(batchYear) => {
-                    setSelectedBatchFilter(batchYear);
-                    setGlobalSearch('');
-                    navigateTo('find');
-                  }}
-                  onViewProfile={handleViewProfile}
-                />
-              )}
+                {route === 'batches' && (
+                  <BatchesView
+                    onSelectBatch={(batchYear) => {
+                      setSelectedBatchFilter(batchYear);
+                      setGlobalSearch('');
+                      navigateTo('find');
+                    }}
+                    onViewProfile={handleViewProfile}
+                  />
+                )}
 
-              {(route === 'map' || route === 'map-directory') && (
-                <MapView onViewProfile={handleViewProfile} />
-              )}
+                {(route === 'map' || route === 'map-directory') && (
+                  <MapView onViewProfile={handleViewProfile} />
+                )}
 
-              {route === 'institutions' && (
-                <UpcomingFeatureView type="institutions" onNavigate={navigateTo} />
-              )}
+                {route === 'institutions' && (
+                  <UpcomingFeatureView type="institutions" onNavigate={navigateTo} />
+                )}
 
-              {route === 'mentorship' && (
-                <MentorshipView
-                  currentUser={currentUser}
-                  isLoggedIn={isLoggedIn}
-                  onViewProfile={handleViewProfile}
-                  onNavigate={navigateTo}
-                />
-              )}
+                {route === 'mentorship' && (
+                  <MentorshipView
+                    currentUser={currentUser}
+                    isLoggedIn={isLoggedIn}
+                    onViewProfile={handleViewProfile}
+                    onNavigate={navigateTo}
+                  />
+                )}
 
-              {route === 'news' && (
-                <UpcomingFeatureView type="news" onNavigate={navigateTo} />
-              )}
+                {route === 'news' && (
+                  <UpcomingFeatureView type="news" onNavigate={navigateTo} />
+                )}
 
-              {route === 'events' && (
-                <EventsView onNavigate={navigateTo} />
-              )}
+                {route === 'events' && (
+                  <EventsView onNavigate={navigateTo} />
+                )}
 
-              {route === 'gallery' && (
-                <GalleryView
-                  initialAlbumId={targetAlbumIdForGallery}
-                  onBackToFeed={() => {
-                    setTargetAlbumIdForGallery(null);
-                    navigateTo('feed');
-                  }}
-                />
-              )}
+                {route === 'gallery' && (
+                  <GalleryView
+                    initialAlbumId={targetAlbumIdForGallery}
+                    onBackToFeed={() => {
+                      setTargetAlbumIdForGallery(null);
+                      navigateTo('feed');
+                    }}
+                  />
+                )}
 
-              {route === 'messages' && (
-                <MessengerView
-                  initialTargetProfileId={messengerInitialProfileId}
-                  onClearInitialTarget={() => setMessengerInitialProfileId(null)}
-                />
-              )}
+                {route === 'messages' && (
+                  <MessengerView
+                    initialTargetProfileId={messengerInitialProfileId}
+                    onClearInitialTarget={() => setMessengerInitialProfileId(null)}
+                  />
+                )}
 
-              {route === 'careers' && (
-                <CareerView
-                  currentUser={currentUser}
-                  isLoggedIn={isLoggedIn}
-                  onViewProfile={handleViewProfile}
-                  onNavigate={navigateTo}
-                />
-              )}
+                {route === 'careers' && (
+                  <CareerView
+                    currentUser={currentUser}
+                    isLoggedIn={isLoggedIn}
+                    onViewProfile={handleViewProfile}
+                    onNavigate={navigateTo}
+                  />
+                )}
 
-              {(route === 'emergency' || route === 'blood' || route === 'blood-network') && (
-                <BloodNetworkView
-                  onViewProfile={handleViewProfile}
-                  onNavigate={navigateTo}
-                />
-              )}
+                {(route === 'emergency' || route === 'blood' || route === 'blood-network') && (
+                  <BloodNetworkView
+                    onViewProfile={handleViewProfile}
+                    onNavigate={navigateTo}
+                  />
+                )}
 
-              {route === 'contact' && (
-                <ContactUsView />
-              )}
+                {route === 'contact' && (
+                  <ContactUsView />
+                )}
 
-              {(route === 'saved' || route === 'saved-posts') && (
-                <SavedPostsView onNavigate={navigateTo} />
-              )}
+                {(route === 'saved' || route === 'saved-posts') && (
+                  <SavedPostsView onNavigate={navigateTo} />
+                )}
 
-              {(route === 'settings' || route === 'profile-settings') && (
-                <SettingsView
-                  onNavigate={navigateTo}
-                  onOpenVerificationCenter={openVerificationCenter}
-                  onBack={() => navigateTo('profile')}
-                />
-              )}
+                {(route === 'settings' || route === 'profile-settings') && (
+                  <SettingsView
+                    onNavigate={navigateTo}
+                    onOpenVerificationCenter={openVerificationCenter}
+                    onBack={() => navigateTo('profile')}
+                  />
+                )}
 
-              {route === 'profile' && (
-                <ProfileView
-                  profileId={selectedProfileId || currentUser.id}
-                  onBack={() => navigateTo(previousRoute || 'alumni')}
-                  backLabel={getBackLabel()}
-                  onOpenVerificationCenter={openVerificationCenter}
-                  onNavigate={navigateTo}
-                  onStartMessage={handleStartDirectMessage}
-                />
-              )}
+                {route === 'profile' && (
+                  <ProfileView
+                    profileId={selectedProfileId || currentUser.id}
+                    onBack={() => navigateTo(previousRoute || 'alumni')}
+                    backLabel={getBackLabel()}
+                    onOpenVerificationCenter={openVerificationCenter}
+                    onNavigate={navigateTo}
+                    onStartMessage={handleStartDirectMessage}
+                  />
+                )}
 
-              {(route === 'admin' || route === 'admin-center' || route === 'admin-hub' || route === 'admin-command-center') && (
-                <AdminPage
-                  onNavigate={navigateTo}
-                  onViewProfile={handleViewProfile}
-                />
-              )}
+                {(route === 'admin' || route === 'admin-center' || route === 'admin-hub' || route === 'admin-command-center') && (
+                  <AdminPage
+                    onNavigate={navigateTo}
+                    onViewProfile={handleViewProfile}
+                  />
+                )}
+              </Suspense>
             </motion.div>
           </AnimatePresence>
         </main>
