@@ -3,6 +3,7 @@ import { supabase, isSupabaseConfigured, ALUMNI_PUBLIC_COLUMNS } from './supabas
 import { AlumniProfile, UserRole, SUPER_ADMIN_EMAILS } from '../types.ts';
 import { formatToE164Phone } from '../utils/phone.ts';
 import { normalizeAcademicStreamAndGroup } from '../utils/academicGroupMapping.ts';
+import { isInstantAutoVerificationActive } from '../services/siteConfigService.ts';
 
 /**
  * Format a database row from public.alumni_profiles into the application's AlumniProfile.
@@ -147,12 +148,21 @@ export async function getOrCreateSupabaseProfile(
         ? 'moderator'
         : 'member';
 
-    // New profiles start with role = 'member' unless verified admin in Auth metadata
+    const isAutoVerified =
+      resolvedRole === 'admin' ||
+      isInstantAutoVerificationActive() ||
+      extraData?.verificationStatus === 'verified';
+
+    // New profiles start as verified if auto-verification is active (7-day rule), or if admin
     const initialRecord: Record<string, any> = {
       auth_user_id: authUser.id,
       role: resolvedRole,
-      verification_status: resolvedRole === 'admin' ? 'verified' : 'unverified',
-      verification_method: resolvedRole === 'admin' ? 'admin' : null,
+      verification_status: isAutoVerified ? 'verified' : 'unverified',
+      verification_method: isAutoVerified ? 'admin_instant' : (extraData?.verificationMethod || null),
+      vouches_count: isAutoVerified ? 2 : 0,
+      vouch_target_count: 2,
+      verified_at: isAutoVerified ? new Date().toISOString() : null,
+      badges: isAutoVerified ? ['Verified SZMC Doctor', 'SZMCian'] : ['SZMCian'],
       full_name:
         extraData?.fullName?.trim() ||
         (authUser.user_metadata as any)?.full_name ||

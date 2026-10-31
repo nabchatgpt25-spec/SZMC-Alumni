@@ -2218,19 +2218,21 @@ export const FeedView: React.FC<FeedViewProps> = ({
             );
           }
 
-          return displayedPosts.map((post) => {
-            const isOwner = post.userId === currentUser.userId;
-            const extractedUrls = extractUrlsFromText(post.content);
+          return displayedPosts.filter(Boolean).map((post) => {
+            const isOwner = post.userId === currentUser.userId || (post as any).authorId === currentUser.id;
+            const postContent = typeof post.content === 'string' ? post.content : '';
+            const extractedUrls = extractUrlsFromText(postContent);
+            const rawVideos = Array.isArray(post.videos) ? post.videos : [];
             const allSharedMediaAndLinks = Array.from(
-              new Set([...(post.videos || []), ...extractedUrls])
+              new Set([...rawVideos, ...extractedUrls])
             );
             const hasSharedLinks = extractedUrls.length > 0;
-            const isLongContent = post.content.length > 360 && !hasSharedLinks;
+            const isLongContent = postContent.length > 360 && !hasSharedLinks;
             const isExpanded = expandedPostIds.has(post.id);
             const displayedText =
               isLongContent && !isExpanded
-                ? `${post.content.slice(0, 360)}...`
-                : post.content;
+                ? `${postContent.slice(0, 360)}...`
+                : postContent;
 
             return (
               <article
@@ -2542,18 +2544,18 @@ export const FeedView: React.FC<FeedViewProps> = ({
 
                 {/* Comments Thread */}
                 <div className="mt-3.5 space-y-3 pt-3 border-t border-slate-100 dark:border-slate-800/60">
-                  {post.comments.map((comment) => (
+                  {Array.isArray(post.comments) && post.comments.map((comment) => (
                     <div key={comment.id} className="space-y-2">
                       <div className="flex items-start gap-2.5">
                         <img
-                          src={comment.avatarUrl}
-                          alt={comment.fullName}
+                          src={comment.avatarUrl || '/assets/aistudio/images__1__2778177d.png'}
+                          alt={comment.fullName || 'Alumnus'}
                           className="w-7 h-7 rounded-full object-cover mt-0.5"
                         />
                         <div className="flex-1">
                           <div className="bg-slate-100 dark:bg-slate-800/80 rounded-2xl px-3.5 py-2 inline-block max-w-full">
                             <span className="font-bold text-xs text-slate-900 dark:text-slate-100 block">
-                              {comment.fullName}
+                              {comment.fullName || 'Alumnus'}
                             </span>
                             <p className="text-xs text-slate-700 dark:text-slate-300 break-words mt-0.5">
                               {comment.content}
@@ -2575,7 +2577,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
                             </button>
                           </div>
 
-                          {comment.replies && comment.replies.length > 0 && (
+                          {comment.replies && Array.isArray(comment.replies) && comment.replies.length > 0 && (
                             <div className="ml-5 mt-2 space-y-2 border-l-2 border-slate-200 dark:border-slate-700/80 pl-3">
                               {comment.replies.map((reply) => (
                                 <div key={reply.id} className="flex items-start gap-2">

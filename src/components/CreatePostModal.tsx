@@ -220,9 +220,12 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
     setShowVideoInputDrawer(false);
   };
 
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
   const handlePublish = async () => {
     if (!content.trim() && totalMediaCount === 0 && !detectedUrl) return;
 
+    setErrorMessage(null);
     setIsSubmitting(true);
     const result = await createPost({
       authorId,
@@ -244,10 +247,12 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
       setVideos([]);
       setDetectedUrl(null);
       setUrlMetadata(null);
+      setErrorMessage(null);
     } else {
-      alert(result.error || 'Failed to create post');
+      setErrorMessage(result.error || 'Failed to publish post to database. Please check connection and try again.');
     }
   };
+
 
   return (
     <div
@@ -311,6 +316,19 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
 
         {/* Scrollable Body */}
         <div className="p-4 sm:p-5 space-y-4 overflow-y-auto flex-1">
+          {errorMessage && (
+            <div className="p-3 bg-red-50 dark:bg-red-950/40 rounded-2xl border border-red-200 dark:border-red-900/60 text-xs text-red-700 dark:text-red-300 flex items-start justify-between gap-2">
+              <span className="font-semibold leading-relaxed">{errorMessage}</span>
+              <button
+                type="button"
+                onClick={() => setErrorMessage(null)}
+                className="text-red-400 hover:text-red-600 dark:hover:text-red-200 font-bold px-1"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
           {activeViewMode === 'preview' ? (
             /* ========================================================= */
             /* INTERACTIVE LIVE PREVIEW MODE                             */

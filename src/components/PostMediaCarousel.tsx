@@ -26,17 +26,30 @@ interface PostMediaCarouselProps {
 }
 
 export const PostMediaCarousel: React.FC<PostMediaCarouselProps> = ({
-  images = [],
-  videos = [],
+  images,
+  videos,
   layout = 'carousel',
   onPhotoClick,
   className = '',
   autoPlayVideo = false,
 }) => {
+  // Normalize images and videos defensively against null or non-array values
+  const safeImages: string[] = Array.isArray(images)
+    ? images
+    : typeof images === 'string'
+    ? (() => { try { const p = JSON.parse(images); return Array.isArray(p) ? p : [images]; } catch { return [images]; } })()
+    : [];
+
+  const safeVideos: string[] = Array.isArray(videos)
+    ? videos
+    : typeof videos === 'string'
+    ? (() => { try { const p = JSON.parse(videos); return Array.isArray(p) ? p : [videos]; } catch { return [videos]; } })()
+    : [];
+
   // Combine all media into unified items array
   const mediaItems: MediaItem[] = [
-    ...images.map((img) => ({ type: 'image' as const, url: img })),
-    ...videos.map((vid) => ({ type: 'video' as const, url: vid })),
+    ...safeImages.filter(Boolean).map((img) => ({ type: 'image' as const, url: String(img) })),
+    ...safeVideos.filter(Boolean).map((vid) => ({ type: 'video' as const, url: String(vid) })),
   ];
 
   const [currentIndex, setCurrentIndex] = useState(0);

@@ -420,15 +420,96 @@ export function getAutoVerificationRemainingTime(): {
 }
 
 export function pauseAutoVerification(paused: boolean): SiteConfig {
-  return saveSiteConfig({ autoVerificationPaused: paused });
+  const updated = saveSiteConfig({ autoVerificationPaused: paused });
+  // Sync to Supabase site_settings table asynchronously
+  if (typeof window !== 'undefined') {
+    import('../lib/supabase').then(({ supabase, isSupabaseConfigured }) => {
+      if (isSupabaseConfigured) {
+        supabase
+          .from('site_settings')
+          .upsert({
+            key: 'auto_verification',
+            value: {
+              enabled: updated.autoVerificationEnabled,
+              paused: updated.autoVerificationPaused,
+              until: updated.autoVerificationUntil,
+              updated_at: new Date().toISOString(),
+            },
+            updated_at: new Date().toISOString(),
+          })
+          .then(() => {}, () => {});
+        supabase
+          .rpc('toggle_auto_verification', {
+            p_paused: paused,
+            p_reset_7_days: false,
+          })
+          .then(() => {}, () => {});
+      }
+    });
+  }
+  return updated;
 }
 
 export function resetAutoVerification7Days(): SiteConfig {
   const newExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
-  return saveSiteConfig({
+  const updated = saveSiteConfig({
     autoVerificationEnabled: true,
     autoVerificationPaused: false,
     autoVerificationUntil: newExpiry,
   });
+  // Sync to Supabase site_settings table asynchronously
+  if (typeof window !== 'undefined') {
+    import('../lib/supabase').then(({ supabase, isSupabaseConfigured }) => {
+      if (isSupabaseConfigured) {
+        supabase
+          .from('site_settings')
+          .upsert({
+            key: 'auto_verification',
+            value: {
+              enabled: true,
+              paused: false,
+              until: newExpiry,
+              updated_at: new Date().toISOString(),
+            },
+            updated_at: new Date().toISOString(),
+          })
+          .then(() => {}, () => {});
+        supabase
+          .rpc('toggle_auto_verification', {
+            p_paused: false,
+            p_reset_7_days: true,
+          })
+          .then(() => {}, () => {});
+      }
+    });
+  }
+  return updated;
 }
+
+// Automatically sync latest site_settings from Supabase on client initialization
+if (typeof window !== 'undefined') {
+  import('../lib/supabase').then(({ supabase, isSupabaseConfigured }) => {
+    if (isSupabaseConfigured) {
+      supabase
+        .from('site_settings')
+        .select('value')
+        .eq('key', 'auto_verification')
+        .maybeSingle()
+        .then(
+          ({ data }) => {
+            if (data?.value) {
+              const v = data.value;
+              saveSiteConfig({
+                autoVerificationEnabled: v.enabled !== false,
+                autoVerificationPaused: Boolean(v.paused),
+                autoVerificationUntil: v.until || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+              });
+            }
+          },
+          () => {}
+        );
+    }
+  });
+}
+
 

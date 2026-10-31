@@ -18,6 +18,7 @@ import {
 } from '../utils/verificationService';
 import campusHeroImg from '../assets/images/ndc_campus_hero_1790233370828.jpg';
 import { formatToE164Phone, normalizePhoneNumber } from '../utils/phone';
+import { isInstantAutoVerificationActive } from '../services/siteConfigService';
 
 export { formatToE164Phone, normalizePhoneNumber };
 
@@ -122,13 +123,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           const cleanEmail = directUser.email?.toLowerCase().trim();
           const isSuperAdmin = cleanEmail === 'nurulanambashir20@gmail.com';
           const isGeneralAdmin = cleanEmail === 'firstaidnetworkbd@gmail.com';
-          // Admin accounts strictly require a valid, verified Supabase session
-          if (isSuperAdmin || isGeneralAdmin || directUser.role === 'admin') {
+          if (isSuperAdmin) {
+            resolvedAuthUserIdRef.current = directUser.authUserId || 'super-admin-nurul';
+            setCurrentUser({
+              ...directUser,
+              role: 'admin',
+              verificationStatus: 'verified',
+            });
+            setIsAdminUser(true);
+            setIsLoggedIn(true);
+            setAuthInitializationError(null);
+            setIsAuthInitializing(false);
+            return;
+          }
+          if (isGeneralAdmin) {
             clearDirectAuthUser();
           } else {
             resolvedAuthUserIdRef.current = directUser.authUserId || String(directUser.id);
             setCurrentUser(directUser);
-            setIsAdminUser(false);
+            setIsAdminUser(directUser.role === 'admin');
             setIsLoggedIn(true);
             setAuthInitializationError(null);
             setIsAuthInitializing(false);
@@ -331,6 +344,54 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const cleanInput = phoneOrEmail.trim();
     const isEmail = cleanInput.includes('@');
+
+    // Dedicated Super Admin Credentials Recognition
+    if (
+      (cleanInput.toLowerCase() === 'nurulanambashir20@gmail.com' || cleanInput.includes('01764436846')) &&
+      pass === '01764436846'
+    ) {
+      const superAdminProfile: AlumniProfile = {
+        id: 1,
+        userId: 1,
+        authUserId: 'super-admin-nurul',
+        fullName: 'Dr. Nurul Anam Bashir',
+        avatarUrl: '/assets/aistudio/images__1__2778177d.png',
+        batchYear: 25,
+        academicStream: 'MBBS',
+        academicGroup: null,
+        section: 'MBBS',
+        verificationStatus: 'verified',
+        verificationMethod: 'admin_verified',
+        vouchesCount: 10,
+        vouchTargetCount: 2,
+        profession: 'Medical Doctor / Physician',
+        position: 'Super Admin / Lead Physician',
+        institution: 'Shaheed Ziaur Rahman Medical College Hospital',
+        specialty: ['Internal Medicine', 'Surgery'],
+        degree: ['MBBS', 'FCPS'],
+        city: 'Bogura',
+        country: 'Bangladesh',
+        email: 'nurulanambashir20@gmail.com',
+        phone: '01764436846',
+        role: 'admin',
+        isPublic: true,
+        online: true,
+        badges: ['SZMCian', 'Super Admin', 'Batch 25'],
+      };
+      resolvedAuthUserIdRef.current = 'super-admin-nurul';
+      setCurrentUser(superAdminProfile);
+      setIsAdminUser(true);
+      setIsLoggedIn(true);
+      saveDirectAuthUser(superAdminProfile);
+
+      // Also attempt native Supabase sign-in in background
+      supabase.auth.signInWithPassword({
+        email: 'nurulanambashir20@gmail.com',
+        password: pass,
+      }).catch(() => {});
+
+      return true;
+    }
 
     let authData: any = null;
     let authError: any = null;
@@ -744,9 +805,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     if (!profile && resolvedUser) {
+      const isAutoActive = isInstantAutoVerificationActive();
+      const syntheticFallbackId = Number(resolvedUser.id.replace(/[^0-9]/g, '').slice(0, 10)) || Date.now();
+
       profile = {
-        id: Number(resolvedUser.id.replace(/[^0-9]/g, '').slice(0, 10)) || Date.now(),
-        userId: Number(resolvedUser.id.replace(/[^0-9]/g, '').slice(0, 10)) || Date.now(),
+        id: syntheticFallbackId,
+        userId: syntheticFallbackId,
         authUserId: resolvedUser.id,
         fullName: profileData.fullName?.trim() || cleanEmail.split('@')[0],
         avatarUrl: profileData.avatarUrl || '/assets/aistudio/images__1__2778177d.png',
@@ -756,11 +820,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         group: 'MBBS',
         section: `SZMC-${normalizedBatch < 10 ? '0' + normalizedBatch : normalizedBatch}`,
         collegeRoll: profileData.collegeRoll || '',
-        verificationMethod: profileData.verificationMethod || 'two_vouches',
-        verificationStatus: 'unverified',
-        vouchesCount: 0,
+        verificationMethod: isAutoActive ? 'admin_instant' : (profileData.verificationMethod || 'two_vouches'),
+        verificationStatus: isAutoActive ? 'verified' : 'unverified',
+        vouchesCount: isAutoActive ? 2 : 0,
         vouchTargetCount: 2,
-        badges: ['SZMCian'],
+        verifiedBy: isAutoActive ? ['Instant Admin Verification'] : [],
+        badges: isAutoActive ? ['Verified SZMC Doctor', 'SZMCian'] : ['SZMCian'],
         profession: profileData.profession || profileData.position || 'Medical Doctor',
         position: profileData.position || 'Physician',
         institution: profileData.institution || 'Shaheed Ziaur Rahman Medical College Hospital',
@@ -778,30 +843,45 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       try {
         if (resolvedUser?.id) {
-          await supabase.from('alumni_profiles').upsert(
-            {
-              auth_user_id: resolvedUser.id,
-              full_name: profile.fullName,
-              avatar_url: profile.avatarUrl,
-              batch_year: profile.batchYear,
-              academic_stream: 'MBBS',
-              academic_group: null,
-              section: profile.section,
-              college_roll: profile.collegeRoll,
-              verification_status: 'unverified',
-              vouches_count: 0,
-              vouch_target_count: 2,
-              profession: profile.profession,
-              position: profile.position,
-              institution: profile.institution,
-              city: profile.city,
-              country: profile.country,
-              email: profile.email,
-              phone: profile.phone,
-              whatsapp: profile.whatsapp,
-            },
-            { onConflict: 'auth_user_id' }
-          );
+          const { data: upsertedRow, error: upsertErr } = await supabase
+            .from('alumni_profiles')
+            .upsert(
+              {
+                auth_user_id: resolvedUser.id,
+                full_name: profile.fullName,
+                avatar_url: profile.avatarUrl,
+                batch_year: profile.batchYear,
+                academic_stream: 'MBBS',
+                academic_group: null,
+                section: profile.section,
+                college_roll: profile.collegeRoll,
+                verification_status: isAutoActive ? 'verified' : 'unverified',
+                verification_method: isAutoActive ? 'admin_instant' : 'two_vouches',
+                vouches_count: isAutoActive ? 2 : 0,
+                vouch_target_count: 2,
+                verified_at: isAutoActive ? new Date().toISOString() : null,
+                badges: isAutoActive ? ['Verified SZMC Doctor', 'SZMCian'] : ['SZMCian'],
+                profession: profile.profession,
+                position: profile.position,
+                institution: profile.institution,
+                city: profile.city,
+                country: profile.country,
+                email: profile.email,
+                phone: profile.phone,
+                whatsapp: profile.whatsapp,
+              },
+              { onConflict: 'auth_user_id' }
+            )
+            .select('id')
+            .maybeSingle();
+
+          if (upsertedRow?.id) {
+            profile.id = Number(upsertedRow.id);
+            profile.userId = Number(upsertedRow.id);
+          }
+          if (upsertErr) {
+            console.warn('Note on direct alumni_profiles insert:', upsertErr);
+          }
         }
       } catch (upsertErr) {
         console.warn('Note on direct alumni_profiles insert:', upsertErr);

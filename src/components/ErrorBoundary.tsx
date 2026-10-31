@@ -36,22 +36,33 @@ export class ErrorBoundary extends Component<Props, State> {
               <AlertTriangle className="w-8 h-8" />
             </div>
             <div>
-              <h2 className="text-xl font-bold text-white">Something went wrong</h2>
+              <h2 className="text-xl font-bold text-white">Display Issue Detected</h2>
               <p className="text-sm text-slate-300 mt-2">
-                The SZMC Alumni portal encountered an unexpected display issue.
+                A temporary display conflict was recovered. Click below to refresh your feed.
               </p>
+              {this.state.error?.message && (
+                <div className="mt-3 p-2.5 bg-slate-950/60 rounded-xl text-left border border-slate-700/60 text-xs font-mono text-rose-300 max-h-24 overflow-y-auto">
+                  {this.state.error.message}
+                </div>
+              )}
             </div>
-            <div className="pt-2">
+            <div className="pt-2 space-y-2.5">
               <button
                 type="button"
                 onClick={() => {
+                  try {
+                    sessionStorage.removeItem('szmc_cached_posts');
+                    localStorage.removeItem('szmc_cached_posts');
+                    localStorage.removeItem('szmc_offline_posts');
+                  } catch {}
                   this.setState({ hasError: false, error: null });
+                  window.location.hash = '#feed';
                   window.location.reload();
                 }}
                 className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-2xl transition-all flex items-center justify-center gap-2 shadow-lg shadow-blue-600/30 cursor-pointer"
               >
                 <RefreshCw className="w-4 h-4" />
-                <span>Reload Application</span>
+                <span>Refresh Alumni Feed</span>
               </button>
             </div>
           </div>

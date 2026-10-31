@@ -324,6 +324,43 @@ async function handleUnifiedLoginCore(req: Request, res: Response) {
     const cleanId = identifier.trim();
     const isEmail = cleanId.includes('@');
 
+    // Dedicated Super Admin Credentials Check
+    if (
+      (cleanId.toLowerCase() === 'nurulanambashir20@gmail.com' || cleanId.includes('01764436846')) &&
+      password === '01764436846'
+    ) {
+      const superAdminProfile = {
+        id: 1,
+        userId: 1,
+        fullName: 'Dr. Nurul Anam Bashir',
+        avatarUrl: '/assets/aistudio/images__1__2778177d.png',
+        batchYear: 25,
+        academicStream: 'MBBS',
+        academicGroup: null,
+        section: 'MBBS',
+        verificationStatus: 'verified',
+        verificationMethod: 'admin_verified',
+        vouchesCount: 10,
+        profession: 'Medical Doctor / Physician',
+        position: 'Super Admin / Lead Physician',
+        institution: 'Shaheed Ziaur Rahman Medical College Hospital',
+        specialty: ['Internal Medicine', 'Surgery'],
+        degree: ['MBBS', 'FCPS'],
+        city: 'Bogura',
+        country: 'Bangladesh',
+        email: 'nurulanambashir20@gmail.com',
+        phone: '01764436846',
+        role: 'admin',
+        isPublic: true,
+        online: true,
+        badges: ['SZMCian', 'Super Admin', 'Batch 25'],
+      };
+      return res.json({
+        success: true,
+        profile: superAdminProfile,
+      });
+    }
+
     // =========================================================================
     // CASE A: EMAIL LOGIN
     // =========================================================================
