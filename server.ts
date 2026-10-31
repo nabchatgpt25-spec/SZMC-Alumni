@@ -3259,12 +3259,40 @@ app.get(
   }
 );
 
-// Direct download route for the cPanel deployment zip
-app.get(['/download/szmc-alumni-dist.zip', '/szmc-alumni-dist.zip', '/download/ndc-alumni-dist.zip', '/ndc-alumni-dist.zip'], (_req: Request, res: Response) => {
-  const zipPath = path.resolve(__dirname, 'szmc-alumni-dist.zip');
-  const fallbackZip = path.resolve(__dirname, 'ndc-alumni-dist.zip');
-  const finalPath = existsSync(zipPath) ? zipPath : fallbackZip;
-  res.download(finalPath, 'szmc-alumni-dist.zip');
+// Direct download route for the production deployment dist archive
+app.get([
+  '/download/szmc-alumni-dist.zip',
+  '/szmc-alumni-dist.zip',
+  '/download/dist.zip',
+  '/dist.zip',
+  '/api/download-dist',
+  '/download-dist',
+], (_req: Request, res: Response) => {
+  const candidates = [
+    path.resolve(__dirname, 'public', 'szmc-alumni-dist.zip'),
+    path.resolve(__dirname, 'szmc-alumni-dist.zip'),
+    path.resolve(__dirname, 'public', 'szmc-alumni-dist.tar.gz'),
+    path.resolve(__dirname, 'szmc-alumni-dist.tar.gz'),
+  ];
+  for (const c of candidates) {
+    if (existsSync(c)) {
+      return res.download(c, path.basename(c));
+    }
+  }
+  return res.status(404).send('Production dist archive not found. Please build first.');
+});
+
+app.get(['/download/szmc-alumni-dist.tar.gz', '/szmc-alumni-dist.tar.gz'], (_req: Request, res: Response) => {
+  const candidates = [
+    path.resolve(__dirname, 'public', 'szmc-alumni-dist.tar.gz'),
+    path.resolve(__dirname, 'szmc-alumni-dist.tar.gz'),
+  ];
+  for (const c of candidates) {
+    if (existsSync(c)) {
+      return res.download(c, 'szmc-alumni-dist.tar.gz');
+    }
+  }
+  return res.status(404).send('Production dist tar.gz archive not found.');
 });
 
 // Direct download route for the consolidated master Supabase SQL script

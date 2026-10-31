@@ -52,7 +52,6 @@ import { VerificationStatusBadge } from './verification/VerificationStatusBadge'
 import {
   vouchForAlumniProfile,
   getVouchShareLink,
-  simulateDemoVouchForUser,
   loadVouchRequests
 } from '../utils/verificationService';
 import { saveStoredAlumniProfiles } from '../data/mockData';
@@ -1158,21 +1157,6 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                 <div className="flex flex-wrap items-center gap-2 shrink-0">
                   {isMine ? (
                     <>
-                      {(profile.verificationStatus || 'verified') !== 'verified' && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            simulateDemoVouchForUser(currentUser, (updated) => {
-                              updateProfile(updated);
-                              setProfile(updated);
-                            });
-                          }}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold shadow-xs transition-colors cursor-pointer"
-                        >
-                          <Sparkles className="w-3.5 h-3.5" />
-                          <span>⚡ Simulate Classmate Vouch</span>
-                        </button>
-                      )}
                       <button
                         type="button"
                         onClick={() => onOpenVerificationCenter?.('status')}

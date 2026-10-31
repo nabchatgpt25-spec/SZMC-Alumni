@@ -21,11 +21,11 @@ export const VerificationStatusBadge: React.FC<VerificationStatusBadgeProps> = (
   showText = true,
   showLabel,
 }) => {
-  const status = statusProp || profile?.verificationStatus || 'verified'; // default to verified for demo consistency
+  const status = statusProp || profile?.verificationStatus || 'unverified';
   const vouchesCount =
     vouchesCountProp ??
     profile?.vouchesCount ??
-    (profile?.verifiedBy ? profile.verifiedBy.length : 2);
+    (profile?.verifiedBy ? profile.verifiedBy.length : 0);
   const displayLabel = showLabel !== undefined ? showLabel : showText;
 
   if (status === 'verified') {

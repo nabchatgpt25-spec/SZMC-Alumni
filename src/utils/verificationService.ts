@@ -550,68 +550,7 @@ export const submitPeerVouch = (
   return { success: true, isNowVerified, request: req };
 };
 
-/**
- * Simulate an instant classmate vouch for the current user (useful for testing/demo)
- */
-export const simulateDemoVouchForUser = (
-  currentUser: AlumniProfile,
-  onUserUpdated?: (updated: AlumniProfile) => void
-): AlumniProfile => {
-  const demoClassmates = [
-    {
-      name: 'Tanvir Ahmed Chowdhury',
-      batch: 58,
-      avatar:
-        'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=200&auto=format&fit=crop&q=80',
-    },
-    {
-      name: 'Dr. Tariqul Islam',
-      batch: 52,
-      avatar:
-        'https://images.unsplash.com/photo-1612349317150-e413f6a5b16d?w=200&auto=format&fit=crop&q=80',
-    },
-    {
-      name: 'Prof. Dr. Mahfuzur Rahman',
-      batch: 45,
-      avatar:
-        'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80',
-    },
-    {
-      name: 'Syed Farhan Rezwan',
-      batch: 60,
-      avatar:
-        'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=200&auto=format&fit=crop&q=80',
-    },
-  ];
 
-  const currentVouchesCount =
-    currentUser.vouchesCount || (currentUser.verifiedBy?.length || 0);
-  const nextClassmate = demoClassmates[currentVouchesCount % demoClassmates.length];
-  const newVoucherString = `${nextClassmate.name} (Batch ${nextClassmate.batch})`;
-
-  const updatedVerifiedBy = [...(currentUser.verifiedBy || []), newVoucherString];
-  const newCount = updatedVerifiedBy.length;
-  const isVerified = newCount >= 2;
-
-  const updatedProfile: AlumniProfile = {
-    ...currentUser,
-    vouchesCount: newCount,
-    verifiedBy: updatedVerifiedBy,
-    verificationStatus: isVerified ? 'verified' : 'pending_vouch',
-    verificationMethod: 'two_vouches',
-    verificationDate: isVerified ? 'Today' : currentUser.verificationDate,
-    badges:
-      isVerified && !currentUser.badges?.includes('Verified SZMC Doctor')
-        ? [...(currentUser.badges || []), 'Verified SZMC Doctor']
-        : currentUser.badges,
-  };
-
-  syncProfileVerificationInStorage(currentUser.id, updatedProfile);
-  if (onUserUpdated) {
-    onUserUpdated(updatedProfile);
-  }
-  return updatedProfile;
-};
 
 /**
  * Ensure an incoming shared vouch link (?vouch_for=... or #vouch?roll=...&batch=...&name=...) creates or matches a pending vouch request

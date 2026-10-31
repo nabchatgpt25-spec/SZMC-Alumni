@@ -243,14 +243,34 @@ export const FeaturedAlumniSection: React.FC<FeaturedAlumniSectionProps> = ({
         </div>
       </div>
 
-      {/* Auto-scrolling Interactive Carousel Container */}
-      <div
-        ref={carouselRef}
-        onMouseEnter={() => setIsHovered(true)}
-        onMouseLeave={() => setIsHovered(false)}
-        className="flex gap-3 sm:gap-5 overflow-x-auto pb-3 sm:pb-4 pt-1 sm:pt-2 no-scrollbar scroll-smooth cursor-grab active:cursor-grabbing select-none"
-        style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
-      >
+      {/* Auto-scrolling Interactive Carousel Container or Empty State */}
+      {filteredAlumni.length === 0 ? (
+        <div className="w-full py-12 px-6 rounded-2xl sm:rounded-3xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 text-center flex flex-col items-center justify-center">
+          <div className="w-12 h-12 rounded-2xl bg-blue-50 dark:bg-blue-950/70 border border-blue-200 dark:border-blue-800/60 flex items-center justify-center text-blue-600 dark:text-blue-400 mb-3">
+            <Users className="w-6 h-6" />
+          </div>
+          <h3 className="text-base font-bold text-slate-800 dark:text-slate-200 mb-1">
+            No Alumni Profiles Yet
+          </h3>
+          <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm mb-4">
+            Alumni will appear here as doctors register and connect with their batches.
+          </p>
+          <button
+            type="button"
+            onClick={onExploreDirectory}
+            className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition-all cursor-pointer"
+          >
+            Explore Alumni Directory
+          </button>
+        </div>
+      ) : (
+        <div
+          ref={carouselRef}
+          onMouseEnter={() => setIsHovered(true)}
+          onMouseLeave={() => setIsHovered(false)}
+          className="flex gap-3 sm:gap-5 overflow-x-auto pb-3 sm:pb-4 pt-1 sm:pt-2 no-scrollbar scroll-smooth cursor-grab active:cursor-grabbing select-none"
+          style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+        >
         {filteredAlumni.map((alumnus, idx) => (
           <Tilt3DCard
             key={`${alumnus.id}-${idx}`}
@@ -337,8 +357,9 @@ export const FeaturedAlumniSection: React.FC<FeaturedAlumniSectionProps> = ({
               <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
             </div>
           </Tilt3DCard>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
 
       {/* Directory CTA */}
       <div className="text-center mt-10">

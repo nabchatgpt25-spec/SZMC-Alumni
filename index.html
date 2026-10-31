@@ -4,7 +4,37 @@
     <meta charset="UTF-8" />
     <script>
       (function() {
-        // Suppress non-actionable external browser extension errors in iframe preview
+        // 1. Ensure window.fetch has both a getter and a setter.
+        // Some Chrome extensions (e.g. frame_ant) attempt to overwrite `window.fetch = patchedFetch`.
+        // In sandboxed iframes, Window.prototype.fetch may only define a getter, throwing:
+        // "TypeError: Cannot set property fetch of #<Window> which has only a getter"
+        try {
+          var _rawFetch = typeof window !== 'undefined' && window.fetch ? window.fetch.bind(window) : undefined;
+          var _currentFetch = _rawFetch;
+          var defineFetch = function(target) {
+            try {
+              Object.defineProperty(target, 'fetch', {
+                configurable: true,
+                enumerable: true,
+                get: function() {
+                  return _currentFetch || _rawFetch;
+                },
+                set: function(fn) {
+                  _currentFetch = typeof fn === 'function' ? fn : _rawFetch;
+                }
+              });
+            } catch (e) {}
+          };
+
+          if (typeof window !== 'undefined') {
+            defineFetch(window);
+            if (typeof Window !== 'undefined' && Window.prototype) {
+              defineFetch(Window.prototype);
+            }
+          }
+        } catch (e) {}
+
+        // 2. Suppress non-actionable external browser extension errors in iframe preview
         function isExtensionError(msg, src, err) {
           var strMsg = typeof msg === 'string' ? msg : (msg && msg.message) || '';
           var strSrc = typeof src === 'string' ? src : '';
@@ -12,14 +42,20 @@
           return (
             strSrc.indexOf('chrome-extension://') !== -1 ||
             strStack.indexOf('chrome-extension://') !== -1 ||
+            strMsg.indexOf('chrome-extension://') !== -1 ||
             strMsg.indexOf('frame_ant') !== -1 ||
-            strStack.indexOf('frame_ant') !== -1
+            strStack.indexOf('frame_ant') !== -1 ||
+            strMsg.indexOf('Cannot set property fetch') !== -1 ||
+            strStack.indexOf('Cannot set property fetch') !== -1
           );
         }
 
         window.addEventListener('error', function(event) {
           if (isExtensionError(event.message, event.filename, event.error)) {
             event.preventDefault();
+            if (typeof event.stopImmediatePropagation === 'function') {
+              event.stopImmediatePropagation();
+            }
             return true;
           }
         }, true);
@@ -28,8 +64,21 @@
           var reason = event.reason;
           if (isExtensionError(reason, '', reason)) {
             event.preventDefault();
+            if (typeof event.stopImmediatePropagation === 'function') {
+              event.stopImmediatePropagation();
+            }
           }
         }, true);
+
+        var origOnError = window.onerror;
+        window.onerror = function(message, source, lineno, colno, error) {
+          if (isExtensionError(message, source, error)) {
+            return true;
+          }
+          if (typeof origOnError === 'function') {
+            return origOnError.apply(this, arguments);
+          }
+        };
       })();
     </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />

@@ -326,7 +326,7 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
                 </span>
               </div>
 
-              {/* Mock Post Card */}
+              {/* Live Post Preview Card */}
               <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs space-y-3">
                 <div className="flex items-center gap-3">
                   <img
