@@ -140,7 +140,17 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
   const isGeneralAdmin = isUserGeneralAdmin(currentUser);
   const isSubAdmin = !isSuperAdmin && !isGeneralAdmin;
 
-  const { config, updateConfig, resetConfig, exportJson, importJson } = useSiteConfig();
+  const {
+    config,
+    updateConfig,
+    resetConfig,
+    hasUnsavedChanges,
+    isSaving,
+    lastSavedTime,
+    saveAllChanges,
+    exportJson,
+    importJson,
+  } = useSiteConfig();
   const [activeTab, setActiveTab] = useState<AdminTab>('overview');
   const [stats, setStats] = useState<AdminOverviewStats | null>(null);
   const [loadingStats, setLoadingStats] = useState(false);
@@ -150,6 +160,15 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
   const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3800);
+  };
+
+  const handleManualSave = async () => {
+    const res = await saveAllChanges();
+    if (res.success) {
+      showToast(res.message || 'All admin changes saved successfully!', 'success');
+    } else {
+      showToast(res.error || 'Failed to save changes to server', 'error');
+    }
   };
 
   // 1. Verifications & Document Inspection Queue
@@ -644,6 +663,26 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
                 <span>Verification System: {config.globalVerificationEnabled ? 'ON (Enforced)' : 'OFF (Bypassed)'}</span>
               </button>
             </div>
+
+            {/* Primary Save Changes Button */}
+            <button
+              type="button"
+              onClick={handleManualSave}
+              disabled={isSaving}
+              className={`flex items-center gap-2 px-4 py-2 rounded-2xl text-xs font-black tracking-wide transition-all shadow-md cursor-pointer border active:scale-95 ${
+                hasUnsavedChanges
+                  ? 'bg-rose-600 hover:bg-rose-500 text-white border-rose-400 shadow-rose-600/30 animate-pulse'
+                  : 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-500/30 shadow-emerald-600/25'
+              }`}
+              title="Save all configuration and admin changes permanently to server"
+            >
+              {isSaving ? (
+                <RefreshCw className="w-4 h-4 animate-spin shrink-0" />
+              ) : (
+                <Save className="w-4 h-4 shrink-0" />
+              )}
+              <span>{isSaving ? 'Saving...' : hasUnsavedChanges ? 'Save Changes *' : 'Save Changes'}</span>
+            </button>
 
             {/* Direct Production Dist Download Button */}
             <a
@@ -1917,6 +1956,40 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
                     </button>
                   );
                 })}
+              </div>
+
+              {/* Institutional Customizer Top Save Bar */}
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-3.5 rounded-2xl bg-indigo-50/80 dark:bg-indigo-950/40 border border-indigo-200/80 dark:border-indigo-800/80 shadow-xs">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-indigo-600/15 text-indigo-600 dark:text-indigo-400 flex items-center justify-center font-bold">
+                    <Save className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-black text-indigo-950 dark:text-indigo-200 flex items-center gap-2">
+                      <span>{hasUnsavedChanges ? '⚠️ Unsaved Site Modifications' : '✅ Configurations Synchronized'}</span>
+                      {hasUnsavedChanges && (
+                        <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
+                      )}
+                    </h4>
+                    <p className="text-[11px] text-indigo-700/80 dark:text-indigo-300/80">
+                      {hasUnsavedChanges
+                        ? 'You have modified settings. Click Save Changes to commit all modifications to the server and database.'
+                        : lastSavedTime
+                        ? `Last saved and synchronized at ${lastSavedTime}`
+                        : 'Saved to server and local database.'}
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleManualSave}
+                  disabled={isSaving}
+                  className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white font-black text-xs shadow-md shadow-indigo-600/30 transition-all cursor-pointer disabled:opacity-50 shrink-0"
+                >
+                  {isSaving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  <span>{isSaving ? 'Saving Changes...' : 'Save All Changes'}</span>
+                </button>
               </div>
 
               {/* SUBTAB 1: BRANDING & LOGOS */}
@@ -3516,6 +3589,26 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
               Close Inspection Lightbox
             </button>
           </div>
+        </div>
+      )}
+      {/* =================================================================== */}
+      {/* FLOATING STICKY SAVE BANNER */}
+      {/* =================================================================== */}
+      {hasUnsavedChanges && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-slate-900/95 dark:bg-white/95 text-white dark:text-slate-900 backdrop-blur-xl px-5 py-3 rounded-2xl shadow-2xl border border-white/20 dark:border-slate-800 flex items-center gap-4 animate-in fade-in slide-in-from-bottom-5 duration-200">
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping" />
+            <span className="text-xs font-bold">You have unsaved changes in Admin settings!</span>
+          </div>
+          <button
+            type="button"
+            onClick={handleManualSave}
+            disabled={isSaving}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-black shadow-md cursor-pointer transition-all active:scale-95 disabled:opacity-50"
+          >
+            {isSaving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+            <span>{isSaving ? 'Saving...' : 'Save All Changes'}</span>
+          </button>
         </div>
       )}
     </div>

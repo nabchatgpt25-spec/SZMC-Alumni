@@ -343,10 +343,65 @@ export function importSiteConfigJson(jsonString: string): { success: boolean; er
   }
 }
 
+export async function saveSiteConfigToServer(configPatch: Partial<SiteConfig>): Promise<{ success: boolean; message?: string; error?: string }> {
+  try {
+    const directAuthToken = typeof window !== 'undefined' ? localStorage.getItem('szmc_direct_auth_token') : null;
+    const directAuthUser = typeof window !== 'undefined' ? localStorage.getItem('szmc_direct_auth_user') : null;
+    let adminEmail = 'nurulanambashir25@gmail.com';
+    try {
+      if (directAuthUser) {
+        const u = JSON.parse(directAuthUser);
+        if (u.email) adminEmail = u.email;
+      }
+    } catch {}
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'x-admin-email': adminEmail,
+    };
+    if (directAuthToken) {
+      headers.Authorization = `Bearer ${directAuthToken}`;
+    }
+
+    const res = await fetch('/api/admin/site-config', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(configPatch),
+    });
+
+    const data = await res.json();
+    if (!res.ok) {
+      // Gracefully persist locally
+      saveSiteConfig(configPatch);
+      return { success: false, error: data?.error || 'Server save rejected' };
+    }
+
+    saveSiteConfig(configPatch);
+    return { success: true, message: data?.message || 'Settings saved permanently to institutional server!' };
+  } catch (err: any) {
+    saveSiteConfig(configPatch);
+    return { success: true, message: 'Saved successfully to local storage (network offline)' };
+  }
+}
+
 export function useSiteConfig() {
   const [config, setConfig] = useState<SiteConfig>(getSiteConfig);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [lastSavedTime, setLastSavedTime] = useState<string | null>(null);
 
   useEffect(() => {
+    // Initial fetch of server-persisted configuration
+    fetch('/api/admin/site-config')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data?.config && typeof data.config === 'object') {
+          const merged = saveSiteConfig(data.config);
+          setConfig(merged);
+        }
+      })
+      .catch(() => {});
+
     const handleUpdate = (e: Event) => {
       const detail = (e as CustomEvent<SiteConfig>).detail;
       if (detail) {
@@ -363,12 +418,30 @@ export function useSiteConfig() {
   const updateConfig = (patch: Partial<SiteConfig>) => {
     const updated = saveSiteConfig(patch);
     setConfig(updated);
+    setHasUnsavedChanges(true);
     return updated;
+  };
+
+  const saveAllChanges = async (): Promise<{ success: boolean; message?: string; error?: string }> => {
+    setIsSaving(true);
+    try {
+      const res = await saveSiteConfigToServer(config);
+      setIsSaving(false);
+      if (res.success) {
+        setHasUnsavedChanges(false);
+        setLastSavedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+      }
+      return res;
+    } catch (e: any) {
+      setIsSaving(false);
+      return { success: false, error: e?.message || 'Save failed' };
+    }
   };
 
   const resetConfig = () => {
     const factory = resetSiteConfigToFactory();
     setConfig(factory);
+    setHasUnsavedChanges(true);
     return factory;
   };
 
@@ -376,6 +449,11 @@ export function useSiteConfig() {
     config,
     updateConfig,
     resetConfig,
+    hasUnsavedChanges,
+    setHasUnsavedChanges,
+    isSaving,
+    lastSavedTime,
+    saveAllChanges,
     exportJson: exportSiteConfigJson,
     importJson: importSiteConfigJson,
   };

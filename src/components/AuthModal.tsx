@@ -754,7 +754,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                       value={loginIdentifier}
                       onChange={(e) => setLoginIdentifier(e.target.value)}
                       className="w-full px-3 py-3 text-xs sm:text-sm text-slate-900 dark:text-white placeholder-slate-500 dark:placeholder-slate-400 bg-transparent focus:outline-none"
-                      autoFocus
+                      autoFocus={typeof window !== 'undefined' && window.innerWidth >= 768}
                     />
                   </div>
                 </motion.div>
@@ -1262,7 +1262,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                       onChange={(e) => setForgotEmail(e.target.value)}
                       className="w-full px-3 py-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-xs sm:text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:border-blue-500"
                       required
-                      autoFocus
+                      autoFocus={typeof window !== 'undefined' && window.innerWidth >= 768}
                     />
                   </div>
 

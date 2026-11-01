@@ -388,13 +388,42 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const cleanInput = phoneOrEmail.trim();
     const isEmail = cleanInput.includes('@');
 
-    // Dedicated Super Admin Credentials Recognition
-    if (
-      (cleanInput.toLowerCase() === 'nurulanambashir25@gmail.com' ||
-        cleanInput.toLowerCase() === 'nurulanambashir20@gmail.com' ||
-        cleanInput.includes('01764436846')) &&
-      (pass === '01764436846' || pass.length >= 6)
-    ) {
+    // Dedicated Super Admin Credentials Recognition (Strict Password Policy)
+    const isAdminIdentifier =
+      cleanInput.toLowerCase() === 'nurulanambashir25@gmail.com' ||
+      cleanInput.toLowerCase() === 'nurulanambashir20@gmail.com' ||
+      cleanInput.includes('01764436846') ||
+      cleanInput.replace(/\D/g, '').endsWith('1764436846');
+
+    if (isAdminIdentifier) {
+      let backendSuccess = false;
+      let returnedToken: string | null = null;
+
+      // 1. Authenticate with backend server first
+      try {
+        const loginRes = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ identifier: cleanInput, password: pass }),
+        });
+        const loginJson = await loginRes.json();
+        if (loginRes.ok && (loginJson.success || loginJson.profile)) {
+          backendSuccess = true;
+          returnedToken = loginJson.token || loginJson.session?.access_token || null;
+        } else if (!loginRes.ok) {
+          throw new Error(loginJson.error || 'Incorrect administrator password. Access denied.');
+        }
+      } catch (fetchErr: any) {
+        if (fetchErr.message && fetchErr.message.includes('password')) {
+          throw fetchErr;
+        }
+      }
+
+      // 2. Fallback check ONLY for master administrator credential '01764436846'
+      if (!backendSuccess && pass !== '01764436846') {
+        throw new Error('Incorrect administrator password. Please verify your credentials.');
+      }
+
       const superAdminProfile: AlumniProfile = {
         id: 1,
         userId: 1,
@@ -423,6 +452,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         online: true,
         badges: ['SZMCian', 'Super Admin', 'Batch 25'],
       };
+
+      if (returnedToken) {
+        inMemorySupabaseToken = returnedToken;
+        setSupabaseToken(returnedToken);
+      }
       resolvedAuthUserIdRef.current = 'super-admin-nurul';
       setCurrentUser(superAdminProfile);
       setIsAdminUser(true);

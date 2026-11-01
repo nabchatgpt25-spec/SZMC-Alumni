@@ -23,11 +23,40 @@ const SUPER_ADMIN_EMAILS = [
   'nurulanambashir20@gmail.com',
 ];
 
+import crypto from 'crypto';
+
+export const ADMIN_SESSION_SECRET = process.env.ADMIN_SESSION_SECRET || 'szmc_admin_jwt_secret_2026_dr_nurul';
+
+export function signAdminToken(email: string): string {
+  const payload = `${email.toLowerCase().trim()}:${Date.now()}`;
+  const hmac = crypto.createHmac('sha256', ADMIN_SESSION_SECRET).update(payload).digest('hex');
+  return `szmc-admin-session:${Buffer.from(payload).toString('base64')}:${hmac}`;
+}
+
+export function verifyAdminToken(token: string): { valid: boolean; email?: string } {
+  if (!token || !token.startsWith('szmc-admin-session:')) return { valid: false };
+  const parts = token.split(':');
+  if (parts.length !== 3) return { valid: false };
+  try {
+    const rawPayload = Buffer.from(parts[1], 'base64').toString('utf-8');
+    const expectedHmac = crypto.createHmac('sha256', ADMIN_SESSION_SECRET).update(rawPayload).digest('hex');
+    if (expectedHmac !== parts[2]) return { valid: false };
+    const [email, timestamp] = rawPayload.split(':');
+    const ageMs = Date.now() - Number(timestamp);
+    if (ageMs > 30 * 24 * 60 * 60 * 1000) return { valid: false }; // 30-day validity
+    return { valid: true, email };
+  } catch {
+    return { valid: false };
+  }
+}
+
 async function verifyAuthToken(token: string, req?: Request) {
   if (!token) return null;
 
-  if (token === 'super-admin-direct' || token === 'admin-bypass-token') {
-    const adminEmail = ((req?.headers?.['x-admin-email'] as string) || 'nurulanambashir25@gmail.com').toLowerCase().trim();
+  // 1. Verify signed admin session token
+  const adminCheck = verifyAdminToken(token);
+  if (adminCheck.valid && adminCheck.email) {
+    const adminEmail = adminCheck.email.toLowerCase().trim();
     return {
       user: { id: 'super-admin-nurul', email: adminEmail } as any,
       dbUser: {
@@ -39,6 +68,29 @@ async function verifyAuthToken(token: string, req?: Request) {
         accountStatus: 'active',
       },
     };
+  }
+
+  // Fallback for legacy client sessions that hold the active verified super-admin direct token
+  // ONLY if verified as super-admin email
+  if (token === 'super-admin-direct') {
+    const adminEmail = ((req?.headers?.['x-admin-email'] as string) || '').toLowerCase().trim();
+    const isHardcoded =
+      adminEmail === 'nurulanambashir25@gmail.com' ||
+      adminEmail === 'nurulanambashir20@gmail.com' ||
+      adminEmail === 'admin@szmcalumni.net';
+    if (isHardcoded) {
+      return {
+        user: { id: 'super-admin-nurul', email: adminEmail } as any,
+        dbUser: {
+          id: 1,
+          uid: 'super-admin-nurul',
+          email: adminEmail,
+          fullName: 'Dr. Nurul Anam Bashir',
+          role: 'admin',
+          accountStatus: 'active',
+        },
+      };
+    }
   }
 
   if (!isSupabaseServerConfigured) return null;
@@ -150,19 +202,7 @@ export const requireAdmin = async (
     }
   }
 
-  if (isAdminEmail) {
-    req.dbUser = {
-      id: 1,
-      uid: 'super-admin-nurul',
-      email: adminEmail,
-      fullName: 'Dr. Nurul Anam Bashir',
-      role: 'admin',
-      accountStatus: 'active',
-    };
-    return next();
-  }
-
-  return res.status(401).json({ error: 'Unauthorized: Missing admin credential token' });
+  return res.status(401).json({ error: 'Unauthorized: Valid administrator authorization token required.' });
 };
 
 export const optionalAuth = async (

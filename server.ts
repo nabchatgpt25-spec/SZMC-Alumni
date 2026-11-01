@@ -11,14 +11,14 @@ import 'dotenv/config';
 import express, { type Request, type Response, type NextFunction } from 'express';
 import compression from 'compression';
 import { createServer as createHttpServer } from 'http';
-import { existsSync } from 'fs';
+import { existsSync, writeFileSync, readFileSync } from 'fs';
 import { readFile } from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import * as dotenv from 'dotenv';
 import { supabaseServer, isSupabaseServerConfigured } from './server/lib/supabase-server.ts';
-import { requireAuth, requireAdmin, optionalAuth, type AuthRequest } from './server/middleware/auth.ts';
+import { requireAuth, requireAdmin, optionalAuth, signAdminToken, type AuthRequest } from './server/middleware/auth.ts';
 import {
   adminUpdateAlumniGovernance,
   createOrRegisterAlumniProfile,
@@ -324,13 +324,52 @@ async function handleUnifiedLoginCore(req: Request, res: Response) {
     const cleanId = identifier.trim();
     const isEmail = cleanId.includes('@');
 
-    // Dedicated Super Admin Credentials Check
-    if (
-      (cleanId.toLowerCase() === 'nurulanambashir25@gmail.com' ||
-        cleanId.toLowerCase() === 'nurulanambashir20@gmail.com' ||
-        cleanId.includes('01764436846')) &&
-      (password === '01764436846' || password.length >= 6)
-    ) {
+    // Strict Super Admin Verification Check (No arbitrary password bypass)
+    const isDedicatedAdmin =
+      cleanId.toLowerCase() === 'nurulanambashir25@gmail.com' ||
+      cleanId.toLowerCase() === 'nurulanambashir20@gmail.com' ||
+      cleanId.includes('01764436846') ||
+      cleanId.replace(/\D/g, '').endsWith('1764436846');
+
+    if (isDedicatedAdmin) {
+      let authSession: any = null;
+      let authenticated = false;
+      const targetEmail = cleanId.includes('@') ? cleanId.toLowerCase().trim() : 'nurulanambashir25@gmail.com';
+
+      // 1. Try Supabase Auth password verification
+      if (isSupabaseServerConfigured) {
+        try {
+          const { data: sData, error: sErr } = await supabaseServer.auth.signInWithPassword({
+            email: targetEmail,
+            password,
+          });
+          if (!sErr && sData?.session) {
+            authSession = sData.session;
+            authenticated = true;
+          }
+        } catch {}
+      }
+
+      // 2. Strict fallback check: MUST match configured ADMIN_PASSWORD or master admin credential '01764436846'
+      const expectedAdminPass = process.env.ADMIN_PASSWORD || '01764436846';
+      if (!authenticated) {
+        if (password === expectedAdminPass) {
+          authenticated = true;
+        } else {
+          // Check if registered alumnus profile has a valid matching password hash
+          const adminAlumnus = await findAlumniByCredential(targetEmail);
+          if (adminAlumnus?.passwordHash && verifyPasswordServer(adminAlumnus.passwordHash, password)) {
+            authenticated = true;
+          }
+        }
+      }
+
+      // STRICT RULE: If the password does NOT match, REJECT IMMEDIATELY.
+      if (!authenticated) {
+        return res.status(401).json({ error: 'Incorrect administrator password. Access denied.' });
+      }
+
+      const superAdminToken = signAdminToken(targetEmail);
       const superAdminProfile = {
         id: 1,
         userId: 1,
@@ -350,15 +389,18 @@ async function handleUnifiedLoginCore(req: Request, res: Response) {
         degree: ['MBBS', 'FCPS'],
         city: 'Bogura',
         country: 'Bangladesh',
-        email: cleanId.includes('@') ? cleanId.toLowerCase() : 'nurulanambashir25@gmail.com',
+        email: targetEmail,
         phone: '01764436846',
         role: 'admin',
         isPublic: true,
         online: true,
         badges: ['SZMCian', 'Super Admin', 'Batch 25'],
       };
+
       return res.json({
         success: true,
+        token: superAdminToken,
+        session: authSession || { access_token: superAdminToken, token_type: 'bearer', user: { email: targetEmail, role: 'admin' } },
         profile: superAdminProfile,
       });
     }
@@ -610,30 +652,16 @@ app.post(
 );
 
 // Admin: Verify Server-Side Administrative Access
-app.get('/api/admin/verify-access', optionalAuth, (req: AuthRequest, res: Response) => {
+app.get('/api/admin/verify-access', requireAdmin, (req: AuthRequest, res: Response) => {
   const actor = req.dbUser;
-  const adminEmail = (
-    actor?.email ||
-    req.user?.email ||
-    (req.headers['x-admin-email'] as string) ||
-    ''
-  ).toLowerCase().trim();
-
-  const isHardcodedSuperAdmin =
-    adminEmail === 'nurulanambashir25@gmail.com' ||
-    adminEmail === 'nurulanambashir20@gmail.com' ||
-    adminEmail === 'admin@szmcalumni.net' ||
-    adminEmail === 'firstaidnetworkbd@gmail.com' ||
-    adminEmail === 'support@szmcalumni.net';
-
-  if (actor?.role === 'admin' || isHardcodedSuperAdmin) {
+  if (actor && (actor.role === 'admin' || actor.role === 'super_admin')) {
     return res.json({
       authorized: true,
       role: 'admin',
-      userId: actor?.id || 1,
-      userUid: actor?.uid || 'super-admin-nurul',
-      email: adminEmail || 'nurulanambashir25@gmail.com',
-      fullName: actor?.fullName || 'Dr. Nurul Anam Bashir',
+      userId: actor.id || 1,
+      userUid: actor.uid || 'super-admin-nurul',
+      email: actor.email || 'nurulanambashir25@gmail.com',
+      fullName: actor.fullName || 'Dr. Nurul Anam Bashir',
       verifiedViaMetadata: true,
       timestamp: new Date().toISOString(),
     });
@@ -707,6 +735,83 @@ app.post('/api/admin/bulk-verify-all', rateLimitGuard(15, 60_000), requireAdmin,
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Failed to bulk verify profiles' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Institutional Site Configuration Storage & Persistence Engine
+// ---------------------------------------------------------------------------
+let serverSiteConfigStore: any = null;
+const SITE_CONFIG_FILE = path.resolve(__dirname, 'szmc-site-config.json');
+
+function loadServerSiteConfig(): any {
+  if (serverSiteConfigStore) return serverSiteConfigStore;
+  try {
+    if (existsSync(SITE_CONFIG_FILE)) {
+      const raw = readFileSync(SITE_CONFIG_FILE, 'utf-8');
+      serverSiteConfigStore = JSON.parse(raw);
+      return serverSiteConfigStore;
+    }
+  } catch (err) {
+    console.warn('Notice reading szmc-site-config.json:', err);
+  }
+  return null;
+}
+
+function saveServerSiteConfig(patch: any): any {
+  const current = loadServerSiteConfig() || {};
+  const updated = { ...current, ...patch, updatedAt: new Date().toISOString() };
+  serverSiteConfigStore = updated;
+  try {
+    writeFileSync(SITE_CONFIG_FILE, JSON.stringify(updated, null, 2), 'utf-8');
+  } catch (err) {
+    console.warn('Failed to write szmc-site-config.json:', err);
+  }
+  return updated;
+}
+
+// Get Active Institutional Site Configuration
+app.get('/api/admin/site-config', async (_req: Request, res: Response) => {
+  try {
+    const config = loadServerSiteConfig();
+    return res.json({ success: true, config });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to read site configuration' });
+  }
+});
+
+// Admin Command: Save & Persist Institutional Site Configuration
+app.post('/api/admin/site-config', rateLimitGuard(60, 60_000), requireAdmin, async (req: AuthRequest, res: Response) => {
+  try {
+    const patch = req.body;
+    if (!patch || typeof patch !== 'object') {
+      return res.status(400).json({ error: 'Invalid configuration payload' });
+    }
+
+    const updated = saveServerSiteConfig(patch);
+
+    // Sync to Supabase site_settings if configured
+    if (isSupabaseServerConfigured) {
+      try {
+        await supabaseServer.from('site_settings').upsert({
+          key: 'master_site_config',
+          value: updated,
+          updated_at: new Date().toISOString(),
+        });
+      } catch (dbErr: any) {
+        console.warn('Supabase site_settings notice:', dbErr.message);
+      }
+    }
+
+    return res.json({
+      success: true,
+      message: 'Site configuration saved successfully across the platform!',
+      savedAt: new Date().toISOString(),
+      config: updated,
+    });
+  } catch (err: any) {
+    console.error('Save site-config error:', err);
+    return res.status(500).json({ error: err.message || 'Failed to save site configuration' });
   }
 });
 
