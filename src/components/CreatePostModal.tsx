@@ -97,6 +97,8 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
     }
   }, [isOpen, initialTab]);
 
+   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  
   if (!isOpen) return null;
 
   const totalMediaCount = images.length + videos.length;
@@ -219,8 +221,6 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
     setVideoUrlInput('');
     setShowVideoInputDrawer(false);
   };
-
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const handlePublish = async () => {
     if (!content.trim() && totalMediaCount === 0 && !detectedUrl) return;
