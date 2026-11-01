@@ -301,6 +301,8 @@ export interface PostComment {
   replies?: PostComment[];
 }
 
+export type ReactionType = 'like' | 'love' | 'care' | 'haha' | 'wow' | 'sad' | 'angry';
+
 export interface PostItem {
   id: number;
   userId: number;
@@ -317,6 +319,8 @@ export interface PostItem {
   commentsCount: number;
   createdAt: string;
   likedByMe?: boolean;
+  userReaction?: ReactionType | null;
+  reactionsSummary?: Partial<Record<ReactionType, number>>;
   comments?: PostComment[];
   category?: 'General Update' | 'Tech & Innovation' | 'Professional Insights' | 'Reunion' | 'Achievement' | string;
   isEdited?: boolean;

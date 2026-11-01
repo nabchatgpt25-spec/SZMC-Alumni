@@ -116,6 +116,17 @@ function AlumniAppContent() {
     wasLoggedInRef.current = isLoggedIn;
   }, [isLoggedIn]);
 
+  // Keep route synced with auth state: logged-in users enter the portal, logged-out users return to landing
+  useEffect(() => {
+    if (isLoggedIn && route === 'landing') {
+      const h = window.location.hash.replace('#', '');
+      const validHash = h && h !== 'landing' ? h : 'feed';
+      setRoute(validHash);
+    } else if (!isLoggedIn && route !== 'landing') {
+      setRoute('landing');
+    }
+  }, [isLoggedIn, route]);
+
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [selectedProfileId, setSelectedProfileId] = useState<number>(currentUser.id);
   const [previousRoute, setPreviousRoute] = useState<string>('alumni');

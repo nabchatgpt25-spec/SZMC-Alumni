@@ -111,15 +111,27 @@ function cleanEmailMatchAdmin(email?: string): boolean {
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const otpStoreRef = useRef<Map<string, PendingOtpEntry>>(new Map());
   const [supabaseToken, setSupabaseToken] = useState<string | null>(null);
-  const [isAdminUser, setIsAdminUser] = useState<boolean>(false);
 
-  const [isAuthInitializing, setIsAuthInitializing] = useState(true);
+  // Synchronously restore direct authenticated alumni from localStorage so there is zero logout on page refresh
+  const initialDirectUser = getDirectAuthUser();
+
+  const [isAdminUser, setIsAdminUser] = useState<boolean>(() => {
+    if (!initialDirectUser) return false;
+    return (
+      initialDirectUser.role === 'admin' ||
+      cleanEmailMatchAdmin(initialDirectUser.email)
+    );
+  });
+
+  const [isAuthInitializing, setIsAuthInitializing] = useState(!initialDirectUser);
   const [authInitializationError, setAuthInitializationError] = useState<string | null>(null);
   const authResolutionIdRef = useRef(0);
-  const resolvedAuthUserIdRef = useRef<string | null>(null);
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const resolvedAuthUserIdRef = useRef<string | null>(
+    initialDirectUser ? (initialDirectUser.authUserId || String(initialDirectUser.id)) : null
+  );
+  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(Boolean(initialDirectUser));
 
-  const [currentUser, setCurrentUser] = useState<AlumniProfile>(DEFAULT_BLANK_USER);
+  const [currentUser, setCurrentUser] = useState<AlumniProfile>(() => initialDirectUser || DEFAULT_BLANK_USER);
 
   // Restore session; if email confirmation is disabled/bypassed, direct authenticated user is restored.
   useEffect(() => {
@@ -141,30 +153,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             directUser.role === 'admin' ||
             SUPER_ADMIN_EMAILS.some((e) => e.toLowerCase() === cleanEmail);
 
-          if (isSuperAdmin) {
-            resolvedAuthUserIdRef.current = directUser.authUserId || 'super-admin-nurul';
-            const adminUser: AlumniProfile = {
-              ...directUser,
-              role: 'admin',
-              verificationStatus: 'verified',
-            };
-            setCurrentUser(adminUser);
-            setIsAdminUser(true);
-            setIsLoggedIn(true);
-            setAuthInitializationError(null);
-            setIsAuthInitializing(false);
-            return;
-          }
-
           resolvedAuthUserIdRef.current = directUser.authUserId || String(directUser.id);
-          setCurrentUser(directUser);
-          setIsAdminUser(directUser.role === 'admin');
+          const effectiveProfile: AlumniProfile = {
+            ...directUser,
+            role: isSuperAdmin ? 'admin' : (directUser.role || 'member'),
+            verificationStatus: isSuperAdmin ? 'verified' : (directUser.verificationStatus || 'unverified'),
+          };
+          setCurrentUser(effectiveProfile);
+          setIsAdminUser(isSuperAdmin);
           setIsLoggedIn(true);
           setAuthInitializationError(null);
           setIsAuthInitializing(false);
           return;
         }
 
+        // Only log out if there is NO stored directUser either
         resolvedAuthUserIdRef.current = null;
         inMemorySupabaseToken = null;
         setSupabaseToken(null);
@@ -176,22 +179,56 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      if (resolvedAuthUserIdRef.current !== session.user.id) {
-        resolvedAuthUserIdRef.current = null;
-        setIsAdminUser(false);
-        setCurrentUser(DEFAULT_BLANK_USER);
-        setIsLoggedIn(false);
+      // Session exists: do NOT proactively wipe currentUser or set isLoggedIn(false)
+      if (session.access_token) {
+        inMemorySupabaseToken = session.access_token;
+        setSupabaseToken(session.access_token);
       }
-
-      inMemorySupabaseToken = session.access_token;
-      setSupabaseToken(session.access_token);
       setAuthInitializationError(null);
 
       try {
-        const profile = await getOrCreateSupabaseProfile(session.user);
+        let profile = await getOrCreateSupabaseProfile(session.user);
         if (!active || requestId !== authResolutionIdRef.current) return;
+
         if (!profile) {
-          throw new Error('The authenticated alumni profile could not be loaded.');
+          const directUser = getDirectAuthUser();
+          if (directUser) {
+            profile = directUser;
+          } else {
+            const rawBatch = Number((session.user.user_metadata as any)?.batch_year) || 25;
+            const normalizedBatch = rawBatch > 1900 ? rawBatch - 1991 : (rawBatch > 0 && rawBatch <= 35 ? rawBatch : 25);
+            profile = {
+              id: Number(session.user.id.replace(/[^0-9]/g, '').slice(0, 10)) || Date.now(),
+              userId: Number(session.user.id.replace(/[^0-9]/g, '').slice(0, 10)) || Date.now(),
+              authUserId: session.user.id,
+              fullName:
+                (session.user.user_metadata as any)?.full_name ||
+                (session.user.user_metadata as any)?.name ||
+                session.user.email?.split('@')[0] ||
+                (session.user.phone ? `Doctor (${session.user.phone})` : 'SZMC Doctor'),
+              avatarUrl: (session.user.user_metadata as any)?.avatar_url || '/assets/aistudio/images__1__2778177d.png',
+              batchYear: normalizedBatch,
+              academicStream: 'MBBS',
+              academicGroup: null,
+              section: 'MBBS',
+              verificationStatus: 'unverified',
+              vouchesCount: 0,
+              vouchTargetCount: 2,
+              profession: 'Medical Doctor / Physician',
+              position: 'Physician',
+              institution: 'Shaheed Ziaur Rahman Medical College Hospital',
+              specialty: ['Internal Medicine'],
+              degree: ['MBBS'],
+              city: 'Bogura',
+              country: 'Bangladesh',
+              email: session.user.email,
+              phone: session.user.phone,
+              role: 'member',
+              isPublic: true,
+              online: true,
+              badges: ['SZMCian'],
+            };
+          }
         }
 
         resolvedAuthUserIdRef.current = session.user.id;
@@ -227,7 +264,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setIsLoggedIn(true);
         } else {
           setAuthInitializationError(
-            'Your Supabase session is still active, but your alumni profile could not be loaded. Refresh this page to retry.'
+            'Your session is active, but your profile had a transient load error. Refreshing shortly.'
           );
         }
       } finally {
@@ -259,10 +296,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    } = supabase.auth.onAuthStateChange((event, session) => {
       authEventReceived = true;
       const requestId = ++authResolutionIdRef.current;
-      // Supabase Auth callbacks must return before profile queries run.
+      // Only clear credentials if user explicitly initiated sign out
+      if (event === 'SIGNED_OUT') {
+        clearDirectAuthUser();
+        resolvedAuthUserIdRef.current = null;
+        setCurrentUser(DEFAULT_BLANK_USER);
+        setIsLoggedIn(false);
+        setIsAdminUser(false);
+        setSupabaseToken(null);
+        setIsAuthInitializing(false);
+        return;
+      }
       window.setTimeout(() => {
         void applySession(session, requestId);
       }, 0);
@@ -270,7 +317,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     // Safety fallback: Never leave isAuthInitializing true for more than 1 second
     const initSafetyTimer = window.setTimeout(() => {
-      if (active && !authEventReceived) {
+      if (active) {
         setIsAuthInitializing(false);
       }
     }, 1000);
@@ -279,14 +326,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       .getSession()
       .then(({ data: { session }, error }) => {
         clearTimeout(initSafetyTimer);
-        if (authEventReceived) return;
         if (error) throw error;
-        const requestId = ++authResolutionIdRef.current;
-        void applySession(session, requestId);
+        if (session) {
+          const requestId = ++authResolutionIdRef.current;
+          void applySession(session, requestId);
+        } else if (!initialDirectUser) {
+          setIsAuthInitializing(false);
+        }
       })
       .catch((err) => {
         clearTimeout(initSafetyTimer);
-        if (!active || authEventReceived) return;
+        if (!active) return;
         console.warn('Supabase getSession warning:', err);
         setIsAuthInitializing(false);
       });
@@ -545,6 +595,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             setCurrentUser(fallbackJson.profile);
             setIsAdminUser(fallbackJson.profile.role === 'admin');
             setIsLoggedIn(true);
+            saveDirectAuthUser(fallbackJson.profile);
             return true;
           } else if (!fallbackRes.ok && fallbackJson?.error) {
             throw new Error(fallbackJson.error);
@@ -682,6 +733,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setCurrentUser(profile);
       setIsAdminUser(profile.role === 'admin');
       setIsLoggedIn(true);
+      saveDirectAuthUser(profile);
       return true;
     }
 
@@ -719,6 +771,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setCurrentUser(fallbackProfile);
     setIsAdminUser(false);
     setIsLoggedIn(true);
+    saveDirectAuthUser(fallbackProfile);
     return true;
   };
 
@@ -761,6 +814,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setCurrentUser(profile);
         setIsAdminUser(profile.role === 'admin');
         setIsLoggedIn(true);
+        saveDirectAuthUser(profile);
       }
     }
     return true;
@@ -987,7 +1041,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     }
 
-    setCurrentUser((prev) => ({ ...prev, ...updated, phone: cleanPhone ?? prev.phone }));
+    setCurrentUser((prev) => {
+      const nextUser = { ...prev, ...updated, phone: cleanPhone ?? prev.phone };
+      saveDirectAuthUser(nextUser);
+      return nextUser;
+    });
     if (isSupabaseConfigured && currentUser.authUserId) {
       try {
         const updatePayload: Record<string, any> = {

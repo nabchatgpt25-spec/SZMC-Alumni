@@ -770,8 +770,8 @@ function saveServerSiteConfig(patch: any): any {
   return updated;
 }
 
-// Get Active Institutional Site Configuration
-app.get('/api/admin/site-config', async (_req: Request, res: Response) => {
+// Get Active Institutional Site Configuration (Accessible to all alumni and visitors)
+app.get(['/api/site-config', '/api/admin/site-config'], async (_req: Request, res: Response) => {
   try {
     const config = loadServerSiteConfig();
     return res.json({ success: true, config });
@@ -1055,30 +1055,112 @@ app.get('/api/stream-groups', rateLimitGuard(120, 60_000), async (_req: Request,
 // In-memory resilient fallback post store for zero-downtime posting
 const memoryPostsStore: any[] = [];
 
-// Quad Feed Posts - Resilient Server Proxy
+// ---------------------------------------------------------------------------
+// REAL-TIME FEED SSE STREAM & BROADCASTING
+// ---------------------------------------------------------------------------
+const feedClients = new Set<Response>();
+
+app.get('/api/feed/stream', (req: Request, res: Response) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.flushHeaders?.();
+
+  feedClients.add(res);
+
+  // Send initial connected heartbeat
+  res.write(`data: ${JSON.stringify({ type: 'CONNECTED', timestamp: Date.now() })}\n\n`);
+
+  req.on('close', () => {
+    feedClients.delete(res);
+  });
+});
+
+function broadcastFeedEvent(event: any) {
+  const data = `data: ${JSON.stringify(event)}\n\n`;
+  for (const client of feedClients) {
+    try {
+      client.write(data);
+    } catch {
+      feedClients.delete(client);
+    }
+  }
+}
+
+app.post('/api/feed/broadcast', rateLimitGuard(60, 60_000), (req: Request, res: Response) => {
+  const payload = req.body;
+  if (payload) {
+    broadcastFeedEvent(payload);
+  }
+  res.json({ success: true });
+});
+
+// Quad Feed Posts - Resilient Server Proxy with Real-Time Broadcasting
 app.get('/api/posts', rateLimitGuard(120, 60_000), async (req: Request, res: Response) => {
   try {
     const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 50));
-    const { data: posts } = await supabaseServer
-      .from('posts')
-      .select(`
-        id,
-        author_id,
-        content,
-        category,
-        images,
-        videos,
-        likes_count,
-        comments_count,
-        is_pinned,
-        is_edited,
-        created_at
-      `)
-      .eq('is_deleted', false)
-      .order('created_at', { ascending: false })
-      .limit(limit);
+    let dbPosts: any[] = [];
+    if (isSupabaseServerConfigured) {
+      try {
+        const { data: posts } = await supabaseServer
+          .from('posts')
+          .select(`
+            id,
+            author_id,
+            content,
+            category,
+            images,
+            videos,
+            linked_url,
+            link_metadata,
+            likes_count,
+            comments_count,
+            is_pinned,
+            is_edited,
+            created_at,
+            author:alumni_profiles!posts_author_id_fkey (
+              id,
+              full_name,
+              avatar_url,
+              batch_year,
+              verification_status,
+              profession,
+              institution
+            )
+          `)
+          .eq('is_deleted', false)
+          .order('created_at', { ascending: false })
+          .limit(limit);
 
-    const dbPosts = posts || [];
+        if (posts && Array.isArray(posts)) {
+          dbPosts = posts.map((p: any) => {
+            const author = p.author || {};
+            return {
+              ...p,
+              userId: p.author_id,
+              fullName: author.full_name || 'SZMC Alumnus',
+              avatarUrl: author.avatar_url || '/assets/aistudio/images__1__2778177d.png',
+              batchYear: author.batch_year || 20,
+              author: author.full_name || 'SZMC Alumnus',
+              authorAvatar: author.avatar_url || '/assets/aistudio/images__1__2778177d.png',
+              authorBatch: author.batch_year || 20,
+              verified: author.verification_status === 'verified',
+            };
+          });
+        }
+      } catch (dbErr) {
+        // Fallback without join if foreign key alias not present
+        const { data: simplePosts } = await supabaseServer
+          .from('posts')
+          .select('*')
+          .eq('is_deleted', false)
+          .order('created_at', { ascending: false })
+          .limit(limit);
+        dbPosts = simplePosts || [];
+      }
+    }
+
     const combined = [...memoryPostsStore, ...dbPosts.filter((p: any) => !memoryPostsStore.some((m) => m.id === p.id))];
     return res.json({ posts: combined });
   } catch (err: any) {
@@ -1100,19 +1182,25 @@ app.post('/api/posts', rateLimitGuard(40, 60_000), async (req: Request, res: Res
       return res.status(400).json({ error: 'Post must have content, photos, or a link' });
     }
 
-    const { data: author } = await supabaseServer
-      .from('alumni_profiles')
-      .select('id, full_name, avatar_url, batch_year, verification_status, profession, institution')
-      .eq('id', authorId)
-      .maybeSingle();
+    let authorProfile: any = null;
+    if (isSupabaseServerConfigured) {
+      const { data: author } = await supabaseServer
+        .from('alumni_profiles')
+        .select('id, full_name, avatar_url, batch_year, verification_status, profession, institution')
+        .eq('id', authorId)
+        .maybeSingle();
+      if (author) authorProfile = author;
+    }
 
-    const authorProfile = author || {
-      id: authorId,
-      full_name: 'SZMC Alumnus',
-      avatar_url: '/assets/aistudio/images__1__2778177d.png',
-      batch_year: 20,
-      verification_status: 'verified',
-    };
+    if (!authorProfile) {
+      authorProfile = {
+        id: authorId,
+        full_name: 'SZMC Alumnus',
+        avatar_url: '/assets/aistudio/images__1__2778177d.png',
+        batch_year: 20,
+        verification_status: 'verified',
+      };
+    }
 
     const insertPayload: any = {
       author_id: authorId,
@@ -1125,25 +1213,32 @@ app.post('/api/posts', rateLimitGuard(40, 60_000), async (req: Request, res: Res
     if (linked_url) insertPayload.linked_url = linked_url;
     if (link_metadata) insertPayload.link_metadata = link_metadata;
 
-    const { data: newPost, error } = await supabaseServer
-      .from('posts')
-      .insert(insertPayload)
-      .select(`
-        id,
-        author_id,
-        content,
-        category,
-        images,
-        videos,
-        linked_url,
-        link_metadata,
-        likes_count,
-        comments_count,
-        is_pinned,
-        is_edited,
-        created_at
-      `)
-      .single();
+    let newPost: any = null;
+    let error: any = null;
+
+    if (isSupabaseServerConfigured) {
+      const res = await supabaseServer
+        .from('posts')
+        .insert(insertPayload)
+        .select(`
+          id,
+          author_id,
+          content,
+          category,
+          images,
+          videos,
+          linked_url,
+          link_metadata,
+          likes_count,
+          comments_count,
+          is_pinned,
+          is_edited,
+          created_at
+        `)
+        .single();
+      newPost = res.data;
+      error = res.error;
+    }
 
     if (error || !newPost) {
       console.warn('Supabase post insert fallback to memory store:', error?.message);
@@ -1170,7 +1265,16 @@ app.post('/api/posts', rateLimitGuard(40, 60_000), async (req: Request, res: Res
         authorBatch: authorProfile.batch_year || 20,
       };
       memoryPostsStore.unshift(fallbackPost);
-      return res.status(201).json({ post: fallbackPost });
+
+      broadcastFeedEvent({
+        type: 'POST_CREATED',
+        table: 'posts',
+        eventType: 'INSERT',
+        post: fallbackPost,
+        newRecord: fallbackPost,
+      });
+
+      return res.status(201).json({ success: true, post: fallbackPost });
     }
 
     const createdPost = {
@@ -1185,14 +1289,101 @@ app.post('/api/posts', rateLimitGuard(40, 60_000), async (req: Request, res: Res
     };
     memoryPostsStore.unshift(createdPost);
 
-    return res.status(201).json({ post: createdPost });
+    broadcastFeedEvent({
+      type: 'POST_CREATED',
+      table: 'posts',
+      eventType: 'INSERT',
+      post: createdPost,
+      newRecord: newPost,
+    });
+
+    return res.status(201).json({ success: true, post: createdPost });
   } catch (err: any) {
     return res.status(500).json({ error: err.message || 'Failed to create post' });
   }
 });
 
+// Post Likes & Reactions - High Performance Realtime Supabase & In-Memory Storage
+app.post('/api/posts/:id/react', rateLimitGuard(120, 60_000), async (req: Request, res: Response) => {
+  try {
+    const postId = Number(req.params.id);
+    const userId = Number(req.body.userId || req.body.user_id || 1);
+    const reaction = req.body.reaction ? String(req.body.reaction) : null; // 'like' | 'love' | 'care' | 'haha' | 'wow' | 'sad' | 'angry' | null
+
+    let likesCount = 0;
+    let liked = Boolean(reaction);
+
+    if (isSupabaseServerConfigured) {
+      try {
+        if (!reaction) {
+          // Un-react / Unlike
+          await supabaseServer.from('post_likes').delete().eq('post_id', postId).eq('user_id', userId);
+        } else {
+          // Upsert reaction
+          const { error: upsertErr } = await supabaseServer.from('post_likes').upsert({
+            post_id: postId,
+            user_id: userId,
+            reaction,
+          });
+          if (upsertErr) {
+            // Fallback if reaction column not present
+            await supabaseServer.from('post_likes').upsert({
+              post_id: postId,
+              user_id: userId,
+            });
+          }
+        }
+
+        const { count } = await supabaseServer
+          .from('post_likes')
+          .select('id', { count: 'exact', head: true })
+          .eq('post_id', postId);
+
+        likesCount = typeof count === 'number' ? count : 0;
+        await supabaseServer.from('posts').update({ likes_count: likesCount }).eq('id', postId);
+      } catch (err) {
+        console.warn('Supabase post react notice:', err);
+      }
+    }
+
+    const memPost = memoryPostsStore.find((p) => p.id === postId);
+    if (memPost) {
+      if (!memPost.reactionsSummary) memPost.reactionsSummary = {};
+      if (reaction) {
+        memPost.reactionsSummary[reaction] = (memPost.reactionsSummary[reaction] || 0) + 1;
+        memPost.likes_count = (memPost.likes_count || 0) + 1;
+      } else {
+        memPost.likes_count = Math.max(0, (memPost.likes_count || 1) - 1);
+      }
+      memPost.likes = memPost.likes_count;
+      memPost.liked = liked;
+      memPost.likedByMe = liked;
+      memPost.userReaction = reaction;
+    }
+
+    const finalLikesCount = typeof likesCount === 'number' && likesCount > 0 ? likesCount : (memPost?.likes_count || (liked ? 1 : 0));
+    const reactionsSummary = memPost?.reactionsSummary || (reaction ? { [reaction]: 1 } : {});
+
+    broadcastFeedEvent({
+      type: 'POST_REACTED',
+      table: 'post_likes',
+      eventType: 'UPDATE',
+      postId,
+      userId,
+      liked,
+      reaction,
+      likesCount: finalLikesCount,
+      reactionsSummary,
+    });
+
+    return res.json({ success: true, liked, reaction, likesCount: finalLikesCount, reactionsSummary });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to update reaction' });
+  }
+});
+
 // Post Likes - High Performance Supabase Storage
-app.post('/api/posts/:id/like', rateLimitGuard(60, 60_000), async (req: Request, res: Response) => {
+app.post('/api/posts/:id/like', rateLimitGuard(120, 60_000), async (req: Request, res: Response) => {
   try {
     const postId = Number(req.params.id);
     const userId = Number(req.body.userId || req.body.user_id || 1);
@@ -1213,7 +1404,7 @@ app.post('/api/posts/:id/like', rateLimitGuard(60, 60_000), async (req: Request,
           await supabaseServer.from('post_likes').delete().eq('id', existing.id);
           liked = false;
         } else {
-          await supabaseServer.from('post_likes').insert({ post_id: postId, user_id: userId });
+          await supabaseServer.from('post_likes').insert({ post_id: postId, user_id: userId, reaction: 'like' });
           liked = true;
         }
 
@@ -1222,7 +1413,7 @@ app.post('/api/posts/:id/like', rateLimitGuard(60, 60_000), async (req: Request,
           .select('id', { count: 'exact', head: true })
           .eq('post_id', postId);
 
-        likesCount = count || 0;
+        likesCount = typeof count === 'number' ? count : 0;
         await supabaseServer.from('posts').update({ likes_count: likesCount }).eq('id', postId);
       } catch (err) {
         console.warn('Supabase post_like toggle notice:', err);
@@ -1236,30 +1427,63 @@ app.post('/api/posts/:id/like', rateLimitGuard(60, 60_000), async (req: Request,
       memPost.likes = memPost.likes_count;
       memPost.liked = liked;
       memPost.likedByMe = liked;
+      memPost.userReaction = liked ? 'like' : null;
     }
 
-    return res.json({ success: true, liked, likesCount: likesCount || memPost?.likes_count || (liked ? 1 : 0) });
+    const finalLikesCount = likesCount || memPost?.likes_count || (liked ? 1 : 0);
+
+    broadcastFeedEvent({
+      type: 'POST_LIKED',
+      table: 'post_likes',
+      eventType: 'UPDATE',
+      postId,
+      userId,
+      liked,
+      likesCount: finalLikesCount,
+      reaction: liked ? 'like' : null,
+    });
+
+    return res.json({ success: true, liked, likesCount: finalLikesCount });
   } catch (err: any) {
     return res.status(500).json({ error: err.message || 'Failed to toggle like' });
   }
 });
 
-// Post Comments - Dual Column Supabase Storage (author_id & user_id)
-app.post('/api/posts/:id/comment', rateLimitGuard(60, 60_000), async (req: Request, res: Response) => {
+// Post Comments - Realtime Cross-Alumni Broadcast with Full Author Details
+app.post('/api/posts/:id/comment', rateLimitGuard(90, 60_000), async (req: Request, res: Response) => {
   try {
     const postId = Number(req.params.id);
     const userId = Number(req.body.userId || req.body.user_id || req.body.author_id || 1);
     const content = String(req.body.content || '').trim();
+    let fullName = String(req.body.fullName || req.body.authorName || '').trim();
+    let avatarUrl = String(req.body.avatarUrl || req.body.authorAvatar || '').trim();
 
     if (!content) {
       return res.status(400).json({ error: 'Comment content cannot be empty' });
     }
 
+    // Resolve author name and avatar if not provided
+    if ((!fullName || !avatarUrl) && isSupabaseServerConfigured) {
+      try {
+        const { data: profile } = await supabaseServer
+          .from('alumni_profiles')
+          .select('full_name, avatar_url')
+          .eq('id', userId)
+          .maybeSingle();
+        if (profile) {
+          if (!fullName) fullName = profile.full_name || 'SZMC Colleague';
+          if (!avatarUrl) avatarUrl = profile.avatar_url || '/assets/aistudio/images__1__2778177d.png';
+        }
+      } catch {}
+    }
+
+    if (!fullName) fullName = 'SZMC Colleague';
+    if (!avatarUrl) avatarUrl = '/assets/aistudio/images__1__2778177d.png';
+
     let insertedComment: any = null;
 
     if (isSupabaseServerConfigured) {
       try {
-        // Try with user_id first, fallback to author_id
         const payload: any = { post_id: postId, content };
         payload.user_id = userId;
         payload.author_id = userId;
@@ -1273,7 +1497,6 @@ app.post('/api/posts/:id/comment', rateLimitGuard(60, 60_000), async (req: Reque
         if (!error && data) {
           insertedComment = data;
         } else {
-          // If inserting both failed due to strict column check, try user_id alone then author_id alone
           const try1 = await supabaseServer.from('post_comments').insert({ post_id: postId, user_id: userId, content }).select('*').single();
           if (!try1.error && try1.data) {
             insertedComment = try1.data;
@@ -1283,7 +1506,6 @@ app.post('/api/posts/:id/comment', rateLimitGuard(60, 60_000), async (req: Reque
           }
         }
 
-        // Increment comments_count on post
         const { count } = await supabaseServer
           .from('post_comments')
           .select('id', { count: 'exact', head: true })
@@ -1297,36 +1519,82 @@ app.post('/api/posts/:id/comment', rateLimitGuard(60, 60_000), async (req: Reque
       }
     }
 
-    if (!insertedComment) {
-      insertedComment = {
-        id: Date.now(),
-        post_id: postId,
-        user_id: userId,
-        author_id: userId,
-        content,
-        created_at: new Date().toISOString(),
-      };
-    }
+    const commentId = Number(insertedComment?.id) || Date.now();
+    const formattedComment = {
+      id: commentId,
+      postId,
+      userId,
+      fullName,
+      avatarUrl,
+      content,
+      likesCount: 0,
+      likedByMe: false,
+      createdAt: insertedComment?.created_at || 'Just now',
+      replies: [],
+    };
 
     const memPost = memoryPostsStore.find((p) => p.id === postId);
     if (memPost) {
       memPost.comments_count = (memPost.comments_count || 0) + 1;
       if (!Array.isArray(memPost.comments)) memPost.comments = [];
-      memPost.comments.push({
-        id: insertedComment.id,
-        postId,
-        userId,
-        fullName: 'You',
-        avatarUrl: '/assets/aistudio/images__1__2778177d.png',
-        content,
-        likesCount: 0,
-        createdAt: insertedComment.created_at || new Date().toISOString(),
-      });
+      memPost.comments.push(formattedComment);
     }
 
-    return res.status(201).json({ success: true, comment: insertedComment });
+    // Broadcast full formatted comment with author info to all connected alumni
+    broadcastFeedEvent({
+      type: 'POST_COMMENTED',
+      table: 'post_comments',
+      eventType: 'INSERT',
+      postId,
+      userId,
+      comment: formattedComment,
+      newRecord: formattedComment,
+    });
+
+    return res.status(201).json({ success: true, comment: formattedComment });
   } catch (err: any) {
     return res.status(500).json({ error: err.message || 'Failed to add comment' });
+  }
+});
+
+// Post Comment Replies - Realtime Cross-Alumni Broadcast
+app.post('/api/posts/:id/reply', rateLimitGuard(90, 60_000), async (req: Request, res: Response) => {
+  try {
+    const postId = Number(req.params.id);
+    const parentCommentId = Number(req.body.parentCommentId);
+    const userId = Number(req.body.userId || 1);
+    const content = String(req.body.content || '').trim();
+    const fullName = String(req.body.fullName || 'SZMC Colleague').trim();
+    const avatarUrl = String(req.body.avatarUrl || '/assets/aistudio/images__1__2778177d.png').trim();
+
+    if (!content) {
+      return res.status(400).json({ error: 'Reply content cannot be empty' });
+    }
+
+    const reply = {
+      id: Date.now(),
+      postId,
+      userId,
+      fullName,
+      avatarUrl,
+      content,
+      likesCount: 0,
+      likedByMe: false,
+      createdAt: 'Just now',
+    };
+
+    broadcastFeedEvent({
+      type: 'POST_REPLY',
+      table: 'post_comments',
+      eventType: 'UPDATE',
+      postId,
+      parentCommentId,
+      reply,
+    });
+
+    return res.status(201).json({ success: true, reply });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to add reply' });
   }
 });
 
@@ -3452,12 +3720,14 @@ app.get([
   const candidates = [
     path.resolve(__dirname, 'public', 'szmc-alumni-dist.zip'),
     path.resolve(__dirname, 'szmc-alumni-dist.zip'),
+    path.resolve(__dirname, 'public', 'dist.zip'),
+    path.resolve(__dirname, 'dist.zip'),
     path.resolve(__dirname, 'public', 'szmc-alumni-dist.tar.gz'),
     path.resolve(__dirname, 'szmc-alumni-dist.tar.gz'),
   ];
   for (const c of candidates) {
     if (existsSync(c)) {
-      return res.download(c, path.basename(c));
+      return res.download(c, 'szmc-alumni-portal-dist.zip');
     }
   }
   return res.status(404).send('Production dist archive not found. Please build first.');

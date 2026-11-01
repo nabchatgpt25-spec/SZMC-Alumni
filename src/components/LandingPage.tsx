@@ -36,6 +36,7 @@ import { VerificationExplainerModal } from './landing/VerificationExplainerModal
 import { BloodNeededNowSection } from './landing/BloodNeededNowSection';
 import { LiquidGlassLoginBar } from './landing/LiquidGlassLoginBar';
 import { CursorSpotlight, MagneticWrap } from './motion/CinematicMotion';
+import { useSiteConfig } from '../services/siteConfigService';
 
 interface LandingPageProps {
   onOpenLogin: () => void;
@@ -52,6 +53,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   isAuthModalOpen = false,
   onReplaySplash,
 }) => {
+  const { config } = useSiteConfig();
   // Modal states for interactive preview
   const [previewAlumnus, setPreviewAlumnus] = useState<AlumniProfile | null>(null);
   const [previewBatch, setPreviewBatch] = useState<BatchSummary | null>(null);
@@ -235,44 +237,64 @@ export const LandingPage: React.FC<LandingPageProps> = ({
       </header>
 
       {/* Main Social Network Home Content */}
-      <main>
-        {/* 3. Hero Section: The Digital Quad (Signature Alumni Social Network Style) */}
-        <HeroSection
-          alumniList={ALUMNI_PROFILES}
-          onOpenLogin={onOpenLogin}
-          onOpenRegister={onOpenRegister}
-          onSelectAlumnus={(alumnus) => setPreviewAlumnus(alumnus)}
-          onScrollToBatches={() => scrollToSection('batches-section')}
-          onOpenVerificationModal={() => setIsVerificationModalOpen(true)}
-        />
+      <main className="relative">
+        {/* Optional Custom Full-Page Background */}
+        {config.homepageCustomBackground && (
+          <div
+            className="fixed inset-0 pointer-events-none z-0 bg-cover bg-center opacity-10"
+            style={{ backgroundImage: `url(${config.homepageCustomBackground})` }}
+          />
+        )}
+
+        {/* 3. Hero Section: The Digital Quad */}
+        {config.showHeroSection !== false && (
+          <HeroSection
+            alumniList={ALUMNI_PROFILES}
+            onOpenLogin={onOpenLogin}
+            onOpenRegister={onOpenRegister}
+            onSelectAlumnus={(alumnus) => setPreviewAlumnus(alumnus)}
+            onScrollToBatches={() => scrollToSection('batches-section')}
+            onOpenVerificationModal={() => setIsVerificationModalOpen(true)}
+          />
+        )}
 
         {/* 4. Compact Emergency Blood Network Section: "Blood Needed Now" */}
-        <BloodNeededNowSection
-          variant="landing"
-          onNavigateToBloodNetwork={() => onNavigate('emergency')}
-        />
+        {config.showBloodNeededSection !== false && (
+          <BloodNeededNowSection
+            variant="landing"
+            onNavigateToBloodNetwork={() => onNavigate('emergency')}
+          />
+        )}
 
         {/* 5. Batch Lounges Grid (01 to 76) with Era Filters */}
-        <BatchLoungesGrid
-          batches={BATCH_LIST}
-          onSelectBatch={handleSelectBatch}
-          onOpenRegister={onOpenRegister}
-        />
+        {config.showBatchesSection !== false && (
+          <BatchLoungesGrid
+            batches={BATCH_LIST}
+            onSelectBatch={handleSelectBatch}
+            onOpenRegister={onOpenRegister}
+          />
+        )}
 
         {/* 6. Spotlight on Distinguished Mentors & Leaders */}
-        <div id="featured-alumni-section">
-          <FeaturedAlumniSection
-            alumniList={ALUMNI_PROFILES}
-            onSelectAlumnus={(alumnus) => setPreviewAlumnus(alumnus)}
-            onExploreDirectory={() => onNavigate('directory')}
-          />
-        </div>
+        {config.showFeaturedAlumniSection !== false && (
+          <div id="featured-alumni-section">
+            <FeaturedAlumniSection
+              alumniList={ALUMNI_PROFILES}
+              onSelectAlumnus={(alumnus) => setPreviewAlumnus(alumnus)}
+              onExploreDirectory={() => onNavigate('directory')}
+            />
+          </div>
+        )}
 
         {/* 7. Campus Nostalgia & Heritage Photo Gallery */}
-        <GalleryPreviewSection onExploreGallery={() => onNavigate('gallery')} />
+        {config.showGallerySection !== false && (
+          <GalleryPreviewSection onExploreGallery={() => onNavigate('gallery')} />
+        )}
 
         {/* 8. FAQs tailored for the social network & verification */}
-        <FAQSection onOpenRegister={onOpenRegister} />
+        {config.showFaqSection !== false && (
+          <FAQSection onOpenRegister={onOpenRegister} />
+        )}
       </main>
 
       {/* 11. Clean Institutional Footer */}

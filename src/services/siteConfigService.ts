@@ -60,6 +60,19 @@ export interface SiteConfig {
   heroSubtitle: string;
   heroBackgroundTexture: 'Mesh' | 'Aurora' | 'Vignette' | 'Campus Photo';
   heroOverlayOpacity: number; // 0 to 100
+  heroBackgroundImageUrl?: string; // Custom or preset hero background image
+  homepageCustomBackground?: string; // Optional full page background image
+  heroBannerBadgeText?: string;
+  heroCtaPrimaryText?: string;
+  heroCtaSecondaryText?: string;
+
+  // 2b. Homepage Section Visibility Controls
+  showHeroSection?: boolean;
+  showBloodNeededSection?: boolean;
+  showBatchesSection?: boolean;
+  showFeaturedAlumniSection?: boolean;
+  showGallerySection?: boolean;
+  showFaqSection?: boolean;
 
   // 3. Live Emergency Banner & Ticker
   liveTickerEnabled: boolean;
@@ -134,8 +147,19 @@ export const FACTORY_DEFAULT_SITE_CONFIG: SiteConfig = {
   heroHighlight: 'Shaheed Ziaur Rahman Medical College',
   heroSuffix: 'Alumni Worldwide',
   heroSubtitle: 'Uniting 35 MBBS batches, world-class specialists, clinical researchers, and healthcare changemakers across the globe.',
-  heroBackgroundTexture: 'Mesh',
+  heroBackgroundTexture: 'Campus Photo',
   heroOverlayOpacity: 65,
+  heroBackgroundImageUrl: '/assets/szmc/szmc_day_1.jpg',
+  homepageCustomBackground: '',
+  heroBannerBadgeText: '35 MBBS Batches • Silimpur, Bogura • Estd. 1992',
+  heroCtaPrimaryText: 'Alumni Login',
+  heroCtaSecondaryText: 'Join the SZMC Alumni Family',
+  showHeroSection: true,
+  showBloodNeededSection: true,
+  showBatchesSection: true,
+  showFeaturedAlumniSection: true,
+  showGallerySection: true,
+  showFaqSection: true,
 
   liveTickerEnabled: true,
   liveTickerUrgency: 'emergency',

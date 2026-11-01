@@ -610,8 +610,15 @@ export async function createFeedPostInDb(params: {
           body: JSON.stringify(insertPayload),
         });
         const apiJson = await apiRes.json();
-        if (apiRes.ok && apiJson?.id) {
-          const postItem = mapRowToFeedPost({ ...apiJson, author: profileRow }, realAuthorId);
+        const serverPost = apiJson?.post || (apiJson?.id ? apiJson : null);
+        if (apiRes.ok && serverPost?.id) {
+          const postItem = mapRowToFeedPost({ ...serverPost, author: profileRow }, realAuthorId);
+          // Broadcast real-time to all connected alumni
+          void fetch('/api/feed/broadcast', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ type: 'POST_CREATED', post: postItem, newRecord: serverPost }),
+          }).catch(() => {});
           return { success: true, post: postItem };
         }
       } catch (fallbackErr) {
@@ -640,6 +647,11 @@ export async function createFeedPostInDb(params: {
     }
 
     const postItem = mapRowToFeedPost({ ...insertedRow, author: profileRow }, realAuthorId);
+    void fetch('/api/feed/broadcast', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'POST_CREATED', post: postItem, newRecord: insertedRow }),
+    }).catch(() => {});
     return { success: true, post: postItem };
   } catch (err: any) {
     console.error('Failed to insert post in Supabase:', err);
@@ -647,14 +659,71 @@ export async function createFeedPostInDb(params: {
   }
 }
 
+export async function reactToPostInDb(
+  postId: number,
+  userId: number,
+  reaction: string | null
+): Promise<{ success: boolean; liked: boolean; reaction: string | null; likesCount: number; reactionsSummary?: any }> {
+  try {
+    const res = await fetch(`/api/posts/${postId}/react`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId, reaction }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return {
+        success: true,
+        liked: data.liked,
+        reaction: data.reaction,
+        likesCount: data.likesCount,
+        reactionsSummary: data.reactionsSummary,
+      };
+    }
+  } catch (err) {
+    console.warn('Realtime /api/posts/react fetch notice:', err);
+  }
+
+  // Supabase fallback
+  if (isSupabaseConfigured) {
+    try {
+      if (!reaction) {
+        await supabase.from('post_likes').delete().eq('post_id', postId).eq('user_id', userId);
+        return { success: true, liked: false, reaction: null, likesCount: 0 };
+      } else {
+        await supabase.from('post_likes').upsert({ post_id: postId, user_id: userId, reaction });
+        return { success: true, liked: true, reaction, likesCount: 1 };
+      }
+    } catch {}
+  }
+  return { success: true, liked: Boolean(reaction), reaction, likesCount: reaction ? 1 : 0 };
+}
+
 export async function togglePostLikeInDb(
   postId: number,
   userId?: number
 ): Promise<{ liked: boolean; likesCount: number }> {
+  const targetUserId = userId && userId > 0 ? userId : 1;
+
+  // 1. Immediately trigger server-side realtime SSE broadcast to all active alumni
+  try {
+    const apiRes = await fetch(`/api/posts/${postId}/like`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: targetUserId }),
+    });
+    if (apiRes.ok) {
+      const apiData = await apiRes.json();
+      return { liked: apiData.liked, likesCount: apiData.likesCount };
+    }
+  } catch (err) {
+    console.warn('Direct /api/posts/:id/like broadcast notice:', err);
+  }
+
   if (!isSupabaseConfigured) return { liked: true, likesCount: 1 };
 
   try {
-    let likeUserId = userId && userId > 0 ? userId : null;
+    let likeUserId = targetUserId;
     const { data: authData } = await supabase.auth.getUser();
     const authUser = authData?.user;
     if (authUser) {
@@ -695,11 +764,34 @@ export async function addPostCommentInDb(params: {
   postId: number;
   userId?: number;
   content: string;
+  fullName?: string;
+  avatarUrl?: string;
 }): Promise<boolean> {
+  const targetUserId = params.userId && params.userId > 0 ? params.userId : 1;
+
+  // 1. Broadcast real-time comment immediately through Server-Sent Events to all alumni
+  try {
+    const apiRes = await fetch(`/api/posts/${params.postId}/comment`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId: targetUserId,
+        content: params.content,
+        fullName: params.fullName,
+        avatarUrl: params.avatarUrl,
+      }),
+    });
+    if (apiRes.ok) {
+      return true;
+    }
+  } catch (err) {
+    console.warn('Direct /api/posts/:id/comment broadcast notice:', err);
+  }
+
   if (!isSupabaseConfigured) return false;
 
   try {
-    let commentAuthorId = params.userId && params.userId > 0 ? params.userId : null;
+    let commentAuthorId = targetUserId;
     const { data: authData } = await supabase.auth.getUser();
     const authUser = authData?.user;
     if (authUser) {

@@ -136,6 +136,68 @@ class SupabaseRealtimeManager {
             this.setStatus('CLOSED');
           }
         });
+
+      // Resilient server-sent events connection for instant real-time cross-tab delivery
+      if (typeof window !== 'undefined' && typeof window.EventSource !== 'undefined') {
+        try {
+          const es = new EventSource('/api/feed/stream');
+          es.onmessage = (e) => {
+            try {
+              const data = JSON.parse(e.data);
+              if (data.type === 'POST_CREATED') {
+                const event: RealtimeFeedEvent = {
+                  table: 'posts',
+                  eventType: 'INSERT',
+                  newRecord: data.post || data.newRecord,
+                  oldRecord: null,
+                };
+                this.feedListeners.forEach((cb) => cb(event));
+              } else if (data.type === 'POST_LIKED' || data.type === 'POST_REACTED') {
+                const event: RealtimeFeedEvent = {
+                  table: 'post_likes',
+                  eventType: 'UPDATE',
+                  newRecord: {
+                    post_id: data.postId,
+                    postId: data.postId,
+                    user_id: data.userId,
+                    userId: data.userId,
+                    likes_count: data.likesCount,
+                    likesCount: data.likesCount,
+                    reaction: data.reaction,
+                    reactionsSummary: data.reactionsSummary,
+                    liked: data.liked,
+                  },
+                  oldRecord: null,
+                };
+                this.feedListeners.forEach((cb) => cb(event));
+              } else if (data.type === 'POST_COMMENTED') {
+                const event: RealtimeFeedEvent = {
+                  table: 'post_comments',
+                  eventType: 'INSERT',
+                  newRecord: data.comment,
+                  oldRecord: null,
+                };
+                this.feedListeners.forEach((cb) => cb(event));
+              } else if (data.type === 'POST_REPLY') {
+                const event: RealtimeFeedEvent = {
+                  table: 'post_comments',
+                  eventType: 'UPDATE',
+                  newRecord: {
+                    post_id: data.postId,
+                    postId: data.postId,
+                    parentCommentId: data.parentCommentId,
+                    reply: data.reply,
+                  },
+                  oldRecord: null,
+                };
+                this.feedListeners.forEach((cb) => cb(event));
+              }
+            } catch {}
+          };
+        } catch (esErr) {
+          console.warn('SSE feed stream notice:', esErr);
+        }
+      }
     } catch (err) {
       console.warn('Realtime feed subscription warning:', err);
     }

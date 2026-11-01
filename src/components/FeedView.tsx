@@ -44,7 +44,7 @@ import {
   Eye,
   ArrowRight,
 } from 'lucide-react';
-import { PostItem, PostComment } from '../types';
+import { PostItem, PostComment, ReactionType } from '../types';
 import { CreatePostModal } from './CreatePostModal';
 import { PostCard } from './PostCard';
 import { LinkPreview } from './LinkPreview';
@@ -74,11 +74,13 @@ import {
   fetchFeedPostsFromDb,
   createFeedPostInDb,
   togglePostLikeInDb,
+  reactToPostInDb,
   addPostCommentInDb,
   toggleSavePostInDb,
   editFeedPostInDb,
   deleteFeedPostInDb,
 } from '../services/supabaseService';
+import { supabase } from '../lib/supabase';
 import { realtimeManager } from '../services/supabaseRealtimeService';
 import { notifyPostLike, notifyPostComment } from '../utils/notificationService';
 

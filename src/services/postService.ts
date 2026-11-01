@@ -596,6 +596,13 @@ export async function createPost(params: {
  */
 export async function togglePostLike(postId: number, userId: number): Promise<boolean> {
   try {
+    // 1. Trigger realtime broadcast to all alumni
+    void fetch(`/api/posts/${postId}/like`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId }),
+    }).catch(() => {});
+
     const { data: existing } = await supabase
       .from('post_likes')
       .select('id')
@@ -609,7 +616,7 @@ export async function togglePostLike(postId: number, userId: number): Promise<bo
       return false;
     } else {
       // Liking
-      const { error: insErr } = await supabase.from('post_likes').insert({ post_id: postId, user_id: userId });
+      const { error: insErr } = await supabase.from('post_likes').insert({ post_id: postId, user_id: userId, reaction: 'like' });
       if (!insErr) {
         // Find post author to notify them directly via Supabase
         const { data: postData } = await supabase
@@ -648,14 +655,21 @@ export async function togglePostLike(postId: number, userId: number): Promise<bo
 }
 
 /**
- * Add post comment directly in Supabase.
+ * Add post comment directly in Supabase with realtime broadcast.
  * Sends a notification of type `post_comment` to the post author.
  */
-export async function addComment(postId: number, userId: number, content: string): Promise<boolean> {
+export async function addComment(postId: number, userId: number, content: string, fullName?: string, avatarUrl?: string): Promise<boolean> {
   const cleanContent = content.trim();
   if (!cleanContent) return false;
 
   try {
+    // 1. Broadcast comment instantly to all online alumni
+    void fetch(`/api/posts/${postId}/comment`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId, content: cleanContent, fullName, avatarUrl }),
+    }).catch(() => {});
+
     const { data: commentData, error: insErr } = await supabase
       .from('post_comments')
       .insert({
@@ -684,13 +698,7 @@ export async function addComment(postId: number, userId: number, content: string
       .maybeSingle();
 
     if (postData && postData.author_id && Number(postData.author_id) !== userId) {
-      const { data: commenterData } = await supabase
-        .from('alumni_profiles')
-        .select('full_name')
-        .eq('id', userId)
-        .maybeSingle();
-
-      const commenterName = commenterData?.full_name || 'An alumnus';
+      const commenterName = fullName || 'An alumnus';
       await supabase.from('notifications').insert({
         recipient_id: postData.author_id,
         actor_id: userId,

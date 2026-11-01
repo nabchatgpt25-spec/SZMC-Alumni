@@ -28,11 +28,35 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
   const prefersReducedMotion = useReducedMotion();
   const { config } = useSiteConfig();
 
+  const bgImage = config.heroBackgroundImageUrl;
+  const overlayOpacity = (config.heroOverlayOpacity ?? 65) / 100;
+  const hasBgImage = Boolean(bgImage && bgImage.trim().length > 0);
+
   return (
-    <section className="relative overflow-hidden pt-10 pb-14 sm:pt-16 sm:pb-20 lg:pt-20 lg:pb-24 bg-gradient-to-b from-blue-50/50 via-white to-slate-50/60 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950 select-none">
-      {/* Soft Ambient Pastel Glows */}
-      <div className="absolute top-0 left-6 sm:left-1/4 w-80 sm:w-96 h-80 sm:h-96 bg-blue-300/20 dark:bg-blue-600/10 rounded-full blur-3xl pointer-events-none" />
-      <div className="absolute top-1/4 right-4 sm:right-12 w-80 sm:w-96 h-80 sm:h-96 bg-amber-200/25 dark:bg-amber-600/10 rounded-full blur-3xl pointer-events-none" />
+    <section className="relative overflow-hidden pt-12 pb-16 sm:pt-20 sm:pb-24 lg:pt-24 lg:pb-28 select-none">
+      {/* 1. Full-Bleed Custom Hero Background Image */}
+      {hasBgImage ? (
+        <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden">
+          <img
+            src={bgImage}
+            alt="SZMC Campus Heritage"
+            className="w-full h-full object-cover object-center transform scale-105 transition-transform duration-1000"
+          />
+          {/* Configurable Darkness / Contrast Overlay */}
+          <div
+            className="absolute inset-0 bg-slate-950 transition-opacity duration-300"
+            style={{ opacity: overlayOpacity }}
+          />
+          {/* Subtle gradient vignette to blend cleanly with bottom content */}
+          <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-transparent to-black/60 pointer-events-none" />
+        </div>
+      ) : (
+        /* Fallback Default Gradient with Soft Ambient Glows */
+        <div className="absolute inset-0 z-0 pointer-events-none bg-gradient-to-b from-blue-50/50 via-white to-slate-50/60 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950">
+          <div className="absolute top-0 left-6 sm:left-1/4 w-80 sm:w-96 h-80 sm:h-96 bg-blue-300/20 dark:bg-blue-600/10 rounded-full blur-3xl pointer-events-none" />
+          <div className="absolute top-1/4 right-4 sm:right-12 w-80 sm:w-96 h-80 sm:h-96 bg-amber-200/25 dark:bg-amber-600/10 rounded-full blur-3xl pointer-events-none" />
+        </div>
+      )}
 
       <div className="relative z-10 max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
         {/* Prominent Official Emblem */}
@@ -42,24 +66,28 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
           transition={{ duration: 0.4 }}
           className="flex justify-center mb-4 sm:mb-5"
         >
-          <div className="w-20 h-20 sm:w-24 sm:h-24 md:w-28 md:h-28 p-2 rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-xl shadow-blue-900/10 flex items-center justify-center">
+          <div className="w-20 h-20 sm:w-24 sm:h-24 md:w-28 md:h-28 p-2 rounded-2xl bg-white/95 dark:bg-slate-800/95 backdrop-blur-md border border-white/30 dark:border-slate-700 shadow-2xl shadow-black/40 flex items-center justify-center">
             <NDCLogo className="w-full h-full object-contain" />
           </div>
         </motion.div>
 
-        {/* Top Status Pill: 340+ Online • 76 Batches • 42 Countries */}
+        {/* Top Status Pill */}
         <motion.div
           initial={prefersReducedMotion ? false : { opacity: 0, y: -10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.4 }}
-          className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-white/95 dark:bg-slate-800/90 border border-slate-200/90 dark:border-slate-700/80 shadow-xs mb-5 sm:mb-6 backdrop-blur-sm"
+          className={`inline-flex items-center gap-2 px-4 py-1.5 rounded-full shadow-md mb-5 sm:mb-6 backdrop-blur-md transition-all ${
+            hasBgImage
+              ? 'bg-slate-900/80 border border-white/20 text-white'
+              : 'bg-white/95 dark:bg-slate-800/90 border border-slate-200/90 dark:border-slate-700/80 text-slate-800 dark:text-slate-200'
+          }`}
         >
           <div className="w-4 h-4 rounded-full overflow-hidden shrink-0 flex items-center justify-center">
             <NDCLogo className="w-full h-full object-contain" />
           </div>
-          <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0 inline-block animate-pulse" />
-          <span className="text-[11px] sm:text-xs font-semibold text-slate-700 dark:text-slate-200 tracking-tight">
-            35 MBBS Batches • Silimpur, Bogura • Estd. {config.establishedYear || 1992}
+          <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0 inline-block animate-pulse" />
+          <span className="text-[11px] sm:text-xs font-semibold tracking-tight">
+            {config.heroBannerBadgeText || `35 MBBS Batches • Silimpur, Bogura • Estd. ${config.establishedYear || 1992}`}
           </span>
         </motion.div>
 
@@ -68,13 +96,15 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
           initial={prefersReducedMotion ? false : { opacity: 0, y: 14 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, delay: 0.05 }}
-          className="text-3xl sm:text-5xl lg:text-[3.65rem] font-black text-slate-900 dark:text-white tracking-tight leading-[1.12] mb-3 sm:mb-4 max-w-4xl mx-auto"
+          className={`text-3xl sm:text-5xl lg:text-[3.65rem] font-black tracking-tight leading-[1.12] mb-3 sm:mb-4 max-w-4xl mx-auto drop-shadow-sm ${
+            hasBgImage ? 'text-white drop-shadow-md' : 'text-slate-900 dark:text-white'
+          }`}
         >
           <span className="block">{config.heroPrefix || 'The Official Medical Network for'}</span>
           <span className="block mt-1 sm:mt-1.5">
-            <span className="text-[#15803d] dark:text-[#22c55e]">{config.heroHighlight || 'Shaheed Ziaur Rahman '}</span>
-            <span className="text-[#2563eb] dark:text-[#3b82f6]">Medical College </span>
-            <span className="text-[#d97706] dark:text-[#f59e0b]">{config.heroSuffix || 'Alumni.'}</span>
+            <span className="text-[#22c55e]">{config.heroHighlight || 'Shaheed Ziaur Rahman '}</span>
+            <span className="text-[#38bdf8] dark:text-[#60a5fa]">Medical College </span>
+            <span className="text-[#fbbf24]">{config.heroSuffix || 'Alumni.'}</span>
           </span>
         </motion.h1>
 
@@ -83,7 +113,9 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
           initial={prefersReducedMotion ? false : { opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.45, delay: 0.1 }}
-          className="font-serif italic text-[#c2410c] dark:text-[#ea580c] font-bold text-sm sm:text-base lg:text-lg mb-4 sm:mb-5 tracking-wide"
+          className={`font-serif italic font-bold text-sm sm:text-base lg:text-lg mb-4 sm:mb-5 tracking-wide ${
+            hasBgImage ? 'text-amber-300 drop-shadow-md' : 'text-[#c2410c] dark:text-[#ea580c]'
+          }`}
         >
           &ldquo;{config.collegeMotto || 'Dedicated to Humanity, Healing, and Medical Excellence since 1992.'}&rdquo;
         </motion.p>
@@ -93,7 +125,9 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
           initial={prefersReducedMotion ? false : { opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, delay: 0.15 }}
-          className="text-slate-600 dark:text-slate-300 text-xs sm:text-sm lg:text-[15px] max-w-2xl mx-auto leading-relaxed mb-6 sm:mb-8 font-normal"
+          className={`text-xs sm:text-sm lg:text-[15px] max-w-2xl mx-auto leading-relaxed mb-6 sm:mb-8 font-medium ${
+            hasBgImage ? 'text-slate-200 drop-shadow-sm' : 'text-slate-600 dark:text-slate-300'
+          }`}
         >
           {config.heroSubtitle || 'Where SZMC doctors, consultants, researchers, and medical students from Batch 01 (Session 1991-92) to Batch 35 (Session 2025-26) connect, collaborate in patient care, seek post-graduate guidance, and mobilize emergency blood donations.'}
         </motion.p>
@@ -108,18 +142,18 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
           <button
             type="button"
             onClick={onOpenLogin}
-            className="px-6 sm:px-8 py-3.5 rounded-2xl bg-[#1d4ed8] hover:bg-[#1e40af] active:scale-95 text-white font-bold text-sm sm:text-base shadow-lg shadow-blue-600/30 flex items-center gap-2 transition-all cursor-pointer group"
+            className="px-6 sm:px-8 py-3.5 rounded-2xl bg-[#1d4ed8] hover:bg-[#1e40af] active:scale-95 text-white font-bold text-sm sm:text-base shadow-xl shadow-blue-600/40 flex items-center gap-2 transition-all cursor-pointer group"
           >
-            <span>Alumni Login</span>
+            <span>{config.heroCtaPrimaryText || 'Alumni Login'}</span>
             <ArrowRight className="w-4 h-4 text-blue-200 group-hover:translate-x-0.5 transition-transform" />
           </button>
 
           <button
             type="button"
             onClick={onOpenRegister}
-            className="px-6 sm:px-8 py-3.5 rounded-2xl bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 active:scale-95 text-slate-800 dark:text-slate-100 font-bold text-sm sm:text-base border border-slate-200 dark:border-slate-700 shadow-sm transition-all cursor-pointer flex items-center gap-2 group"
+            className="px-6 sm:px-8 py-3.5 rounded-2xl bg-white/95 dark:bg-slate-800/90 hover:bg-white dark:hover:bg-slate-700 active:scale-95 text-slate-800 dark:text-slate-100 font-bold text-sm sm:text-base border border-white/20 dark:border-slate-700 shadow-lg backdrop-blur-md transition-all cursor-pointer flex items-center gap-2 group"
           >
-            <span>Join the SZMC Alumni Family</span>
+            <span>{config.heroCtaSecondaryText || 'Join the SZMC Alumni Family'}</span>
             <ArrowRight className="w-4 h-4 text-slate-500 dark:text-slate-400 group-hover:translate-x-0.5 transition-transform" />
           </button>
         </motion.div>

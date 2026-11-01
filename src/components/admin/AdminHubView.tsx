@@ -2115,13 +2115,166 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
                 </div>
               )}
 
-              {/* SUBTAB 2: HOMEPAGE & HERO STYLING */}
+              {/* SUBTAB 2: HOMEPAGE & HERO CUSTOMIZER */}
               {customizerSubtab === 'hero' && (
                 <div className="space-y-6">
+                  {/* Section 1: Hero Background Image Manager */}
+                  <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs space-y-4">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-800 pb-3">
+                      <div>
+                        <h3 className="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-2">
+                          <ImageIcon className="w-4 h-4 text-blue-600" />
+                          <span>Homepage Hero Background Image</span>
+                        </h3>
+                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                          Set any custom background image, choose an authentic SZMC campus photo, or upload an image from your device.
+                        </p>
+                      </div>
+                      {config.heroBackgroundImageUrl && (
+                        <button
+                          type="button"
+                          onClick={() => updateConfig({ heroBackgroundImageUrl: '' })}
+                          className="px-3 py-1.5 rounded-xl border border-rose-200 dark:border-rose-900/50 bg-rose-50 dark:bg-rose-950/30 text-rose-600 dark:text-rose-400 font-bold text-xs hover:bg-rose-100 transition-colors cursor-pointer self-start sm:self-center"
+                        >
+                          Remove Background Image
+                        </button>
+                      )}
+                    </div>
+
+                    {/* SZMC Campus Presets */}
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-2">
+                        Official SZMC Campus Presets
+                      </label>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                        {[
+                          { title: 'Campus Day 1 (Classic)', url: '/assets/szmc/szmc_day_1.jpg' },
+                          { title: 'SZMC Main Entrance', url: '/assets/szmc/szmc_campus_entrance_1793397553157.jpg' },
+                          { title: 'Beauty Canopy Walk', url: '/assets/szmc/szmc_beauty_canopy_1793397555246.jpg' },
+                          { title: 'Auditorium & Conclave', url: '/assets/szmc/szmc_conference_hall_1793397553067.jpg' },
+                          { title: 'Academic Building', url: '/assets/szmc/campus_1.jpg' },
+                          { title: 'Medical Complex', url: '/assets/szmc/campus_2.jpg' },
+                          { title: 'Historic Heritage 2006', url: '/assets/szmc/szmc_historic_2006_1793397555445.jpg' },
+                          { title: 'Sports & Celebrations', url: '/assets/szmc/szmc_sports_champions_1793397554530.jpg' },
+                        ].map((preset) => {
+                          const isSelected = config.heroBackgroundImageUrl === preset.url;
+                          return (
+                            <button
+                              key={preset.url}
+                              type="button"
+                              onClick={() => updateConfig({ heroBackgroundImageUrl: preset.url })}
+                              className={`relative rounded-xl overflow-hidden border-2 text-left p-1 transition-all cursor-pointer group ${
+                                isSelected
+                                  ? 'border-blue-600 shadow-md ring-2 ring-blue-500/30'
+                                  : 'border-slate-200 dark:border-slate-800 hover:border-blue-400'
+                              }`}
+                            >
+                              <div className="h-16 w-full rounded-lg overflow-hidden bg-slate-100 dark:bg-slate-800 relative">
+                                <img
+                                  src={preset.url}
+                                  alt={preset.title}
+                                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                                />
+                                {isSelected && (
+                                  <div className="absolute inset-0 bg-blue-600/30 flex items-center justify-center">
+                                    <div className="w-5 h-5 rounded-full bg-blue-600 text-white flex items-center justify-center">
+                                      <Check className="w-3 h-3" />
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                              <div className="text-[11px] font-bold text-slate-800 dark:text-slate-200 truncate mt-1 px-1">
+                                {preset.title}
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Custom URL Input & File Upload */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                          Custom Image URL
+                        </label>
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            value={config.heroBackgroundImageUrl || ''}
+                            onChange={(e) => updateConfig({ heroBackgroundImageUrl: e.target.value })}
+                            placeholder="https://images.unsplash.com/... or /assets/..."
+                            className="w-full px-3 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100"
+                          />
+                        </div>
+                        <span className="text-[10px] text-slate-400 mt-1 block">
+                          Paste any direct web link or local asset path
+                        </span>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                          Upload Image From Computer / Phone
+                        </label>
+                        <label className="flex items-center justify-center gap-2 px-3 py-2 text-xs font-bold rounded-xl border border-dashed border-blue-400 bg-blue-50/50 dark:bg-blue-950/20 text-blue-700 dark:text-blue-300 hover:bg-blue-100/50 transition-colors cursor-pointer">
+                          <Upload className="w-3.5 h-3.5" />
+                          <span>Choose Image File to Upload</span>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (file) {
+                                const reader = new FileReader();
+                                reader.onload = () => {
+                                  if (typeof reader.result === 'string') {
+                                    updateConfig({ heroBackgroundImageUrl: reader.result });
+                                    showToast('Background image uploaded successfully!', 'success');
+                                  }
+                                };
+                                reader.readAsDataURL(file);
+                              }
+                            }}
+                          />
+                        </label>
+                        <span className="text-[10px] text-slate-400 mt-1 block">
+                          Supports PNG, JPG, WebP. Automatically stored and persisted.
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Overlay Darkness Opacity Slider */}
+                    <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
+                      <div className="flex items-center justify-between mb-1.5">
+                        <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                          Darkness Overlay Opacity
+                        </label>
+                        <span className="text-xs font-black text-blue-600 dark:text-blue-400">
+                          {config.heroOverlayOpacity ?? 65}% Darkness
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min="10"
+                        max="95"
+                        value={config.heroOverlayOpacity ?? 65}
+                        onChange={(e) => updateConfig({ heroOverlayOpacity: Number(e.target.value) })}
+                        className="w-full h-2 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                      />
+                      <div className="flex justify-between text-[10px] text-slate-400 mt-1">
+                        <span>10% (Bright / Transparent)</span>
+                        <span>65% (Recommended for high contrast)</span>
+                        <span>95% (Deep Cinema Dark)</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Section 2: Headline & Content Customizer + Live Preview */}
                   <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                     <div className="lg:col-span-2 space-y-4">
                       <h3 className="font-bold text-sm text-slate-900 dark:text-white">
-                        Homepage Hero Headline &amp; Subtitle Editor
+                        Hero Headlines, Motto &amp; Buttons
                       </h3>
 
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -2162,70 +2315,179 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
                         </div>
                       </div>
 
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                            College Motto
+                          </label>
+                          <input
+                            type="text"
+                            value={config.collegeMotto}
+                            onChange={(e) => updateConfig({ collegeMotto: e.target.value })}
+                            className="w-full px-3 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                            Banner Pill Badge Text
+                          </label>
+                          <input
+                            type="text"
+                            value={config.heroBannerBadgeText || ''}
+                            placeholder="35 MBBS Batches • Silimpur, Bogura • Estd. 1992"
+                            onChange={(e) => updateConfig({ heroBannerBadgeText: e.target.value })}
+                            className="w-full px-3 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100"
+                          />
+                        </div>
+                      </div>
+
                       <div>
                         <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
                           Hero Subtitle &amp; Medical Network Description
                         </label>
                         <textarea
-                          rows={3}
+                          rows={2}
                           value={config.heroSubtitle}
                           onChange={(e) => updateConfig({ heroSubtitle: e.target.value })}
                           className="w-full px-3 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100"
                         />
                       </div>
 
-                      <div className="grid grid-cols-2 gap-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div>
                           <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                            Background Texture
+                            Primary CTA Button Label
                           </label>
-                          <select
-                            value={config.heroBackgroundTexture}
-                            onChange={(e) => updateConfig({ heroBackgroundTexture: e.target.value as any })}
+                          <input
+                            type="text"
+                            value={config.heroCtaPrimaryText || 'Alumni Login'}
+                            onChange={(e) => updateConfig({ heroCtaPrimaryText: e.target.value })}
                             className="w-full px-3 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100"
-                          >
-                            <option value="Mesh">Liquid Mesh Glow</option>
-                            <option value="Aurora">Aurora Borealis</option>
-                            <option value="Vignette">Institutional Vignette</option>
-                            <option value="Campus Photo">Campus Monument Photo</option>
-                          </select>
+                          />
                         </div>
 
                         <div>
                           <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                            Darkness Overlay Opacity ({config.heroOverlayOpacity}%)
+                            Secondary CTA Button Label
                           </label>
                           <input
-                            type="range"
-                            min="10"
-                            max="90"
-                            value={config.heroOverlayOpacity}
-                            onChange={(e) => updateConfig({ heroOverlayOpacity: Number(e.target.value) })}
-                            className="w-full"
+                            type="text"
+                            value={config.heroCtaSecondaryText || 'Join the SZMC Alumni Family'}
+                            onChange={(e) => updateConfig({ heroCtaSecondaryText: e.target.value })}
+                            className="w-full px-3 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100"
                           />
                         </div>
                       </div>
                     </div>
 
-                    {/* Interactive Real-Time Hero Preview */}
-                    <div className="p-6 rounded-3xl bg-slate-900 text-white flex flex-col justify-center text-center space-y-3 relative overflow-hidden">
-                      <div className="w-12 h-12 mx-auto rounded-xl bg-white/10 p-1 border border-white/20">
-                        <NDCLogo className="w-full h-full object-contain" />
+                    {/* Interactive Real-Time Hero Preview with Actual Background */}
+                    <div className="p-6 rounded-3xl bg-slate-950 text-white flex flex-col justify-center text-center space-y-3 relative overflow-hidden shadow-xl border border-slate-800">
+                      {/* Background Image inside preview */}
+                      {config.heroBackgroundImageUrl && (
+                        <div className="absolute inset-0 z-0">
+                          <img
+                            src={config.heroBackgroundImageUrl}
+                            alt="Preview Background"
+                            className="w-full h-full object-cover"
+                          />
+                          <div
+                            className="absolute inset-0 bg-slate-950"
+                            style={{ opacity: (config.heroOverlayOpacity ?? 65) / 100 }}
+                          />
+                        </div>
+                      )}
+
+                      <div className="relative z-10 space-y-2.5">
+                        <div className="w-12 h-12 mx-auto rounded-xl bg-white/10 p-1 border border-white/20 backdrop-blur-sm">
+                          <NDCLogo className="w-full h-full object-contain" />
+                        </div>
+
+                        <div className="inline-block px-2.5 py-0.5 rounded-full bg-slate-900/80 border border-white/20 text-[9px] font-semibold text-emerald-400">
+                          {config.heroBannerBadgeText || `35 MBBS Batches • Estd. ${config.establishedYear || 1992}`}
+                        </div>
+
+                        <div className="text-sm font-black tracking-tight leading-snug drop-shadow-sm">
+                          <span>{config.heroPrefix} </span>
+                          <span className="text-emerald-400">{config.heroHighlight} </span>
+                          <span className="text-amber-400">{config.heroSuffix}</span>
+                        </div>
+
+                        <p className="font-serif italic text-[11px] text-amber-300 drop-shadow-sm">
+                          &ldquo;{config.collegeMotto}&rdquo;
+                        </p>
+
+                        <p className="text-[10px] text-slate-200 line-clamp-2 drop-shadow-xs font-normal">
+                          {config.heroSubtitle}
+                        </p>
+
+                        <div className="flex items-center justify-center gap-2 pt-1">
+                          <span className="px-3 py-1 rounded-xl bg-blue-600 text-white text-[10px] font-bold shadow-xs">
+                            {config.heroCtaPrimaryText || 'Alumni Login'}
+                          </span>
+                          <span className="px-3 py-1 rounded-xl bg-white/20 text-white text-[10px] font-bold border border-white/30 backdrop-blur-xs">
+                            {config.heroCtaSecondaryText || 'Join Family'}
+                          </span>
+                        </div>
+
+                        <span className="text-[9px] font-black uppercase tracking-wider text-emerald-400 bg-emerald-500/20 px-2 py-0.5 rounded-full inline-block mt-2">
+                          Live On Homepage
+                        </span>
                       </div>
-                      <div className="text-sm font-black tracking-tight leading-snug">
-                        <span>{config.heroPrefix} </span>
-                        <span className="text-emerald-400">{config.heroHighlight} </span>
-                        <span className="text-amber-400">{config.heroSuffix}</span>
-                      </div>
-                      <p className="font-serif italic text-xs text-amber-300">
-                        &ldquo;{config.collegeMotto}&rdquo;
+                    </div>
+                  </div>
+
+                  {/* Section 3: Homepage Sections Visibility Manager */}
+                  <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs space-y-4">
+                    <div>
+                      <h3 className="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-2">
+                        <Sliders className="w-4 h-4 text-emerald-600" />
+                        <span>Homepage Sections Display Controls</span>
+                      </h3>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                        Turn individual sections on or off to sculpt the exact homepage layout.
                       </p>
-                      <p className="text-[10px] text-slate-300 line-clamp-2">
-                        {config.heroSubtitle}
-                      </p>
-                      <span className="text-[9px] font-black uppercase tracking-wider text-emerald-400 bg-emerald-500/20 px-2 py-0.5 rounded-full inline-block">
-                        Active on Homepage
-                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                      {[
+                        { key: 'showHeroSection', label: 'Hero Digital Quad Section', desc: 'Main banner, crest, headline and login buttons' },
+                        { key: 'showBloodNeededSection', label: 'Emergency Blood Lifeline', desc: 'Urgent donor requests and quick blood matching' },
+                        { key: 'showBatchesSection', label: '35 MBBS Batch Lounges Grid', desc: 'Batch 01 to Batch 35 interactive explorer' },
+                        { key: 'showFeaturedAlumniSection', label: 'Spotlight & Distinguished Alumni', desc: 'Hall of fame and medical leaders' },
+                        { key: 'showGallerySection', label: 'Campus Nostalgia Photo Gallery', desc: 'Historic campus and reunion previews' },
+                        { key: 'showFaqSection', label: 'Frequently Asked Questions (FAQ)', desc: 'Verification, security, and member guidelines' },
+                      ].map((sec) => {
+                        const isEnabled = (config as any)[sec.key] !== false;
+                        return (
+                          <div
+                            key={sec.key}
+                            className={`p-3 rounded-xl border flex items-center justify-between gap-3 transition-colors ${
+                              isEnabled
+                                ? 'bg-emerald-50/40 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-800/60'
+                                : 'bg-slate-50 dark:bg-slate-800/50 border-slate-200 dark:border-slate-700/60 opacity-60'
+                            }`}
+                          >
+                            <div className="min-w-0">
+                              <div className="font-bold text-xs text-slate-800 dark:text-slate-100 truncate">
+                                {sec.label}
+                              </div>
+                              <div className="text-[10px] text-slate-500 truncate">{sec.desc}</div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => updateConfig({ [sec.key]: !isEnabled })}
+                              className={`shrink-0 px-2.5 py-1 rounded-lg text-[10px] font-black uppercase transition-colors cursor-pointer ${
+                                isEnabled
+                                  ? 'bg-emerald-600 text-white'
+                                  : 'bg-slate-300 dark:bg-slate-700 text-slate-700 dark:text-slate-300'
+                              }`}
+                            >
+                              {isEnabled ? 'Visible' : 'Hidden'}
+                            </button>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 </div>

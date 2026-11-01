@@ -104,23 +104,40 @@ export async function getOrCreateSupabaseProfile(
 
     if (fetchErr) {
       console.warn('Database error fetching alumni profile:', fetchErr.message);
-      // Safe error handling: Do NOT attempt an insert if SELECT encountered a database error
       return null;
     }
 
-    if (existing) {
+    let existingRow = existing;
+    if (!existingRow && authUser.email) {
+      try {
+        const { data: byEmail } = await supabase
+          .from('alumni_profiles')
+          .select(ALUMNI_PUBLIC_COLUMNS)
+          .ilike('email', authUser.email.trim())
+          .maybeSingle();
+        if (byEmail) {
+          existingRow = byEmail;
+          void supabase
+            .from('alumni_profiles')
+            .update({ auth_user_id: authUser.id })
+            .eq('id', (byEmail as any).id);
+        }
+      } catch {}
+    }
+
+    if (existingRow) {
       // Enrich with contact details via authorized RPC
       try {
         const { data: contacts } = await supabase.rpc('get_alumni_contact_details', {
-          p_profile_id: (existing as any).id,
+          p_profile_id: (existingRow as any).id,
         });
         if (contacts && contacts[0]) {
-          Object.assign(existing, contacts[0]);
+          Object.assign(existingRow, contacts[0]);
         }
       } catch {
         // graceful fallback if RPC unavailable
       }
-      return mapSupabaseRowToAlumniProfile(existing, authUser);
+      return mapSupabaseRowToAlumniProfile(existingRow, authUser);
     }
 
     // 2. Otherwise, insert a new profile record for the authenticated user
