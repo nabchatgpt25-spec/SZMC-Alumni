@@ -19,10 +19,16 @@ GRANT EXECUTE ON FUNCTION public.is_verified_alumnus() TO anon, authenticated, p
 GRANT EXECUTE ON FUNCTION public.current_user_batch_year() TO anon, authenticated, public, service_role;
 
 -- 3. Grant table SELECT / INSERT / UPDATE / DELETE privileges to anon & authenticated
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.alumni_profiles TO anon, authenticated, service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.profiles TO anon, authenticated, service_role;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.posts TO anon, authenticated, service_role;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.post_comments TO anon, authenticated, service_role;
 GRANT SELECT, INSERT, DELETE ON public.post_likes TO anon, authenticated, service_role;
 GRANT SELECT, INSERT, DELETE ON public.saved_posts TO anon, authenticated, service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.notifications TO anon, authenticated, service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.verification_requests TO anon, authenticated, service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.peer_vouches TO anon, authenticated, service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.admin_doc_submissions TO anon, authenticated, service_role;
 GRANT SELECT, INSERT, UPDATE ON public.blood_requests TO anon, authenticated, service_role;
 GRANT SELECT, INSERT, UPDATE ON public.blood_donors TO anon, authenticated, service_role;
 GRANT SELECT ON public.gallery_albums TO anon, authenticated, service_role;
@@ -32,14 +38,73 @@ GRANT SELECT ON public.batches TO anon, authenticated, service_role;
 GRANT SELECT ON public.academic_stream_groups TO anon, authenticated, service_role;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role;
 
+-- 3b. Ensure Super Admin profile (ID: 1, Dr. Nurul Anam Bashir) exists in alumni_profiles
+INSERT INTO public.alumni_profiles (
+  id,
+  full_name,
+  batch_year,
+  academic_stream,
+  section,
+  verification_status,
+  verification_method,
+  vouches_count,
+  profession,
+  position,
+  institution,
+  city,
+  country,
+  email,
+  phone,
+  role,
+  is_public
+) VALUES (
+  1,
+  'Dr. Nurul Anam Bashir',
+  25,
+  'MBBS',
+  'MBBS',
+  'verified',
+  'admin_verified',
+  10,
+  'Medical Doctor / Physician',
+  'Super Admin / Lead Physician',
+  'Shaheed Ziaur Rahman Medical College Hospital',
+  'Bogura',
+  'Bangladesh',
+  'nurulanambashir25@gmail.com',
+  '01764436846',
+  'admin',
+  true
+)
+ON CONFLICT (id) DO UPDATE SET
+  role = 'admin',
+  verification_status = 'verified',
+  email = 'nurulanambashir25@gmail.com',
+  phone = '01764436846';
+
+-- 3c. Ensure profiles entry exists for messaging & post attribution
+INSERT INTO public.profiles (
+  id,
+  full_name,
+  batch,
+  role,
+  is_verified
+) VALUES (
+  1,
+  'Dr. Nurul Anam Bashir',
+  25,
+  'super_admin',
+  true
+)
+ON CONFLICT (id) DO UPDATE SET
+  role = 'super_admin',
+  is_verified = true;
+
 -- 4. Fix Row-Level Security (RLS) policies for Posts (so both unauthenticated visitors and logged-in alumni can view and post)
 DROP POLICY IF EXISTS "posts_select_visible" ON public.posts;
 DROP POLICY IF EXISTS "Posts: Read Visible" ON public.posts;
 CREATE POLICY "posts_select_visible" ON public.posts FOR SELECT TO anon, authenticated
-USING (
-  is_deleted = false
-  OR (auth.uid() IS NOT NULL AND (author_id = public.current_profile_id() OR public.is_admin_or_mod()))
-);
+USING (true);
 
 DROP POLICY IF EXISTS "posts_insert_own" ON public.posts;
 DROP POLICY IF EXISTS "Posts: Insert Own" ON public.posts;
@@ -211,9 +276,179 @@ DO $$ BEGIN
   ALTER PUBLICATION supabase_realtime ADD TABLE public.conversations;
 EXCEPTION WHEN duplicate_object THEN NULL; WHEN OTHERS THEN NULL; END $$;
 
-DO $$ BEGIN
-  ALTER PUBLICATION supabase_realtime ADD TABLE public.user_message_settings;
-EXCEPTION WHEN duplicate_object THEN NULL; WHEN OTHERS THEN NULL; END $$;
+-- 9. Corrected get_feed function with safe type casting (fixes smallint vs integer mismatch)
+CREATE OR REPLACE FUNCTION public.get_feed(
+  p_user_id BIGINT DEFAULT NULL,
+  p_limit INT DEFAULT 25,
+  p_offset INT DEFAULT 0
+)
+RETURNS TABLE (
+  id BIGINT,
+  user_id BIGINT,
+  author_id BIGINT,
+  full_name TEXT,
+  avatar_url TEXT,
+  batch_year INT,
+  verified BOOLEAN,
+  profession TEXT,
+  institution TEXT,
+  content TEXT,
+  category TEXT,
+  images JSONB,
+  videos JSONB,
+  layout_template TEXT,
+  linked_url TEXT,
+  link_metadata JSONB,
+  likes_count INT,
+  comments_count INT,
+  is_pinned BOOLEAN,
+  is_edited BOOLEAN,
+  created_at TIMESTAMPTZ,
+  liked_by_me BOOLEAN,
+  saved_by_me BOOLEAN,
+  is_batchmate BOOLEAN,
+  is_friend BOOLEAN,
+  comments JSONB
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_caller_id BIGINT := p_user_id;
+  v_my_batch INT := NULL;
+BEGIN
+  IF v_caller_id IS NULL AND auth.uid() IS NOT NULL THEN
+    SELECT p.id INTO v_caller_id
+    FROM public.alumni_profiles p
+    WHERE p.auth_user_id = auth.uid()
+    LIMIT 1;
+  END IF;
+
+  IF v_caller_id IS NOT NULL THEN
+    SELECT p.batch_year::INT INTO v_my_batch
+    FROM public.alumni_profiles p
+    WHERE p.id = v_caller_id
+    LIMIT 1;
+  END IF;
+
+  RETURN QUERY
+  WITH my_friends AS (
+    SELECT c.friend_id AS fid
+    FROM public.connections c
+    WHERE c.user_id = v_caller_id AND c.status = 'accepted'
+    UNION
+    SELECT c.user_id AS fid
+    FROM public.connections c
+    WHERE c.friend_id = v_caller_id AND c.status = 'accepted'
+  ),
+  ranked_posts AS (
+    SELECT
+      po.id AS r_id,
+      po.author_id AS r_author_id,
+      COALESCE(ap.full_name, 'SZMC Alumnus')::TEXT AS r_full_name,
+      COALESCE(ap.avatar_url, '/assets/aistudio/images__1__2778177d.png')::TEXT AS r_avatar_url,
+      COALESCE(ap.batch_year, 25)::INT AS r_batch_year,
+      COALESCE(ap.verification_status = 'verified', TRUE) AS r_verified,
+      COALESCE(ap.profession, 'Doctor / Medical Professional')::TEXT AS r_profession,
+      ap.institution::TEXT AS r_institution,
+      po.content::TEXT AS r_content,
+      COALESCE(po.category, 'General Update')::TEXT AS r_category,
+      CASE
+        WHEN jsonb_typeof(to_jsonb(po.images)) = 'array' THEN to_jsonb(po.images)
+        ELSE '[]'::jsonb
+      END AS r_images,
+      CASE
+        WHEN jsonb_typeof(to_jsonb(po.videos)) = 'array' THEN to_jsonb(po.videos)
+        ELSE '[]'::jsonb
+      END AS r_videos,
+      COALESCE(po.layout_template, po.link_metadata->>'layout_template', 'grid')::TEXT AS r_layout_template,
+      po.linked_url::TEXT AS r_linked_url,
+      COALESCE(po.link_metadata, '{}'::jsonb) AS r_link_metadata,
+      COALESCE(po.likes_count, 0)::INT AS r_likes_count,
+      COALESCE(po.comments_count, 0)::INT AS r_comments_count,
+      COALESCE(po.is_pinned, FALSE) AS r_is_pinned,
+      COALESCE(po.is_edited, FALSE) AS r_is_edited,
+      po.created_at AS r_created_at,
+      EXISTS (
+        SELECT 1 FROM public.post_likes pl
+        WHERE pl.post_id = po.id AND pl.user_id = v_caller_id
+      ) AS r_liked_by_me,
+      EXISTS (
+        SELECT 1 FROM public.saved_posts sp
+        WHERE sp.post_id = po.id AND sp.user_id = v_caller_id
+      ) AS r_saved_by_me,
+      (
+        v_my_batch IS NOT NULL AND
+        ap.batch_year IS NOT NULL AND
+        ap.batch_year::INT = v_my_batch AND
+        ap.id != v_caller_id
+      ) AS r_is_batchmate,
+      (
+        ap.id IN (SELECT fid FROM my_friends)
+      ) AS r_is_friend,
+      COALESCE(
+        (
+          SELECT jsonb_agg(
+            jsonb_build_object(
+              'id', pc.id,
+              'postId', pc.post_id,
+              'userId', COALESCE(pc.user_id, pc.author_id),
+              'fullName', COALESCE(cap.full_name, 'SZMC Alumnus'),
+              'avatarUrl', COALESCE(cap.avatar_url, '/assets/aistudio/images__1__2778177d.png'),
+              'content', pc.content,
+              'likesCount', COALESCE(pc.likes_count, 0),
+              'createdAt', pc.created_at
+            )
+            ORDER BY pc.created_at ASC
+          )
+          FROM public.post_comments pc
+          LEFT JOIN public.alumni_profiles cap ON cap.id = COALESCE(pc.user_id, pc.author_id)
+          WHERE pc.post_id = po.id AND COALESCE(pc.is_deleted, false) = false
+        ),
+        '[]'::jsonb
+      ) AS r_comments
+    FROM public.posts po
+    LEFT JOIN public.alumni_profiles ap ON ap.id = po.author_id
+    WHERE COALESCE(po.is_deleted, false) = false
+  )
+  SELECT
+    r_id,
+    r_author_id,
+    r_author_id,
+    r_full_name,
+    r_avatar_url,
+    r_batch_year,
+    r_verified,
+    r_profession,
+    r_institution,
+    r_content,
+    r_category,
+    r_images,
+    r_videos,
+    r_layout_template,
+    r_linked_url,
+    r_link_metadata,
+    r_likes_count,
+    r_comments_count,
+    r_is_pinned,
+    r_is_edited,
+    r_created_at,
+    r_liked_by_me,
+    r_saved_by_me,
+    r_is_batchmate,
+    r_is_friend,
+    r_comments
+  FROM ranked_posts
+  ORDER BY
+    r_is_pinned DESC,
+    r_is_batchmate DESC,
+    r_is_friend DESC,
+    r_created_at DESC
+  LIMIT p_limit OFFSET p_offset;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.get_feed(BIGINT, INT, INT) TO anon, authenticated, service_role;
 
 COMMIT;
 

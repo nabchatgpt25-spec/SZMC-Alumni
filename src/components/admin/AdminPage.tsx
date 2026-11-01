@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { AdminHubView } from './AdminHubView';
 import { AdminCommandCenterView } from './AdminCommandCenterView';
+import { AdminDashboard } from './AdminDashboard';
 import { useAuth } from '../../context/AuthContext';
 import { isUserSuperAdmin, isUserGeneralAdmin } from '../../types';
 
@@ -40,7 +41,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, onViewProfile 
   const [denialReason, setDenialReason] = useState<string | null>(null);
   const [verifiedDetails, setVerifiedDetails] = useState<ServerVerificationResult | null>(null);
 
-  const [adminMode, setAdminMode] = useState<'hub' | 'command_center'>('hub');
+  const [adminMode, setAdminMode] = useState<'dashboard' | 'hub' | 'command_center'>('dashboard');
 
   // Strict Server-Side Authentication Verification
   const verifyServerAdminAccess = useCallback(async () => {
@@ -250,8 +251,21 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, onViewProfile 
           </div>
         </div>
 
-        {/* Admin Mode Switcher: Hub vs Command Center */}
-        <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-1 rounded-xl w-full sm:w-auto shrink-0">
+        {/* Admin Mode Switcher: Dashboard vs Hub vs Command Center */}
+        <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-1 rounded-xl w-full sm:w-auto shrink-0 gap-1 overflow-x-auto">
+          <button
+            type="button"
+            onClick={() => setAdminMode('dashboard')}
+            className={`flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+              adminMode === 'dashboard'
+                ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+            }`}
+          >
+            <ShieldCheck className="w-3.5 h-3.5" />
+            Admin Dashboard
+          </button>
+
           <button
             type="button"
             onClick={() => setAdminMode('hub')}
@@ -275,13 +289,15 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, onViewProfile 
             }`}
           >
             <Database className="w-3.5 h-3.5" />
-            Operations Command Center
+            Command Center
           </button>
         </div>
       </div>
 
       {/* Render Selected View */}
-      {adminMode === 'hub' ? (
+      {adminMode === 'dashboard' ? (
+        <AdminDashboard onNavigate={onNavigate} onViewProfile={onViewProfile} />
+      ) : adminMode === 'hub' ? (
         <AdminHubView
           currentUser={{
             id: verifiedDetails?.userId || currentUser.id,

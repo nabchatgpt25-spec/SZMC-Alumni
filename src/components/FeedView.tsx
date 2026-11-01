@@ -954,6 +954,20 @@ export const FeedView: React.FC<FeedViewProps> = ({
   // Submit Report
   const handleSubmitReport = () => {
     if (!postToReport) return;
+    try {
+      const storageKey = 'szmc_admin_reported_content_v2';
+      const raw = localStorage.getItem(storageKey);
+      const reports = raw ? JSON.parse(raw) : {};
+      const currentReasons = reports[String(postToReport.id)]?.reasons || [];
+      reports[String(postToReport.id)] = {
+        reasons: Array.from(new Set([...currentReasons, reportReason || 'Inappropriate / Unprofessional'])),
+        reported_at: new Date().toISOString(),
+        status: 'pending_review',
+      };
+      localStorage.setItem(storageKey, JSON.stringify(reports));
+    } catch (e) {
+      console.warn('Could not save post report to storage', e);
+    }
     setPostToReport(null);
     showToast('Thank you. This post has been reported to the SZMC moderation team.');
   };
