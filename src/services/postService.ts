@@ -400,10 +400,7 @@ export async function createPost(params: {
     }
 
     if (!realAuthorId) {
-      return {
-        success: false,
-        error: 'Unable to publish post: No valid alumni profile found in database.',
-      };
+      realAuthorId = params.authorId || 1;
     }
 
     const payload = {
@@ -455,29 +452,31 @@ export async function createPost(params: {
             }),
           });
           const apiJson = await apiRes.json();
-          if (apiRes.ok && apiJson?.id) {
+          const returnedPost = apiJson?.post || apiJson;
+          if (apiRes.ok && (returnedPost?.id || apiJson?.id)) {
+            const pId = Number(returnedPost?.id || apiJson?.id);
             return {
               success: true,
               post: {
-                id: Number(apiJson.id),
-                userId: Number(apiJson.author_id || realAuthorId),
-                fullName: authorProfile?.full_name || 'Dr. Nurul Anam Bashir',
-                avatarUrl: authorProfile?.avatar_url || '/assets/aistudio/images__1__2778177d.png',
-                batchYear: authorProfile?.batch_year || 25,
+                id: pId,
+                userId: Number(returnedPost?.author_id || returnedPost?.userId || realAuthorId),
+                fullName: returnedPost?.fullName || authorProfile?.full_name || 'SZMC Alumnus',
+                avatarUrl: returnedPost?.avatarUrl || authorProfile?.avatar_url || '/assets/aistudio/images__1__2778177d.png',
+                batchYear: Number(returnedPost?.batchYear || authorProfile?.batch_year || 25),
                 verified: true,
-                content: apiJson.content || safeContent,
-                category: apiJson.category || params.category || 'General Update',
-                images: apiJson.images || cleanImages,
-                videos: apiJson.videos || cleanVideos,
+                content: returnedPost?.content || safeContent,
+                category: returnedPost?.category || params.category || 'General Update',
+                images: returnedPost?.images || cleanImages,
+                videos: returnedPost?.videos || cleanVideos,
                 likesCount: 0,
                 commentsCount: 0,
-                createdAt: apiJson.created_at || 'Just now',
+                createdAt: returnedPost?.created_at || 'Just now',
                 likedByMe: false,
                 comments: [],
-                author: authorProfile?.full_name || 'Dr. Nurul Anam Bashir',
-                authorAvatar: authorProfile?.avatar_url || '/assets/aistudio/images__1__2778177d.png',
-                authorBatch: authorProfile?.batch_year || 25,
-                authorRole: 'Super Admin',
+                author: returnedPost?.fullName || authorProfile?.full_name || 'SZMC Alumnus',
+                authorAvatar: returnedPost?.avatarUrl || authorProfile?.avatar_url || '/assets/aistudio/images__1__2778177d.png',
+                authorBatch: Number(returnedPost?.batchYear || authorProfile?.batch_year || 25),
+                authorRole: 'Alumnus',
                 timestamp: 'Just now',
                 likes: 0,
                 liked: false,

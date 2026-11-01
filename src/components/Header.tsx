@@ -111,6 +111,19 @@ export const Header: React.FC<HeaderProps> = ({
             <span className="tracking-tight">Live Sync</span>
           </div>
 
+          {/* Quick Admin Access Button */}
+          {(currentUser.role === 'admin' || isSuperAdmin || isGeneralAdmin) && (
+            <button
+              type="button"
+              onClick={() => onNavigate('admin')}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30 text-indigo-700 dark:text-indigo-300 text-xs font-bold transition-all cursor-pointer shadow-xs active:scale-95"
+              title="Open Admin Portal"
+            >
+              <ShieldAlert className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+              <span className="hidden sm:inline">Admin</span>
+            </button>
+          )}
+
           <div className="flex items-center">
             <ThemeToggle />
           </div>
@@ -223,8 +236,8 @@ export const Header: React.FC<HeaderProps> = ({
                     </button>
                   )}
 
-                  {/* Admin Portal in profile dropdown - Strictly for role === 'admin' */}
-                  {currentUser.role === 'admin' && (
+                  {/* Admin Portal in profile dropdown */}
+                  {(currentUser.role === 'admin' || isSuperAdmin || isGeneralAdmin) && (
                     <button
                       type="button"
                       onClick={() => {

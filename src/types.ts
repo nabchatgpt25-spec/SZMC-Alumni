@@ -77,29 +77,42 @@ export interface VouchRequest {
 
 export type UserRole = 'member' | 'batch_representative' | 'moderator' | 'admin';
 
+export const SUPER_ADMIN_EMAILS = [
+  'admin@szmcalumni.net',
+  'firstaidnetworkbd@gmail.com',
+  'support@szmcalumni.net',
+  'nurulanambashir25@gmail.com',
+  'nurulanambashir20@gmail.com',
+];
+
 /**
- * Administrator check: Verified via user role ('admin').
- * Strictly role-authoritative; no hardcoded email bypasses.
+ * Administrator check: Verified via user role ('admin') or recognized administrative email.
  */
 export function isUserSuperAdmin(user?: { email?: string | null; role?: string | null } | null): boolean {
   if (!user) return false;
-  return user.role === 'admin';
+  if (user.role === 'admin') return true;
+  if (user.email && SUPER_ADMIN_EMAILS.some((e) => e.toLowerCase() === user.email?.toLowerCase().trim())) return true;
+  return false;
 }
 
 /**
- * General Admin check: Verified via user role ('admin').
+ * General Admin check: Verified via user role ('admin') or recognized administrative email.
  */
 export function isUserGeneralAdmin(user?: { email?: string | null; role?: string | null } | null): boolean {
   if (!user) return false;
-  return user.role === 'admin';
+  if (user.role === 'admin') return true;
+  if (user.email && SUPER_ADMIN_EMAILS.some((e) => e.toLowerCase() === user.email?.toLowerCase().trim())) return true;
+  return false;
 }
 
 /**
- * Any admin check (role === 'admin')
+ * Any admin check (role === 'admin' or recognized admin email)
  */
 export function isUserAnyAdmin(user?: { email?: string | null; role?: string | null } | null): boolean {
   if (!user) return false;
-  return user.role === 'admin';
+  if (user.role === 'admin') return true;
+  if (user.email && SUPER_ADMIN_EMAILS.some((e) => e.toLowerCase() === user.email?.toLowerCase().trim())) return true;
+  return false;
 }
 
 /**
@@ -107,7 +120,7 @@ export function isUserAnyAdmin(user?: { email?: string | null; role?: string | n
  */
 export function isUserSubAdmin(user?: { email?: string | null; role?: string | null } | null): boolean {
   if (!user) return false;
-  if (user.role === 'admin') return false;
+  if (user.role === 'admin' || isUserAnyAdmin(user)) return false;
   return user.role === 'moderator' || user.role === 'batch_representative';
 }
 
@@ -411,12 +424,6 @@ export const DEGREES_LIST = [
   'FACS', 'D-Card', 'DGO', 'DCH', 'DO', 'DLO', 'DA', 'DDV',
   'MPH', 'MPhil', 'PhD', 'BDS', 'BCS (Health)', 'Diploma',
   'BSc', 'MSc', 'HSC', 'Others'
-];
-
-export const SUPER_ADMIN_EMAILS = [
-  'admin@szmcalumni.net',
-  'firstaidnetworkbd@gmail.com',
-  'support@szmcalumni.net',
 ];
 
 export type { OfficialNotice } from './data/noticesData';

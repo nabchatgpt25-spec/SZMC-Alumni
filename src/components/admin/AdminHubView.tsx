@@ -645,6 +645,17 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
               </button>
             </div>
 
+            {/* Direct Production Dist Download Button */}
+            <a
+              href="/download/szmc-alumni-dist.zip"
+              download="szmc-alumni-dist.zip"
+              className="flex items-center gap-2 px-3.5 py-2 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white text-xs font-black tracking-wide transition-all shadow-md shadow-blue-600/25 border border-blue-400/30 cursor-pointer active:scale-95"
+              title="Download compiled production build (dist.zip) for deployment"
+            >
+              <Download className="w-4 h-4 shrink-0" />
+              <span>Download Dist (ZIP)</span>
+            </a>
+
             {/* Quick Refresh */}
             <button
               type="button"

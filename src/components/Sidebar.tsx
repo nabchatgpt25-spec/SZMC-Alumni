@@ -362,8 +362,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 </button>
               )}
 
-              {/* Admin Command Hub - Strictly visible ONLY when logged in as role === 'admin' */}
-              {currentUser.role === 'admin' && (
+              {/* Admin Command Hub - Visible to all administrators */}
+              {(currentUser.role === 'admin' || isSuperAdmin || isGeneralAdmin) && (
                 <button
                   type="button"
                   onClick={() => {
