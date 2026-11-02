@@ -256,7 +256,7 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
 
   // 8. Customizer Active Subtab
   const [customizerSubtab, setCustomizerSubtab] = useState<
-    'branding' | 'hero' | 'ticker' | 'notices' | 'reunion' | 'banking' | 'audio' | 'backup'
+    'branding' | 'hero' | 'hall_of_fame' | 'ticker' | 'notices' | 'reunion' | 'banking' | 'audio' | 'backup'
   >('branding');
 
   // Load Overview Data
@@ -1931,12 +1931,13 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
                 {[
                   { id: 'branding', label: '1. Logos & Identity', icon: Globe },
                   { id: 'hero', label: '2. Homepage & Hero', icon: Sparkles },
-                  { id: 'ticker', label: '3. Emergency Ticker', icon: AlertTriangle },
-                  { id: 'notices', label: '4. Official Notices', icon: FileText },
-                  { id: 'reunion', label: '5. Reunion Event', icon: Award },
-                  { id: 'banking', label: '6. Bank & Payments', icon: Lock },
-                  { id: 'audio', label: '7. Ceremonial Anthem', icon: Music },
-                  { id: 'backup', label: '8. Schema Backup & Reset', icon: Download },
+                  { id: 'hall_of_fame', label: '3. Hall of Fame & Photos', icon: Award },
+                  { id: 'ticker', label: '4. Emergency Ticker', icon: AlertTriangle },
+                  { id: 'notices', label: '5. Official Notices', icon: FileText },
+                  { id: 'reunion', label: '6. Reunion Event', icon: Award },
+                  { id: 'banking', label: '7. Bank & Payments', icon: Lock },
+                  { id: 'audio', label: '8. Ceremonial Anthem', icon: Music },
+                  { id: 'backup', label: '9. Schema Backup & Reset', icon: Download },
                 ].map((st) => {
                   const Icon = st.icon;
                   const isActive = customizerSubtab === st.id;
@@ -2489,6 +2490,318 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
                         );
                       })}
                     </div>
+                  </div>
+                </div>
+              )}
+
+              {/* SUBTAB 2B: HALL OF FAME & FEATURED ALUMNI PHOTO STUDIO */}
+              {customizerSubtab === 'hall_of_fame' && (
+                <div className="space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div>
+                      <h3 className="text-sm font-black text-slate-900 dark:text-white flex items-center gap-2">
+                        <Award className="w-4 h-4 text-amber-500" />
+                        <span>Hall of Fame &amp; Featured Alumni Photo Studio ({config.featuredAlumni.length})</span>
+                      </h3>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        Upload new photos from your phone/computer or paste image URLs, edit names, batches, categories, and achievements. Changes broadcast live in real-time.
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const newFa: FeaturedAlumnus = {
+                          id: `fa-${Date.now()}`,
+                          name: 'Dr. Prominent Alumnus',
+                          isAlumni: true,
+                          batch: 25,
+                          category: 'Medicine',
+                          designation: 'Professor & Specialist',
+                          institution: 'Shaheed Ziaur Rahman Medical College Hospital',
+                          city: 'Bogura',
+                          country: 'Bangladesh',
+                          avatarUrl: 'https://images.unsplash.com/photo-1622253692010-333f2da6031d?w=300&auto=format&fit=crop&q=80',
+                          achievementSummary: 'Exceptional clinical contribution in national healthcare and medical pedagogy.',
+                          order: config.featuredAlumni.length + 1,
+                        };
+                        updateConfig({ featuredAlumni: [...config.featuredAlumni, newFa] });
+                        showToast('New Hall of Fame member added.', 'success');
+                      }}
+                      className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs transition-colors cursor-pointer flex items-center gap-1.5 shrink-0"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Add Hall of Fame Profile</span>
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 pt-2">
+                    {config.featuredAlumni.map((fa, idx) => (
+                      <div
+                        key={fa.id}
+                        className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40 space-y-3 shadow-xs"
+                      >
+                        {/* Photo + Upload Button */}
+                        <div className="flex items-center gap-3">
+                          <div className="relative group w-16 h-16 rounded-2xl overflow-hidden shrink-0 border-2 border-indigo-500/30 bg-slate-900">
+                            <img
+                              src={fa.avatarUrl}
+                              alt={fa.name}
+                              className="w-full h-full object-cover"
+                            />
+                            <label
+                              title="Upload new photo from device"
+                              className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center text-white text-[9px] font-bold cursor-pointer"
+                            >
+                              <Upload className="w-3.5 h-3.5 mb-0.5" />
+                              <span>Change</span>
+                              <input
+                                type="file"
+                                accept="image/*"
+                                className="hidden"
+                                onChange={async (e) => {
+                                  const file = e.target.files?.[0];
+                                  if (!file) return;
+                                  try {
+                                    const dataUrl = await compressImageFileToDataUrl(file, 600, 0.85);
+                                    const updated = [...config.featuredAlumni];
+                                    updated[idx] = { ...fa, avatarUrl: dataUrl };
+                                    updateConfig({ featuredAlumni: updated });
+                                    showToast(`Updated photo for ${fa.name}!`, 'success');
+                                  } catch {
+                                    showToast('Failed to process image file', 'error');
+                                  }
+                                  e.target.value = '';
+                                }}
+                              />
+                            </label>
+                          </div>
+
+                          <div className="min-w-0 flex-1 space-y-1.5">
+                            <input
+                              type="text"
+                              value={fa.name}
+                              placeholder="Full Name"
+                              onChange={(e) => {
+                                const updated = [...config.featuredAlumni];
+                                updated[idx] = { ...fa, name: e.target.value };
+                                updateConfig({ featuredAlumni: updated });
+                              }}
+                              className="w-full px-2.5 py-1.5 text-xs rounded-lg font-bold bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700"
+                            />
+
+                            <label className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-bold cursor-pointer transition-colors">
+                              <Upload className="w-3 h-3" />
+                              <span>Upload Photo from Device</span>
+                              <input
+                                type="file"
+                                accept="image/*"
+                                className="hidden"
+                                onChange={async (e) => {
+                                  const file = e.target.files?.[0];
+                                  if (!file) return;
+                                  try {
+                                    const dataUrl = await compressImageFileToDataUrl(file, 600, 0.85);
+                                    const updated = [...config.featuredAlumni];
+                                    updated[idx] = { ...fa, avatarUrl: dataUrl };
+                                    updateConfig({ featuredAlumni: updated });
+                                    showToast(`Updated photo for ${fa.name}!`, 'success');
+                                  } catch {
+                                    showToast('Failed to process image file', 'error');
+                                  }
+                                  e.target.value = '';
+                                }}
+                              />
+                            </label>
+                          </div>
+                        </div>
+
+                        {/* Direct Photo URL Input */}
+                        <div>
+                          <label className="text-[10px] font-bold text-slate-400">Photo URL (or uploaded data)</label>
+                          <input
+                            type="text"
+                            value={fa.avatarUrl}
+                            placeholder="https://... or /assets/..."
+                            onChange={(e) => {
+                              const updated = [...config.featuredAlumni];
+                              updated[idx] = { ...fa, avatarUrl: e.target.value };
+                              updateConfig({ featuredAlumni: updated });
+                            }}
+                            className="w-full px-2.5 py-1 text-[11px] rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 font-mono"
+                          />
+                        </div>
+
+                        {/* Member Type (Alumnus vs Honorary) + Batch + Category */}
+                        <div className="grid grid-cols-3 gap-2">
+                          <div>
+                            <label className="text-[10px] font-bold text-slate-400">Member Type</label>
+                            <select
+                              value={fa.isAlumni === false ? 'honorary' : 'alumni'}
+                              onChange={(e) => {
+                                const isAlum = e.target.value === 'alumni';
+                                const updated = [...config.featuredAlumni];
+                                updated[idx] = {
+                                  ...fa,
+                                  isAlumni: isAlum,
+                                  batch: isAlum ? (fa.batch || 1) : 0,
+                                  nonAlumniRole: isAlum ? undefined : (fa.nonAlumniRole || 'Honorary & Faculty'),
+                                };
+                                updateConfig({ featuredAlumni: updated });
+                              }}
+                              className="w-full px-2 py-1 text-[11px] rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 font-semibold"
+                            >
+                              <option value="alumni">SZMC Alumnus</option>
+                              <option value="honorary">Honorary / Faculty</option>
+                            </select>
+                          </div>
+
+                          {fa.isAlumni === false ? (
+                            <div>
+                              <label className="text-[10px] font-bold text-slate-400">Honorary Role</label>
+                              <input
+                                type="text"
+                                value={fa.nonAlumniRole || ''}
+                                placeholder="Former Principal"
+                                onChange={(e) => {
+                                  const updated = [...config.featuredAlumni];
+                                  updated[idx] = { ...fa, nonAlumniRole: e.target.value };
+                                  updateConfig({ featuredAlumni: updated });
+                                }}
+                                className="w-full px-2 py-1 text-[11px] rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700"
+                              />
+                            </div>
+                          ) : (
+                            <div>
+                              <label className="text-[10px] font-bold text-slate-400">MBBS Batch</label>
+                              <input
+                                type="number"
+                                min={1}
+                                max={35}
+                                value={fa.batch || 1}
+                                onChange={(e) => {
+                                  const updated = [...config.featuredAlumni];
+                                  updated[idx] = { ...fa, batch: Number(e.target.value) || 1 };
+                                  updateConfig({ featuredAlumni: updated });
+                                }}
+                                className="w-full px-2 py-1 text-[11px] rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 font-bold"
+                              />
+                            </div>
+                          )}
+
+                          <div>
+                            <label className="text-[10px] font-bold text-slate-400">Category</label>
+                            <select
+                              value={fa.category}
+                              onChange={(e) => {
+                                const updated = [...config.featuredAlumni];
+                                updated[idx] = { ...fa, category: e.target.value as any };
+                                updateConfig({ featuredAlumni: updated });
+                              }}
+                              className="w-full px-2 py-1 text-[11px] rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700"
+                            >
+                              <option value="Medicine">Medicine</option>
+                              <option value="Surgery">Surgery</option>
+                              <option value="Pediatrics">Pediatrics</option>
+                              <option value="Academia">Academia</option>
+                              <option value="Public Service">Public Service</option>
+                              <option value="Global">Global</option>
+                              <option value="Honorary & Faculty">Honorary &amp; Faculty</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="text-[10px] font-bold text-slate-400">Designation &amp; Institution</label>
+                          <input
+                            type="text"
+                            value={fa.designation}
+                            placeholder="Designation"
+                            onChange={(e) => {
+                              const updated = [...config.featuredAlumni];
+                              updated[idx] = { ...fa, designation: e.target.value };
+                              updateConfig({ featuredAlumni: updated });
+                            }}
+                            className="w-full px-2 py-1 text-xs rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 mb-1"
+                          />
+                          <input
+                            type="text"
+                            value={fa.institution}
+                            placeholder="Institution / Hospital"
+                            onChange={(e) => {
+                              const updated = [...config.featuredAlumni];
+                              updated[idx] = { ...fa, institution: e.target.value };
+                              updateConfig({ featuredAlumni: updated });
+                            }}
+                            className="w-full px-2 py-1 text-xs rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="text-[10px] font-bold text-slate-400">Achievement Summary</label>
+                          <textarea
+                            rows={2}
+                            value={fa.achievementSummary}
+                            onChange={(e) => {
+                              const updated = [...config.featuredAlumni];
+                              updated[idx] = { ...fa, achievementSummary: e.target.value };
+                              updateConfig({ featuredAlumni: updated });
+                            }}
+                            className="w-full px-2 py-1 text-xs rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700"
+                          />
+                        </div>
+
+                        <div className="flex items-center justify-between pt-2 border-t border-slate-200/50 dark:border-slate-700/50 text-xs">
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              disabled={idx === 0}
+                              onClick={() => {
+                                if (idx === 0) return;
+                                const updated = [...config.featuredAlumni];
+                                const temp = updated[idx - 1];
+                                updated[idx - 1] = { ...updated[idx], order: idx };
+                                updated[idx] = { ...temp, order: idx + 1 };
+                                updateConfig({ featuredAlumni: updated });
+                              }}
+                              className="p-1 rounded bg-slate-200/70 dark:bg-slate-700/70 hover:bg-slate-300 disabled:opacity-40 cursor-pointer"
+                              title="Move Up"
+                            >
+                              <ChevronUp className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              disabled={idx === config.featuredAlumni.length - 1}
+                              onClick={() => {
+                                if (idx >= config.featuredAlumni.length - 1) return;
+                                const updated = [...config.featuredAlumni];
+                                const temp = updated[idx + 1];
+                                updated[idx + 1] = { ...updated[idx], order: idx + 2 };
+                                updated[idx] = { ...temp, order: idx + 1 };
+                                updateConfig({ featuredAlumni: updated });
+                              }}
+                              className="p-1 rounded bg-slate-200/70 dark:bg-slate-700/70 hover:bg-slate-300 disabled:opacity-40 cursor-pointer"
+                              title="Move Down"
+                            >
+                              <ChevronDown className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const updated = config.featuredAlumni.filter((_, i) => i !== idx);
+                              updateConfig({ featuredAlumni: updated });
+                              showToast('Removed from Hall of Fame.', 'info');
+                            }}
+                            className="text-rose-600 hover:underline font-bold cursor-pointer flex items-center gap-1"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            <span>Remove</span>
+                          </button>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}
@@ -3310,15 +3623,43 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
                 </button>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 pt-2">
                 {config.featuredAlumni.map((fa, idx) => (
                   <div
                     key={fa.id}
                     className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40 space-y-3"
                   >
                     <div className="flex items-center gap-3">
-                      <img src={fa.avatarUrl} alt={fa.name} className="w-12 h-12 rounded-xl object-cover shrink-0" />
-                      <div className="min-w-0 flex-1">
+                      <div className="relative group w-14 h-14 rounded-xl overflow-hidden shrink-0 border border-indigo-500/30 bg-slate-900">
+                        <img src={fa.avatarUrl} alt={fa.name} className="w-full h-full object-cover" />
+                        <label
+                          title="Upload new photo from device"
+                          className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center text-white text-[9px] font-bold cursor-pointer"
+                        >
+                          <Upload className="w-3 h-3 mb-0.5" />
+                          <span>Photo</span>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            onChange={async (e) => {
+                              const file = e.target.files?.[0];
+                              if (!file) return;
+                              try {
+                                const dataUrl = await compressImageFileToDataUrl(file, 600, 0.85);
+                                const updated = [...config.featuredAlumni];
+                                updated[idx] = { ...fa, avatarUrl: dataUrl };
+                                updateConfig({ featuredAlumni: updated });
+                                showToast(`Updated photo for ${fa.name}!`, 'success');
+                              } catch {
+                                showToast('Failed to process image file', 'error');
+                              }
+                              e.target.value = '';
+                            }}
+                          />
+                        </label>
+                      </div>
+                      <div className="min-w-0 flex-1 space-y-1">
                         <input
                           type="text"
                           value={fa.name}
@@ -3329,7 +3670,86 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
                           }}
                           className="w-full px-2 py-1 text-xs rounded-lg font-bold bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700"
                         />
-                        <div className="text-[11px] text-slate-400 mt-1">Batch {fa.batch} • {fa.category}</div>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[11px] text-slate-400">Batch {fa.batch} • {fa.category}</span>
+                          <label className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-bold cursor-pointer">
+                            <Upload className="w-2.5 h-2.5" />
+                            <span>Change Pic</span>
+                            <input
+                              type="file"
+                              accept="image/*"
+                              className="hidden"
+                              onChange={async (e) => {
+                                const file = e.target.files?.[0];
+                                if (!file) return;
+                                try {
+                                  const dataUrl = await compressImageFileToDataUrl(file, 600, 0.85);
+                                  const updated = [...config.featuredAlumni];
+                                  updated[idx] = { ...fa, avatarUrl: dataUrl };
+                                  updateConfig({ featuredAlumni: updated });
+                                  showToast(`Updated photo for ${fa.name}!`, 'success');
+                                } catch {
+                                  showToast('Failed to process image file', 'error');
+                                }
+                                e.target.value = '';
+                              }}
+                            />
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-[10px] text-slate-400">Photo URL</label>
+                      <input
+                        type="text"
+                        value={fa.avatarUrl}
+                        placeholder="https://... or upload above"
+                        onChange={(e) => {
+                          const updated = [...config.featuredAlumni];
+                          updated[idx] = { ...fa, avatarUrl: e.target.value };
+                          updateConfig({ featuredAlumni: updated });
+                        }}
+                        className="w-full px-2 py-1 text-[11px] rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 font-mono"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-[10px] text-slate-400">MBBS Batch (0 = Honorary)</label>
+                        <input
+                          type="number"
+                          min={0}
+                          max={35}
+                          value={fa.batch}
+                          onChange={(e) => {
+                            const b = Number(e.target.value) || 0;
+                            const updated = [...config.featuredAlumni];
+                            updated[idx] = { ...fa, batch: b, isAlumni: b > 0 };
+                            updateConfig({ featuredAlumni: updated });
+                          }}
+                          className="w-full px-2 py-1 text-xs rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 font-bold"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] text-slate-400">Category</label>
+                        <select
+                          value={fa.category}
+                          onChange={(e) => {
+                            const updated = [...config.featuredAlumni];
+                            updated[idx] = { ...fa, category: e.target.value as any };
+                            updateConfig({ featuredAlumni: updated });
+                          }}
+                          className="w-full px-2 py-1 text-xs rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700"
+                        >
+                          <option value="Medicine">Medicine</option>
+                          <option value="Surgery">Surgery</option>
+                          <option value="Pediatrics">Pediatrics</option>
+                          <option value="Academia">Academia</option>
+                          <option value="Public Service">Public Service</option>
+                          <option value="Global">Global</option>
+                          <option value="Honorary & Faculty">Honorary &amp; Faculty</option>
+                        </select>
                       </div>
                     </div>
 
@@ -3372,6 +3792,14 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
                     </div>
 
                     <div className="flex items-center justify-between pt-2 border-t border-slate-200/50 dark:border-slate-700/50 text-xs">
+                      <button
+                        type="button"
+                        onClick={handleManualSave}
+                        className="text-indigo-600 dark:text-indigo-400 hover:underline font-bold cursor-pointer flex items-center gap-1"
+                      >
+                        <Save className="w-3 h-3" />
+                        <span>Save Live</span>
+                      </button>
                       <button
                         type="button"
                         onClick={() => {

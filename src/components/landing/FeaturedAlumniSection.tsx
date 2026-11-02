@@ -22,6 +22,8 @@ import {
   ScrollReveal,
   Tilt3DCard,
 } from '../motion/CinematicMotion';
+import { useSiteConfig, type FeaturedAlumnus } from '../../services/siteConfigService';
+import { realtimeManager } from '../../services/supabaseRealtimeService';
 import campusHeroImg from '../../assets/images/ndc_campus_hero_1790233370828.jpg';
 
 interface FeaturedAlumniSectionProps {
@@ -30,7 +32,13 @@ interface FeaturedAlumniSectionProps {
   onExploreDirectory: () => void;
 }
 
-type EliteCategory = 'all' | 'surgery' | 'medicine' | 'pediatrics' | 'academia' | 'global';
+type EliteCategory = 'all' | 'surgery' | 'medicine' | 'pediatrics' | 'academia' | 'global' | 'honorary';
+
+export type HallOfFameProfile = AlumniProfile & {
+  isAlumni?: boolean;
+  nonAlumniRole?: string;
+  hallCategory?: string;
+};
 
 // Prominent Shaheed Ziaur Rahman Medical College (SZMC Bogura) Alumni Doctors
 export const FAMOUS_SZMC_ALUMNI: AlumniProfile[] = [];
@@ -40,18 +48,146 @@ export const FeaturedAlumniSection: React.FC<FeaturedAlumniSectionProps> = ({
   onSelectAlumnus,
   onExploreDirectory,
 }) => {
+  const { config } = useSiteConfig();
+  const [liveHallOfFame, setLiveHallOfFame] = useState<FeaturedAlumnus[] | null>(null);
+  const [liveAlumniList, setLiveAlumniList] = useState<AlumniProfile[]>(alumniList);
   const [activeCategory, setActiveCategory] = useState<EliteCategory>('all');
   const [isAutoScrolling, setIsAutoScrolling] = useState<boolean>(true);
   const [isHovered, setIsHovered] = useState<boolean>(false);
   const carouselRef = useRef<HTMLDivElement>(null);
 
-  // Combine prominent SZMC doctors with any registered profiles
-  const allProminentAlumni = useMemo(() => {
-    const combined = [...FAMOUS_SZMC_ALUMNI];
-    if (alumniList && alumniList.length > 0) {
-      alumniList.forEach((userAlumnus, idx) => {
+  useEffect(() => {
+    setLiveAlumniList(alumniList);
+  }, [alumniList]);
+
+  useEffect(() => {
+    if (Array.isArray(config.featuredAlumni)) {
+      setLiveHallOfFame(config.featuredAlumni);
+    }
+  }, [config.featuredAlumni]);
+
+  // Subscribe to Supabase Realtime Hall of Fame & Alumni Profile updates for zero-refresh UI sync
+  useEffect(() => {
+    const unsubHof = realtimeManager.subscribeToHallOfFame((event) => {
+      if (Array.isArray(event.featuredAlumni) && event.featuredAlumni.length > 0) {
+        setLiveHallOfFame(event.featuredAlumni as FeaturedAlumnus[]);
+      }
+    });
+
+    const unsubAlumni = realtimeManager.subscribeToAlumni((event) => {
+      const rec = event.newRecord;
+      if (!rec) return;
+      const mappedId = Number(rec.id || rec.user_id || Date.now());
+      const mappedProfile: AlumniProfile = {
+        id: mappedId,
+        userId: mappedId,
+        fullName: rec.full_name || rec.fullName || 'SZMC Alumnus',
+        collegeRoll: rec.college_roll || rec.collegeRoll || `SZMC-${rec.batch_year || rec.batchYear || 25}`,
+        batchYear: Number(rec.batch_year || rec.batchYear || 25),
+        group: (rec.academic_stream || rec.group || 'Science') as any,
+        degree: Array.isArray(rec.degree) ? rec.degree : ['MBBS'],
+        profession: rec.profession || 'Medical Doctor',
+        position: rec.position || 'Physician',
+        institution: rec.institution || 'SZMC & Hospital',
+        city: rec.city || 'Bogura',
+        country: rec.country || 'Bangladesh',
+        avatarUrl:
+          rec.avatar_url ||
+          rec.avatarUrl ||
+          'https://images.unsplash.com/photo-1622253692010-333f2da6031d?w=300&auto=format&fit=crop&q=80',
+        coverUrl: campusHeroImg,
+        bio: rec.bio || '',
+        email: rec.email || '',
+        isPublic: true,
+        verificationStatus: rec.verification_status === 'verified' || rec.isVerified ? 'verified' : 'pending_vouch',
+        online: true,
+        bloodGroup: rec.blood_group || rec.bloodGroup || 'O+',
+        specialty: Array.isArray(rec.specialty) ? rec.specialty : ['Medicine'],
+        badges: Array.isArray(rec.badges) ? rec.badges : ['SZMCian'],
+      };
+
+      setLiveAlumniList((prev) => {
+        if (event.eventType === 'DELETE') {
+          const oldId = Number(event.oldRecord?.id);
+          return prev.filter((a) => a.id !== oldId);
+        }
+        const idx = prev.findIndex(
+          (a) =>
+            a.id === mappedProfile.id ||
+            a.fullName.toLowerCase().trim() === mappedProfile.fullName.toLowerCase().trim()
+        );
+        if (idx >= 0) {
+          const updated = [...prev];
+          updated[idx] = { ...updated[idx], ...mappedProfile };
+          return updated;
+        }
+        return [mappedProfile, ...prev];
+      });
+    });
+
+    return () => {
+      unsubHof();
+      unsubAlumni();
+    };
+  }, []);
+
+  const effectiveFeaturedAlumni = liveHallOfFame ?? config.featuredAlumni;
+
+  // Combine Admin-curated Hall of Fame (effectiveFeaturedAlumni) with prominent SZMC doctors and registered profiles
+  const allProminentAlumni = useMemo<HallOfFameProfile[]>(() => {
+    const fromSiteConfig: HallOfFameProfile[] = Array.isArray(effectiveFeaturedAlumni)
+      ? [...effectiveFeaturedAlumni]
+          .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+          .map((fa, idx) => {
+            const isAlum = fa.isAlumni !== false && Number(fa.batch) > 0;
+            const roleLabel = !isAlum
+              ? fa.nonAlumniRole?.trim() || 'Honorary & Distinguished Member'
+              : `Batch ${fa.batch < 10 ? `0${fa.batch}` : fa.batch}`;
+            return {
+              id: 900000 + idx,
+              userId: 900000 + idx,
+              fullName: fa.name || 'Distinguished Member',
+              rollNo: isAlum ? `SZMC-${fa.batch}` : 'HONORARY',
+              batchYear: isAlum ? Number(fa.batch) : 0,
+              passingYear: isAlum ? 1992 + Number(fa.batch) + 5 : new Date().getFullYear(),
+              group: (fa.category as any) || 'Medicine',
+              degree: [isAlum ? 'MBBS (SZMC)' : 'Distinguished Fellow'],
+              profession: fa.designation || 'Specialist Physician',
+              position: fa.designation || 'Distinguished Leader',
+              institution: fa.institution || 'Shaheed Ziaur Rahman Medical College & Hospital',
+              city: fa.city || 'Bogura',
+              country: fa.country || 'Bangladesh',
+              avatarUrl:
+                fa.avatarUrl ||
+                'https://images.unsplash.com/photo-1622253692010-333f2da6031d?w=300&auto=format&fit=crop&q=80',
+              coverUrl: campusHeroImg,
+              bio:
+                fa.achievementSummary ||
+                'Distinguished member recognized in the SZMC Hall of Fame for outstanding contribution.',
+              email: '',
+              linkedin: '',
+              isPublic: true,
+              isVerified: true,
+              online: true,
+              isMentor: true,
+              bloodGroup: 'O+',
+              isAvailableForBloodDonation: false,
+              specialty: [fa.category || 'Medicine', fa.achievementSummary].filter(Boolean) as string[],
+              badges: isAlum
+                ? ['Hall of Fame', fa.category || 'Distinguished Alumnus']
+                : [roleLabel, 'Hall of Fame'],
+              isAlumni: isAlum,
+              nonAlumniRole: roleLabel,
+              hallCategory: fa.category,
+            };
+          })
+      : [];
+
+    const combined: HallOfFameProfile[] = [...fromSiteConfig, ...FAMOUS_SZMC_ALUMNI];
+    if (liveAlumniList && liveAlumniList.length > 0) {
+      liveAlumniList.forEach((userAlumnus, idx) => {
         const sameName = combined.some(
-          (p) => p.fullName.toLowerCase() === userAlumnus.fullName.toLowerCase()
+          (p) => p.fullName.toLowerCase().trim() === userAlumnus.fullName.toLowerCase().trim()
         );
         if (!sameName) {
           const hasSameId = combined.some((p) => p.id === userAlumnus.id);
@@ -64,7 +200,7 @@ export const FeaturedAlumniSection: React.FC<FeaturedAlumniSectionProps> = ({
       });
     }
     return combined;
-  }, [alumniList]);
+  }, [effectiveFeaturedAlumni, liveAlumniList]);
 
   // Filter based on active career category
   const filteredAlumni = useMemo(() => {
@@ -72,6 +208,7 @@ export const FeaturedAlumniSection: React.FC<FeaturedAlumniSectionProps> = ({
       case 'surgery':
         return allProminentAlumni.filter(
           (a) =>
+            a.hallCategory?.toLowerCase().includes('surgery') ||
             a.profession?.toLowerCase().includes('surgeon') ||
             a.profession?.toLowerCase().includes('surgery') ||
             a.profession?.toLowerCase().includes('ortho') ||
@@ -83,6 +220,7 @@ export const FeaturedAlumniSection: React.FC<FeaturedAlumniSectionProps> = ({
       case 'medicine':
         return allProminentAlumni.filter(
           (a) =>
+            a.hallCategory?.toLowerCase().includes('medicine') ||
             a.profession?.toLowerCase().includes('cardio') ||
             a.profession?.toLowerCase().includes('medicine') ||
             a.profession?.toLowerCase().includes('neuro') ||
@@ -93,6 +231,7 @@ export const FeaturedAlumniSection: React.FC<FeaturedAlumniSectionProps> = ({
       case 'pediatrics':
         return allProminentAlumni.filter(
           (a) =>
+            a.hallCategory?.toLowerCase().includes('pediatric') ||
             a.profession?.toLowerCase().includes('pediatric') ||
             a.profession?.toLowerCase().includes('gynae') ||
             a.profession?.toLowerCase().includes('obstetric') ||
@@ -103,16 +242,28 @@ export const FeaturedAlumniSection: React.FC<FeaturedAlumniSectionProps> = ({
       case 'academia':
         return allProminentAlumni.filter(
           (a) =>
+            a.hallCategory?.toLowerCase().includes('academia') ||
+            a.hallCategory?.toLowerCase().includes('honorary') ||
             a.profession?.toLowerCase().includes('professor') ||
             a.position?.toLowerCase().includes('professor') ||
+            a.position?.toLowerCase().includes('principal') ||
             a.position?.toLowerCase().includes('dean') ||
             a.position?.toLowerCase().includes('head') ||
-            a.badges?.some((b) => b.toLowerCase().includes('faculty'))
+            a.badges?.some((b) => b.toLowerCase().includes('faculty') || b.toLowerCase().includes('principal'))
         );
       case 'global':
         return allProminentAlumni.filter(
           (a) =>
-            a.country && a.country.toLowerCase() !== 'bangladesh'
+            a.hallCategory?.toLowerCase().includes('global') ||
+            (a.country && a.country.toLowerCase() !== 'bangladesh')
+        );
+      case 'honorary':
+        return allProminentAlumni.filter(
+          (a) =>
+            a.isAlumni === false ||
+            !a.batchYear ||
+            a.batchYear <= 0 ||
+            a.hallCategory?.toLowerCase().includes('honorary')
         );
       case 'all':
       default:
@@ -165,7 +316,7 @@ export const FeaturedAlumniSection: React.FC<FeaturedAlumniSectionProps> = ({
           <div>
             <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-blue-100 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 text-[10px] sm:text-xs font-bold uppercase tracking-wider mb-1.5">
               <Sparkles className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-blue-600 dark:text-blue-400" />
-              <span>DISTINGUISHED DOCTORS • SZMC LEADERS</span>
+              <span>HALL OF FAME • DISTINGUISHED DOCTORS &amp; LEADERS</span>
             </div>
             <h2 className="text-xl sm:text-3xl lg:text-4xl font-black text-slate-900 dark:text-white tracking-tight">
               Meet the proud members of the SZMC family.
@@ -175,12 +326,13 @@ export const FeaturedAlumniSection: React.FC<FeaturedAlumniSectionProps> = ({
           {/* Filter Pills with mobile horizontal scroll */}
           <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-900 p-1 sm:p-1.5 rounded-xl sm:rounded-2xl border border-slate-200 dark:border-slate-800 overflow-x-auto max-w-full no-scrollbar pb-1.5 sm:pb-1.5 md:flex-wrap self-start md:self-auto -mx-4 px-4 sm:mx-0 sm:px-1.5">
             {[
-              { id: 'all', label: 'All Doctors' },
+              { id: 'all', label: 'All Hall of Fame' },
               { id: 'surgery', label: 'Surgery & Orthopedics' },
               { id: 'medicine', label: 'Medicine & Cardiology' },
               { id: 'pediatrics', label: 'Pediatrics & Gynae' },
               { id: 'academia', label: 'Professors & Faculty' },
-              { id: 'global', label: 'Global Diaspora (UK/USA)' },
+              { id: 'honorary', label: 'Honorary & Non-Alumni' },
+              { id: 'global', label: 'Global Diaspora' },
             ].map((tab) => (
               <button
                 key={tab.id}

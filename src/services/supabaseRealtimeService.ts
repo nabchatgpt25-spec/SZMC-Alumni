@@ -28,25 +28,47 @@ export interface RealtimeAlumniEvent {
   oldRecord: any;
 }
 
+export interface RealtimeHallOfFameEvent {
+  eventType: 'INSERT' | 'UPDATE' | 'DELETE' | 'SYNC';
+  featuredAlumni: any[];
+  config?: any;
+  timestamp: number;
+}
+
+export interface RealtimeSiteSettingsEvent {
+  key: string;
+  value: any;
+  timestamp: number;
+}
+
 class SupabaseRealtimeManager {
   private feedChannel: RealtimeChannel | null = null;
   private bloodChannel: RealtimeChannel | null = null;
   private alumniChannel: RealtimeChannel | null = null;
   private noticesChannel: RealtimeChannel | null = null;
+  private hallOfFameChannel: RealtimeChannel | null = null;
+  private eventsChannel: RealtimeChannel | null = null;
   private userNotificationChannels = new Map<number, RealtimeChannel>();
 
   private feedListeners = new Set<(event: RealtimeFeedEvent) => void>();
   private bloodListeners = new Set<(event: RealtimeBloodEvent) => void>();
   private alumniListeners = new Set<(event: RealtimeAlumniEvent) => void>();
   private noticesListeners = new Set<(event: any) => void>();
+  private hallOfFameListeners = new Set<(event: RealtimeHallOfFameEvent) => void>();
+  private siteSettingsListeners = new Set<(event: RealtimeSiteSettingsEvent) => void>();
+  private eventsListeners = new Set<(event: any) => void>();
   private userNotificationListeners = new Map<number, Set<(notification: any) => void>>();
 
   private status: RealtimeStatus = isSupabaseConfigured ? 'CONNECTING' : 'OFFLINE';
   private statusListeners = new Set<(status: RealtimeStatus) => void>();
+  private sseInitialized = false;
 
   constructor() {
-    if (isSupabaseConfigured && typeof window !== 'undefined') {
-      this.initSharedChannels();
+    if (typeof window !== 'undefined') {
+      this.ensureUnifiedSseStream();
+      if (isSupabaseConfigured) {
+        this.initSharedChannels();
+      }
     }
   }
 
@@ -68,18 +90,324 @@ class SupabaseRealtimeManager {
   }
 
   // ---------------------------------------------------------------------------
+  // UNIFIED SERVER-SENT EVENTS (SSE) STREAM FOR INSTANT CROSS-CLIENT SYNC
+  // ---------------------------------------------------------------------------
+  private ensureUnifiedSseStream() {
+    if (this.sseInitialized || typeof window === 'undefined' || typeof window.EventSource === 'undefined') {
+      return;
+    }
+    this.sseInitialized = true;
+
+    try {
+      const es = new EventSource('/api/feed/stream');
+      es.onopen = () => {
+        this.setStatus('SUBSCRIBED');
+      };
+      es.onmessage = (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          if (!data || !data.type) return;
+
+          if (data.type === 'POST_CREATED') {
+            const event: RealtimeFeedEvent = {
+              table: 'posts',
+              eventType: 'INSERT',
+              newRecord: data.post || data.newRecord,
+              oldRecord: null,
+            };
+            this.feedListeners.forEach((cb) => cb(event));
+          } else if (data.type === 'POST_LIKED' || data.type === 'POST_REACTED') {
+            const event: RealtimeFeedEvent = {
+              table: 'post_likes',
+              eventType: 'UPDATE',
+              newRecord: {
+                post_id: data.postId,
+                postId: data.postId,
+                user_id: data.userId,
+                userId: data.userId,
+                likes_count: data.likesCount,
+                likesCount: data.likesCount,
+                reaction: data.reaction,
+                reactionsSummary: data.reactionsSummary,
+                liked: data.liked,
+              },
+              oldRecord: null,
+            };
+            this.feedListeners.forEach((cb) => cb(event));
+          } else if (data.type === 'POST_COMMENTED') {
+            const event: RealtimeFeedEvent = {
+              table: 'post_comments',
+              eventType: 'INSERT',
+              newRecord: data.comment,
+              oldRecord: null,
+            };
+            this.feedListeners.forEach((cb) => cb(event));
+          } else if (data.type === 'POST_REPLY') {
+            const event: RealtimeFeedEvent = {
+              table: 'post_comments',
+              eventType: 'UPDATE',
+              newRecord: {
+                post_id: data.postId,
+                postId: data.postId,
+                parentCommentId: data.parentCommentId,
+                reply: data.reply,
+              },
+              oldRecord: null,
+            };
+            this.feedListeners.forEach((cb) => cb(event));
+          } else if (
+            data.type === 'SITE_CONFIG_UPDATED' ||
+            data.type === 'HALL_OF_FAME_UPDATED' ||
+            (data.type === 'CONNECTED' && data.config)
+          ) {
+            const cfg = data.config;
+            if (cfg && typeof cfg === 'object') {
+              this.siteSettingsListeners.forEach((cb) =>
+                cb({
+                  key: 'master_site_config',
+                  value: cfg,
+                  timestamp: data.timestamp || Date.now(),
+                })
+              );
+              if (Array.isArray(cfg.featuredAlumni)) {
+                this.hallOfFameListeners.forEach((cb) =>
+                  cb({
+                    eventType: 'SYNC',
+                    featuredAlumni: cfg.featuredAlumni,
+                    config: cfg,
+                    timestamp: data.timestamp || Date.now(),
+                  })
+                );
+              }
+            } else if (Array.isArray(data.featuredAlumni)) {
+              this.hallOfFameListeners.forEach((cb) =>
+                cb({
+                  eventType: 'SYNC',
+                  featuredAlumni: data.featuredAlumni,
+                  timestamp: data.timestamp || Date.now(),
+                })
+              );
+            }
+          } else if (data.type === 'ALUMNI_UPDATED' || data.type === 'ALUMNI_REGISTERED') {
+            const event: RealtimeAlumniEvent = {
+              eventType: data.type === 'ALUMNI_REGISTERED' ? 'INSERT' : 'UPDATE',
+              newRecord: data.profile || data.newRecord,
+              oldRecord: null,
+            };
+            this.alumniListeners.forEach((cb) => cb(event));
+          } else if (data.type === 'BLOOD_UPDATED') {
+            const event: RealtimeBloodEvent = {
+              table: data.table || 'blood_requests',
+              eventType: data.eventType || 'INSERT',
+              newRecord: data.record || data.newRecord,
+              oldRecord: null,
+            };
+            this.bloodListeners.forEach((cb) => cb(event));
+          } else if (data.type === 'NOTICE_UPDATED') {
+            this.noticesListeners.forEach((cb) => cb(data.notice || data));
+          } else if (data.type === 'GALLERY_UPDATED') {
+            this.galleryListeners.forEach((cb) => cb(data));
+          } else if (data.type === 'EVENT_UPDATED') {
+            this.eventsListeners.forEach((cb) => cb(data));
+          }
+        } catch {}
+      };
+    } catch (esErr) {
+      console.warn('SSE stream notice:', esErr);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // 0. HALL OF FAME & SITE SETTINGS REALTIME CHANNEL (postgres_changes + broadcast)
+  // ---------------------------------------------------------------------------
+  public subscribeToHallOfFame(listener: (event: RealtimeHallOfFameEvent) => void): () => void {
+    this.hallOfFameListeners.add(listener);
+    this.ensureHallOfFameAndSiteChannel();
+    return () => {
+      this.hallOfFameListeners.delete(listener);
+    };
+  }
+
+  public subscribeToSiteSettings(listener: (event: RealtimeSiteSettingsEvent) => void): () => void {
+    this.siteSettingsListeners.add(listener);
+    this.ensureHallOfFameAndSiteChannel();
+    return () => {
+      this.siteSettingsListeners.delete(listener);
+    };
+  }
+
+  public broadcastSiteConfigUpdate(config: any) {
+    if (!config || typeof config !== 'object') return;
+    if (this.hallOfFameChannel && isSupabaseConfigured) {
+      try {
+        void this.hallOfFameChannel.send({
+          type: 'broadcast',
+          event: 'site_config_updated',
+          payload: {
+            config,
+            featuredAlumni: config.featuredAlumni,
+            timestamp: Date.now(),
+          },
+        });
+      } catch {}
+    }
+  }
+
+  private ensureHallOfFameAndSiteChannel() {
+    if (this.hallOfFameChannel || !isSupabaseConfigured) return;
+
+    try {
+      this.hallOfFameChannel = supabase
+        .channel('realtime:hall_of_fame_and_site_config', {
+          config: { broadcast: { self: false } },
+        })
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'site_settings' },
+          (payload: any) => {
+            const row = payload?.new;
+            if (!row) return;
+            const key = row.key || 'master_site_config';
+            const val = row.value;
+            if (val && typeof val === 'object') {
+              this.siteSettingsListeners.forEach((cb) =>
+                cb({
+                  key,
+                  value: val,
+                  timestamp: Date.now(),
+                })
+              );
+              if (key === 'master_site_config' && Array.isArray(val.featuredAlumni)) {
+                this.hallOfFameListeners.forEach((cb) =>
+                  cb({
+                    eventType: (payload.eventType as any) || 'UPDATE',
+                    featuredAlumni: val.featuredAlumni,
+                    config: val,
+                    timestamp: Date.now(),
+                  })
+                );
+              } else if (key === 'hall_of_fame' && Array.isArray(val.members || val)) {
+                const members = Array.isArray(val) ? val : val.members;
+                this.hallOfFameListeners.forEach((cb) =>
+                  cb({
+                    eventType: (payload.eventType as any) || 'UPDATE',
+                    featuredAlumni: members,
+                    timestamp: Date.now(),
+                  })
+                );
+              }
+            }
+          }
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'featured_alumni' },
+          (payload: any) => {
+            this.hallOfFameListeners.forEach((cb) =>
+              cb({
+                eventType: (payload.eventType as any) || 'UPDATE',
+                featuredAlumni: payload.new ? [payload.new] : [],
+                timestamp: Date.now(),
+              })
+            );
+          }
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'hall_of_fame' },
+          (payload: any) => {
+            this.hallOfFameListeners.forEach((cb) =>
+              cb({
+                eventType: (payload.eventType as any) || 'UPDATE',
+                featuredAlumni: payload.new ? [payload.new] : [],
+                timestamp: Date.now(),
+              })
+            );
+          }
+        )
+        .on('broadcast', { event: 'site_config_updated' }, (msg: any) => {
+          const payload = msg?.payload || msg;
+          if (payload?.config && typeof payload.config === 'object') {
+            this.siteSettingsListeners.forEach((cb) =>
+              cb({
+                key: 'master_site_config',
+                value: payload.config,
+                timestamp: payload.timestamp || Date.now(),
+              })
+            );
+            if (Array.isArray(payload.config.featuredAlumni)) {
+              this.hallOfFameListeners.forEach((cb) =>
+                cb({
+                  eventType: 'SYNC',
+                  featuredAlumni: payload.config.featuredAlumni,
+                  config: payload.config,
+                  timestamp: payload.timestamp || Date.now(),
+                })
+              );
+            }
+          }
+        })
+        .on('broadcast', { event: 'hall_of_fame_updated' }, (msg: any) => {
+          const payload = msg?.payload || msg;
+          if (Array.isArray(payload?.featuredAlumni)) {
+            this.hallOfFameListeners.forEach((cb) =>
+              cb({
+                eventType: 'SYNC',
+                featuredAlumni: payload.featuredAlumni,
+                timestamp: payload.timestamp || Date.now(),
+              })
+            );
+          }
+        })
+        .subscribe((subscriptionStatus) => {
+          if (subscriptionStatus === 'SUBSCRIBED') {
+            this.setStatus('SUBSCRIBED');
+          }
+        });
+    } catch (err) {
+      console.warn('Realtime Hall of Fame & Site Settings subscription warning:', err);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // 1. FEED REALTIME CHANNEL (posts, comments, likes)
   // ---------------------------------------------------------------------------
   public subscribeToFeed(listener: (event: RealtimeFeedEvent) => void): () => void {
     this.feedListeners.add(listener);
     this.ensureFeedChannel();
+    this.ensureUnifiedSseStream();
 
     return () => {
       this.feedListeners.delete(listener);
-      if (this.feedListeners.size === 0 && this.feedChannel) {
-        // Keep channel alive for low-latency re-subscriptions or clean up if idle
-      }
     };
+  }
+
+  public broadcastComment(comment: any) {
+    if (!comment || !isSupabaseConfigured) return;
+    this.ensureFeedChannel();
+    if (this.feedChannel) {
+      try {
+        void this.feedChannel.send({
+          type: 'broadcast',
+          event: 'comment:inserted',
+          payload: { comment, timestamp: Date.now() },
+        });
+      } catch {}
+    }
+  }
+
+  public broadcastReply(postId: number, parentCommentId: number, reply: any) {
+    if (!reply || !isSupabaseConfigured) return;
+    this.ensureFeedChannel();
+    if (this.feedChannel) {
+      try {
+        void this.feedChannel.send({
+          type: 'broadcast',
+          event: 'comment:replied',
+          payload: { postId, parentCommentId, reply, timestamp: Date.now() },
+        });
+      } catch {}
+    }
   }
 
   private ensureFeedChannel() {
@@ -87,7 +415,9 @@ class SupabaseRealtimeManager {
 
     try {
       this.feedChannel = supabase
-        .channel('realtime:quad_feed')
+        .channel('realtime:quad_feed', {
+          config: { broadcast: { self: false } },
+        })
         .on(
           'postgres_changes',
           { event: '*', schema: 'public', table: 'posts' },
@@ -127,6 +457,35 @@ class SupabaseRealtimeManager {
             this.feedListeners.forEach((cb) => cb(event));
           }
         )
+        .on('broadcast', { event: 'comment:inserted' }, (msg: any) => {
+          const payload = msg?.payload || msg;
+          if (payload?.comment) {
+            const event: RealtimeFeedEvent = {
+              table: 'post_comments',
+              eventType: 'INSERT',
+              newRecord: payload.comment,
+              oldRecord: null,
+            };
+            this.feedListeners.forEach((cb) => cb(event));
+          }
+        })
+        .on('broadcast', { event: 'comment:replied' }, (msg: any) => {
+          const payload = msg?.payload || msg;
+          if (payload?.reply) {
+            const event: RealtimeFeedEvent = {
+              table: 'post_comments',
+              eventType: 'UPDATE',
+              newRecord: {
+                postId: payload.postId,
+                post_id: payload.postId,
+                parentCommentId: payload.parentCommentId,
+                reply: payload.reply,
+              },
+              oldRecord: null,
+            };
+            this.feedListeners.forEach((cb) => cb(event));
+          }
+        })
         .subscribe((subscriptionStatus) => {
           if (subscriptionStatus === 'SUBSCRIBED') {
             this.setStatus('SUBSCRIBED');
@@ -136,68 +495,6 @@ class SupabaseRealtimeManager {
             this.setStatus('CLOSED');
           }
         });
-
-      // Resilient server-sent events connection for instant real-time cross-tab delivery
-      if (typeof window !== 'undefined' && typeof window.EventSource !== 'undefined') {
-        try {
-          const es = new EventSource('/api/feed/stream');
-          es.onmessage = (e) => {
-            try {
-              const data = JSON.parse(e.data);
-              if (data.type === 'POST_CREATED') {
-                const event: RealtimeFeedEvent = {
-                  table: 'posts',
-                  eventType: 'INSERT',
-                  newRecord: data.post || data.newRecord,
-                  oldRecord: null,
-                };
-                this.feedListeners.forEach((cb) => cb(event));
-              } else if (data.type === 'POST_LIKED' || data.type === 'POST_REACTED') {
-                const event: RealtimeFeedEvent = {
-                  table: 'post_likes',
-                  eventType: 'UPDATE',
-                  newRecord: {
-                    post_id: data.postId,
-                    postId: data.postId,
-                    user_id: data.userId,
-                    userId: data.userId,
-                    likes_count: data.likesCount,
-                    likesCount: data.likesCount,
-                    reaction: data.reaction,
-                    reactionsSummary: data.reactionsSummary,
-                    liked: data.liked,
-                  },
-                  oldRecord: null,
-                };
-                this.feedListeners.forEach((cb) => cb(event));
-              } else if (data.type === 'POST_COMMENTED') {
-                const event: RealtimeFeedEvent = {
-                  table: 'post_comments',
-                  eventType: 'INSERT',
-                  newRecord: data.comment,
-                  oldRecord: null,
-                };
-                this.feedListeners.forEach((cb) => cb(event));
-              } else if (data.type === 'POST_REPLY') {
-                const event: RealtimeFeedEvent = {
-                  table: 'post_comments',
-                  eventType: 'UPDATE',
-                  newRecord: {
-                    post_id: data.postId,
-                    postId: data.postId,
-                    parentCommentId: data.parentCommentId,
-                    reply: data.reply,
-                  },
-                  oldRecord: null,
-                };
-                this.feedListeners.forEach((cb) => cb(event));
-              }
-            } catch {}
-          };
-        } catch (esErr) {
-          console.warn('SSE feed stream notice:', esErr);
-        }
-      }
     } catch (err) {
       console.warn('Realtime feed subscription warning:', err);
     }
@@ -474,7 +771,33 @@ class SupabaseRealtimeManager {
     };
   }
 
+  // ---------------------------------------------------------------------------
+  // 9. EVENTS & REUNIONS REALTIME CHANNEL
+  // ---------------------------------------------------------------------------
+  public subscribeToEvents(listener: (event: any) => void): () => void {
+    this.eventsListeners.add(listener);
+    if (!this.eventsChannel && isSupabaseConfigured) {
+      try {
+        this.eventsChannel = supabase
+          .channel('realtime:events')
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'events' }, (payload) => {
+            this.eventsListeners.forEach((cb) => cb({ table: 'events', payload }));
+          })
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'event_registrations' }, (payload) => {
+            this.eventsListeners.forEach((cb) => cb({ table: 'event_registrations', payload }));
+          })
+          .subscribe();
+      } catch (err) {
+        console.warn('Realtime events subscription warning:', err);
+      }
+    }
+    return () => {
+      this.eventsListeners.delete(listener);
+    };
+  }
+
   private initSharedChannels() {
+    this.ensureHallOfFameAndSiteChannel();
     this.ensureFeedChannel();
     this.ensureBloodChannel();
     this.ensureAlumniChannel();

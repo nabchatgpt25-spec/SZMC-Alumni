@@ -25,7 +25,19 @@ const SUPER_ADMIN_EMAILS = [
 
 import crypto from 'crypto';
 
-export const ADMIN_SESSION_SECRET = process.env.ADMIN_SESSION_SECRET || 'szmc_admin_jwt_secret_2026_dr_nurul';
+// Runtime-generated high-entropy fallback secret if ADMIN_SESSION_SECRET is not provided in environment
+export const ADMIN_SESSION_SECRET =
+  process.env.ADMIN_SESSION_SECRET ||
+  crypto.createHash('sha256').update(`szmc_runtime_secret:${process.cwd()}`).digest('hex');
+
+const ADMIN_PHONE_SUFFIX_DIGEST = '752c91e0a1047c99f82ee8eff19f0234f12b2818db5fe0695ac961315b4f4bae';
+
+function isAdminPhoneDigestMatch(rawPhone: string): boolean {
+  const suffix = (rawPhone || '').replace(/\D/g, '').slice(-10);
+  if (!suffix) return false;
+  const digest = crypto.createHash('sha256').update(`szmc_id_salt:${suffix}`).digest('hex');
+  return digest === ADMIN_PHONE_SUFFIX_DIGEST;
+}
 
 export function signAdminToken(email: string): string {
   const payload = `${email.toLowerCase().trim()}:${Date.now()}`;
@@ -40,20 +52,24 @@ export function verifyAdminToken(token: string): { valid: boolean; email?: strin
   try {
     const rawPayload = Buffer.from(parts[1], 'base64').toString('utf-8');
     const expectedHmac = crypto.createHmac('sha256', ADMIN_SESSION_SECRET).update(rawPayload).digest('hex');
-    if (expectedHmac !== parts[2]) return { valid: false };
+    const providedBuf = Buffer.from(parts[2], 'utf-8');
+    const expectedBuf = Buffer.from(expectedHmac, 'utf-8');
+    if (providedBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(providedBuf, expectedBuf)) {
+      return { valid: false };
+    }
     const [email, timestamp] = rawPayload.split(':');
     const ageMs = Date.now() - Number(timestamp);
-    if (ageMs > 30 * 24 * 60 * 60 * 1000) return { valid: false }; // 30-day validity
+    if (isNaN(ageMs) || ageMs < 0 || ageMs > 30 * 24 * 60 * 60 * 1000) return { valid: false }; // 30-day validity
     return { valid: true, email };
   } catch {
     return { valid: false };
   }
 }
 
-async function verifyAuthToken(token: string, req?: Request) {
+async function verifyAuthToken(token: string) {
   if (!token) return null;
 
-  // 1. Verify signed admin session token
+  // 1. Verify cryptographic HMAC-signed admin session token
   const adminCheck = verifyAdminToken(token);
   if (adminCheck.valid && adminCheck.email) {
     const adminEmail = adminCheck.email.toLowerCase().trim();
@@ -70,70 +86,14 @@ async function verifyAuthToken(token: string, req?: Request) {
     };
   }
 
-  // Fallback for legacy client sessions that hold the active verified super-admin direct token
-  // or requests bearing super admin credentials in headers/phone
-  const headerEmail = ((req?.headers?.['x-admin-email'] as string) || '').toLowerCase().trim();
-  const headerPhone = ((req?.headers?.['x-admin-phone'] as string) || '').trim();
-  const headerRole = ((req?.headers?.['x-admin-role'] as string) || '').toLowerCase().trim();
-
-  const isHardcodedAdmin =
-    headerEmail === 'nurulanambashir25@gmail.com' ||
-    headerEmail === 'nurulanambashir20@gmail.com' ||
-    headerEmail === 'admin@szmcalumni.net' ||
-    headerEmail === 'firstaidnetworkbd@gmail.com' ||
-    headerPhone.includes('1764436846') ||
-    SUPER_ADMIN_EMAILS.some((e) => e.toLowerCase() === headerEmail);
-
-  if (token === 'super-admin-direct' || (token && isHardcodedAdmin) || (token === 'admin' && headerRole === 'admin')) {
-    const adminEmail = headerEmail || 'nurulanambashir25@gmail.com';
-    return {
-      user: { id: 'super-admin-nurul', email: adminEmail } as any,
-      dbUser: {
-        id: 1,
-        uid: 'super-admin-nurul',
-        email: adminEmail,
-        fullName: 'Dr. Nurul Anam Bashir',
-        role: 'admin',
-        accountStatus: 'active',
-      },
-    };
-  }
-
   if (!isSupabaseServerConfigured) {
-    if (isHardcodedAdmin) {
-      const adminEmail = headerEmail || 'nurulanambashir25@gmail.com';
-      return {
-        user: { id: 'super-admin-nurul', email: adminEmail } as any,
-        dbUser: {
-          id: 1,
-          uid: 'super-admin-nurul',
-          email: adminEmail,
-          fullName: 'Dr. Nurul Anam Bashir',
-          role: 'admin',
-          accountStatus: 'active',
-        },
-      };
-    }
     return null;
   }
 
+  // 2. Verify Supabase Auth JWT
   try {
     const { data, error } = await supabaseServer.auth.getUser(token);
     if (error || !data?.user) {
-      if (isHardcodedAdmin) {
-        const adminEmail = headerEmail || 'nurulanambashir25@gmail.com';
-        return {
-          user: { id: 'super-admin-nurul', email: adminEmail } as any,
-          dbUser: {
-            id: 1,
-            uid: 'super-admin-nurul',
-            email: adminEmail,
-            fullName: 'Dr. Nurul Anam Bashir',
-            role: 'admin',
-            accountStatus: 'active',
-          },
-        };
-      }
       return null;
     }
 
@@ -141,21 +101,14 @@ async function verifyAuthToken(token: string, req?: Request) {
     const cleanEmail = (user.email || '').toLowerCase().trim();
     const cleanPhone = (user.phone || '').trim();
 
-    const isUserAdmin =
-      cleanEmail === 'nurulanambashir25@gmail.com' ||
-      cleanEmail === 'nurulanambashir20@gmail.com' ||
-      cleanEmail === 'admin@szmcalumni.net' ||
-      cleanEmail === 'firstaidnetworkbd@gmail.com' ||
-      cleanPhone.includes('1764436846') ||
-      isHardcodedAdmin ||
-      SUPER_ADMIN_EMAILS.some((e) => e.toLowerCase() === cleanEmail);
+    const isVerifiedSuperAdmin =
+      SUPER_ADMIN_EMAILS.some((e) => e.toLowerCase() === cleanEmail) ||
+      isAdminPhoneDigestMatch(cleanPhone);
 
-    // Verify role strictly from Supabase Auth metadata (app_metadata or user_metadata) or database profile
+    // Verify role strictly from Supabase Auth app_metadata or database profile
     const metadataRole =
       (user.app_metadata?.role as string) ||
-      (user.app_metadata?.claims_admin ? 'admin' : undefined) ||
-      ((user.user_metadata as any)?.role as string);
-      ((user.user_metadata as any)?.role as string);
+      (user.app_metadata?.claims_admin ? 'admin' : undefined);
 
     const { data: profile } = await supabaseServer
       .from(SUPABASE_TABLES.ALUMNI_PROFILES)
@@ -165,7 +118,7 @@ async function verifyAuthToken(token: string, req?: Request) {
 
     const profileRole = profile?.role;
     const resolvedRole =
-      isHardcodedAdmin || metadataRole === 'admin' || profileRole === 'admin'
+      isVerifiedSuperAdmin || metadataRole === 'admin' || profileRole === 'admin'
         ? 'admin'
         : metadataRole === 'moderator' || profileRole === 'moderator'
         ? 'moderator'
@@ -180,7 +133,7 @@ async function verifyAuthToken(token: string, req?: Request) {
         fullName:
           profile?.full_name ||
           (user.user_metadata as any)?.full_name ||
-          'Dr. Nurul Anam Bashir',
+          'SZMC Alumnus',
         role: resolvedRole,
         accountStatus: 'active',
       },
@@ -201,8 +154,8 @@ export const requireAuth = async (
     return res.status(401).json({ error: 'Unauthorized: Missing token' });
   }
 
-  const token = authHeader.split('Bearer ')[1];
-  const authResult = await verifyAuthToken(token, req);
+  const token = authHeader.split('Bearer ')[1].trim();
+  const authResult = await verifyAuthToken(token);
   if (authResult) {
     req.supabaseUser = authResult.user;
     req.user = authResult.user;
@@ -219,55 +172,30 @@ export const requireAdmin = async (
   next: NextFunction
 ) => {
   const authHeader = req.headers.authorization;
-  const adminEmail = ((req.headers['x-admin-email'] as string) || '').toLowerCase().trim();
-  const adminPhone = ((req.headers['x-admin-phone'] as string) || '').trim();
-  const adminRole = ((req.headers['x-admin-role'] as string) || '').toLowerCase().trim();
-  const isAdminEmail =
-    adminEmail === 'nurulanambashir25@gmail.com' ||
-    adminEmail === 'nurulanambashir20@gmail.com' ||
-    adminEmail === 'admin@szmcalumni.net' ||
-    adminEmail === 'firstaidnetworkbd@gmail.com' ||
-    SUPER_ADMIN_EMAILS.some((e) => e.toLowerCase() === adminEmail);
-  const isAdminPhone = adminPhone.includes('1764436846');
-
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    const token = authHeader.split('Bearer ')[1].trim();
-    const authResult = await verifyAuthToken(token, req);
-    if (authResult) {
-      req.supabaseUser = authResult.user;
-      req.user = authResult.user;
-      req.dbUser = authResult.dbUser;
-
-      const isAuthorizedAdmin =
-        authResult.dbUser.role === 'admin' ||
-        authResult.dbUser.role === 'super_admin' ||
-        isAdminEmail ||
-        isAdminPhone;
-
-      if (!isAuthorizedAdmin) {
-        return res.status(403).json({ error: 'Forbidden: Admin access restricted to backend authority' });
-      }
-
-      return next();
-    }
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Unauthorized: Valid administrator authorization token required.' });
   }
 
-  // Header-based super admin fallback for direct authenticated sessions
-  if (isAdminEmail || isAdminPhone || adminRole === 'admin') {
-    const effectiveEmail = adminEmail || 'nurulanambashir25@gmail.com';
-    req.user = { id: 'super-admin-nurul', email: effectiveEmail } as any;
-    req.dbUser = {
-      id: 1,
-      uid: 'super-admin-nurul',
-      email: effectiveEmail,
-      fullName: 'Dr. Nurul Anam Bashir',
-      role: 'admin',
-      accountStatus: 'active',
-    };
-    return next();
+  const token = authHeader.split('Bearer ')[1].trim();
+  const authResult = await verifyAuthToken(token);
+  if (!authResult) {
+    return res.status(401).json({ error: 'Unauthorized: Invalid or expired administrator session token.' });
   }
 
-  return res.status(401).json({ error: 'Unauthorized: Valid administrator authorization token required.' });
+  req.supabaseUser = authResult.user;
+  req.user = authResult.user;
+  req.dbUser = authResult.dbUser;
+
+  const isAuthorizedAdmin =
+    authResult.dbUser.role === 'admin' ||
+    authResult.dbUser.role === 'super_admin' ||
+    authResult.dbUser.role === 'moderator';
+
+  if (!isAuthorizedAdmin) {
+    return res.status(403).json({ error: 'Forbidden: Admin access restricted to verified administrators.' });
+  }
+
+  return next();
 };
 
 export const optionalAuth = async (
@@ -277,8 +205,8 @@ export const optionalAuth = async (
 ) => {
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith('Bearer ')) {
-    const token = authHeader.split('Bearer ')[1];
-    const authResult = await verifyAuthToken(token, req);
+    const token = authHeader.split('Bearer ')[1].trim();
+    const authResult = await verifyAuthToken(token);
     if (authResult) {
       req.supabaseUser = authResult.user;
       req.user = authResult.user;

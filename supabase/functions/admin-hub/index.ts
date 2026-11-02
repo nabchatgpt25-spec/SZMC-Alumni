@@ -1028,6 +1028,106 @@ GRANT EXECUTE ON FUNCTION public.check_and_increment_rate_limit(TEXT, INTEGER, I
       );
     }
 
+    // -------------------------------------------------------------------------
+    // ROUTE: MASTER SITE CONFIG & HALL OF FAME REAL-TIME SYNC
+    // -------------------------------------------------------------------------
+    if (action === "site-config" || action === "hall-of-fame") {
+      if (method === "GET") {
+        const { data: row } = await supabaseAdmin
+          .from("site_settings")
+          .select("value, updated_at")
+          .eq("key", "master_site_config")
+          .maybeSingle();
+
+        return new Response(
+          JSON.stringify({
+            success: true,
+            config: row?.value || {},
+            updatedAt: row?.updated_at || new Date().toISOString(),
+          }),
+          { status: 200, headers: corsHeaders }
+        );
+      }
+
+      if (method === "POST" || method === "PUT" || method === "PATCH") {
+        const nowIso = new Date().toISOString();
+        const incomingConfig = rawBody.config || rawBody;
+
+        const { data: existingRow } = await supabaseAdmin
+          .from("site_settings")
+          .select("value")
+          .eq("key", "master_site_config")
+          .maybeSingle();
+
+        const mergedConfig = {
+          ...(existingRow?.value || {}),
+          ...incomingConfig,
+        };
+
+        await supabaseAdmin.from("site_settings").upsert(
+          [
+            {
+              key: "master_site_config",
+              value: mergedConfig,
+              updated_at: nowIso,
+            },
+            {
+              key: "hall_of_fame",
+              value: {
+                members: Array.isArray(mergedConfig.featuredAlumni) ? mergedConfig.featuredAlumni : [],
+                updated_at: nowIso,
+              },
+              updated_at: nowIso,
+            },
+          ],
+          { onConflict: "key" }
+        );
+
+        // Sync Hall of Fame rows into featured_alumni & hall_of_fame tables for table-level Realtime listeners
+        if (Array.isArray(mergedConfig.featuredAlumni)) {
+          const rows = mergedConfig.featuredAlumni.map((fa: any, idx: number) => ({
+            id: String(fa.id || `fa-${idx + 1}`),
+            name: String(fa.name || "Distinguished Member"),
+            is_alumni: fa.isAlumni !== false,
+            non_alumni_role: fa.nonAlumniRole || null,
+            batch: Number(fa.batch || 0),
+            category: String(fa.category || "Medicine"),
+            designation: String(fa.designation || ""),
+            institution: String(fa.institution || ""),
+            city: fa.city || "Bogura",
+            country: fa.country || "Bangladesh",
+            avatar_url: String(fa.avatarUrl || ""),
+            achievement_summary: String(fa.achievementSummary || ""),
+            display_order: Number(fa.order ?? idx + 1),
+            updated_at: nowIso,
+          }));
+
+          if (rows.length > 0) {
+            await supabaseAdmin.from("featured_alumni").upsert(rows, { onConflict: "id" });
+            await supabaseAdmin.from("hall_of_fame").upsert(rows, { onConflict: "id" });
+          }
+        }
+
+        await recordAuditLog(supabaseAdmin, {
+          actorUid: caller.id,
+          actorEmail: callerEmail,
+          action: "UPDATE_SITE_CONFIG_AND_HALL_OF_FAME",
+          entityTable: "site_settings",
+          entityId: "master_site_config",
+          reason: "Updated master site configuration and Hall of Fame members in real-time.",
+        });
+
+        return new Response(
+          JSON.stringify({
+            success: true,
+            config: mergedConfig,
+            message: "Site configuration & Hall of Fame saved and broadcast live via Supabase Realtime.",
+          }),
+          { status: 200, headers: corsHeaders }
+        );
+      }
+    }
+
     return new Response(
       JSON.stringify({ error: `Unknown administrative action: ${action}` }),
       { status: 404, headers: corsHeaders }
@@ -1040,3 +1140,4 @@ GRANT EXECUTE ON FUNCTION public.check_and_increment_rate_limit(TEXT, INTEGER, I
     );
   }
 });
+

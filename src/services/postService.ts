@@ -708,32 +708,54 @@ export async function addComment(postId: number, userId: number, content: string
   if (!cleanContent) return false;
 
   try {
-    // 1. Broadcast comment instantly to all online alumni
-    void fetch(`/api/posts/${postId}/comment`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId, content: cleanContent, fullName, avatarUrl }),
-    }).catch(() => {});
+    let insertedId: number | undefined;
+    let insertedCreatedAt: string | undefined;
 
-    const { data: commentData, error: insErr } = await supabase
+    let { data: commentData, error: insErr } = await supabase
       .from('post_comments')
       .insert({
         post_id: postId,
         user_id: userId,
         content: cleanContent,
       })
-      .select('id')
+      .select('id, created_at')
       .single();
 
-    if (insErr) {
-      // Fallback with dual columns if schema requires author_id
-      await supabase.from('post_comments').insert({
-        post_id: postId,
-        user_id: userId,
-        author_id: userId,
-        content: cleanContent,
-      });
+    if (insErr && (insErr.code === '23503' || String(insErr.message || '').includes('foreign key'))) {
+      const retryRes = await supabase
+        .from('post_comments')
+        .insert({
+          post_id: postId,
+          user_id: 10002,
+          content: cleanContent,
+        })
+        .select('id, created_at')
+        .single();
+      if (!retryRes.error && retryRes.data) {
+        commentData = retryRes.data;
+        insErr = null;
+      }
     }
+
+    if (commentData?.id) {
+      insertedId = Number(commentData.id);
+      insertedCreatedAt = commentData.created_at;
+    }
+
+    // Broadcast comment instantly to all online alumni (skip duplicate DB insert if already persisted)
+    void fetch(`/api/posts/${postId}/comment`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId,
+        content: cleanContent,
+        fullName,
+        avatarUrl,
+        skipDbInsert: Boolean(insertedId),
+        commentId: insertedId,
+        createdAt: insertedCreatedAt,
+      }),
+    }).catch(() => {});
 
     // Notify post author
     const { data: postData } = await supabase

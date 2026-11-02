@@ -53,6 +53,7 @@ import { useAuth } from '../context/AuthContext';
 import { playSound } from '../utils/audio';
 import { PostLightboxModal } from './PostLightboxModal';
 import { compressImageFileToDataUrl } from '../utils/mediaStorage';
+import { uploadVideoToStorage, validateVideoFile } from '../services/videoUploadService';
 import {
   extractUrlsFromText,
   normalizeUrlInput,
@@ -82,7 +83,30 @@ import {
 } from '../services/supabaseService';
 import { supabase } from '../lib/supabase';
 import { realtimeManager } from '../services/supabaseRealtimeService';
+import { usePostCommentsChannel } from '../hooks/useChannel';
 import { notifyPostLike, notifyPostComment } from '../utils/notificationService';
+
+function formatFacebookRelativeTime(raw?: string): string {
+  if (!raw || raw === 'Just now') return 'Just now';
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return raw;
+  const diffSec = Math.max(0, Math.floor((Date.now() - parsed.getTime()) / 1000));
+  if (diffSec < 60) return 'Just now';
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}m`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h`;
+  const diffDays = Math.floor(diffHr / 24);
+  if (diffDays === 1) {
+    return `Yesterday at ${parsed.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`;
+  }
+  if (diffDays < 7) return `${diffDays}d`;
+  const nowYear = new Date().getFullYear();
+  if (parsed.getFullYear() === nowYear) {
+    return `${parsed.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} at ${parsed.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`;
+  }
+  return parsed.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
 
 interface FeedViewProps {
   onViewProfile?: (userId: number) => void;
@@ -192,33 +216,24 @@ export const FeedView: React.FC<FeedViewProps> = ({
           }
         }
       } else if (event.table === 'post_likes') {
-        const pId = Number(event.newRecord?.post_id || event.oldRecord?.post_id);
-        const lUserId = Number(event.newRecord?.user_id || event.oldRecord?.user_id);
+        const pId = Number(event.newRecord?.post_id || event.newRecord?.postId || event.oldRecord?.post_id);
+        const lUserId = Number(event.newRecord?.user_id || event.newRecord?.userId || event.oldRecord?.user_id);
         if (pId && lUserId !== currentUser.id) {
+          const explicitCount = event.newRecord?.likesCount ?? event.newRecord?.likes_count;
           const delta = event.eventType === 'INSERT' ? 1 : -1;
           setPosts((prev) =>
             prev.map((p) =>
-              p.id === pId ? { ...p, likesCount: Math.max(0, p.likesCount + delta) } : p
+              p.id === pId
+                ? {
+                    ...p,
+                    likesCount:
+                      typeof explicitCount === 'number'
+                        ? explicitCount
+                        : Math.max(0, p.likesCount + delta),
+                  }
+                : p
             )
           );
-        }
-      } else if (event.table === 'post_comments') {
-        if (event.eventType === 'INSERT') {
-          const newCommentRow = event.newRecord;
-          const pId = Number(newCommentRow?.post_id);
-          const cUserId = Number(newCommentRow?.user_id);
-          if (pId && cUserId !== currentUser.id) {
-            setPosts((prev) =>
-              prev.map((p) =>
-                p.id === pId
-                  ? {
-                      ...p,
-                      commentsCount: p.commentsCount + 1,
-                    }
-                  : p
-              )
-            );
-          }
         }
       }
     });
@@ -228,6 +243,111 @@ export const FeedView: React.FC<FeedViewProps> = ({
       unsubscribeFeed();
     };
   }, [currentUser.id]);
+
+  // Real-time Supabase `useChannel` listener for `post_comments` (INSERT, REPLY, DELETE)
+  usePostCommentsChannel({
+    currentUserId: currentUser.id,
+    onCommentInserted: (incomingComment, targetPostId) => {
+      setPosts((prev) =>
+        prev.map((p) => {
+          if (p.id !== targetPostId) return p;
+          const existingComments = Array.isArray(p.comments) ? p.comments : [];
+
+          // 1. Guard against duplicate ID
+          if (existingComments.some((c) => Number(c.id) === Number(incomingComment.id))) {
+            return p;
+          }
+
+          // 2. Reconcile optimistic comment (temporary Date.now() ID > 1.7e12 with identical content)
+          const optimisticIndex = existingComments.findIndex(
+            (c) =>
+              Number(c.id) > 1_700_000_000_000 &&
+              c.content.trim() === incomingComment.content.trim()
+          );
+
+          if (optimisticIndex !== -1) {
+            const reconciled = [...existingComments];
+            reconciled[optimisticIndex] = {
+              ...reconciled[optimisticIndex],
+              ...incomingComment,
+              replies: reconciled[optimisticIndex].replies || [],
+            };
+            return {
+              ...p,
+              comments: reconciled,
+              commentsList: reconciled,
+              commentsCount: Math.max(p.commentsCount || 0, reconciled.length),
+            };
+          }
+
+          // 3. Append brand-new real-time comment from another user/tab immediately
+          const nextComments = [...existingComments, incomingComment];
+          return {
+            ...p,
+            comments: nextComments,
+            commentsList: nextComments,
+            commentsCount: Math.max((p.commentsCount || 0) + 1, nextComments.length),
+          };
+        })
+      );
+    },
+    onReplyInserted: (incomingReply, targetPostId, parentCommentId) => {
+      setPosts((prev) =>
+        prev.map((p) => {
+          if (p.id !== targetPostId) return p;
+          const existingComments = Array.isArray(p.comments) ? p.comments : [];
+          let addedNew = false;
+
+          const updatedComments = existingComments.map((c) => {
+            if (Number(c.id) !== Number(parentCommentId)) return c;
+            const existingReplies = Array.isArray(c.replies) ? c.replies : [];
+
+            if (existingReplies.some((r) => Number(r.id) === Number(incomingReply.id))) {
+              return c;
+            }
+
+            const optIdx = existingReplies.findIndex(
+              (r) =>
+                Number(r.id) > 1_700_000_000_000 &&
+                r.content.trim() === incomingReply.content.trim()
+            );
+
+            if (optIdx !== -1) {
+              const reconciledReplies = [...existingReplies];
+              reconciledReplies[optIdx] = { ...reconciledReplies[optIdx], ...incomingReply };
+              return { ...c, replies: reconciledReplies };
+            }
+
+            addedNew = true;
+            return { ...c, replies: [...existingReplies, incomingReply] };
+          });
+
+          return {
+            ...p,
+            comments: updatedComments,
+            commentsList: updatedComments,
+            commentsCount: addedNew ? (p.commentsCount || 0) + 1 : p.commentsCount,
+          };
+        })
+      );
+    },
+    onCommentDeleted: (deletedCommentId, targetPostId) => {
+      setPosts((prev) =>
+        prev.map((p) => {
+          if (p.id !== targetPostId) return p;
+          const existingComments = Array.isArray(p.comments) ? p.comments : [];
+          const filtered = existingComments.filter((c) => Number(c.id) !== Number(deletedCommentId));
+          if (filtered.length === existingComments.length) return p;
+          return {
+            ...p,
+            comments: filtered,
+            commentsList: filtered,
+            commentsCount: Math.max(0, (p.commentsCount || 1) - 1),
+          };
+        })
+      );
+    },
+  });
 
   // Handle saving / bookmarking a post to offline cache & Supabase
   const handleToggleSave = (post: PostItem) => {
@@ -565,24 +685,20 @@ export const FeedView: React.FC<FeedViewProps> = ({
             reader.readAsDataURL(file);
           });
       } else if (isVideo) {
-        if (file.size > 100 * 1024 * 1024) {
-          showToast('Each video must be smaller than 100 MB.');
+        const validation = validateVideoFile(file);
+        if (!validation.isValid) {
+          showToast(validation.error || 'Each video must be smaller than 100 MB.');
           return;
         }
         addedVideos += 1;
-        if (file.size <= 15 * 1024 * 1024) {
-          const reader = new FileReader();
-          reader.onload = (uploadEvent) => {
-            const result = uploadEvent.target?.result as string;
-            if (result) {
-              setAttachedVideos((prev) => [...prev, result]);
-            }
-          };
-          reader.readAsDataURL(file);
-        } else {
-          const objectUrl = URL.createObjectURL(file);
-          setAttachedVideos((prev) => [...prev, objectUrl]);
-        }
+        uploadVideoToStorage(file, String(currentUser.id))
+          .then((uploaded) => {
+            setAttachedVideos((prev) => [...prev, uploaded.videoUrl]);
+          })
+          .catch(() => {
+            const objectUrl = URL.createObjectURL(file);
+            setAttachedVideos((prev) => [...prev, objectUrl]);
+          });
       } else {
         showToast('Supported formats: JPG, PNG, WEBP, GIF photos and MP4, WEBM, MOV videos.');
       }
@@ -729,23 +845,19 @@ export const FeedView: React.FC<FeedViewProps> = ({
     if (!files || files.length === 0) return;
 
     (Array.from(files) as File[]).forEach((file: File) => {
-      if (!file.type.startsWith('video/')) {
-        showToast('Only video files (MP4, WEBM, MOV) are supported.');
+      const validation = validateVideoFile(file);
+      if (!validation.isValid) {
+        showToast(validation.error || 'Only video files (MP4, WEBM, MOV) up to 100 MB are supported.');
         return;
       }
-      if (file.size <= 15 * 1024 * 1024) {
-        const reader = new FileReader();
-        reader.onload = (uploadEvent) => {
-          const result = uploadEvent.target?.result as string;
-          if (result) {
-            setEditVideos((prev) => [...prev, result]);
-          }
-        };
-        reader.readAsDataURL(file);
-      } else {
-        const objectUrl = URL.createObjectURL(file);
-        setEditVideos((prev) => [...prev, objectUrl]);
-      }
+      uploadVideoToStorage(file, String(currentUser.id))
+        .then((uploaded) => {
+          setEditVideos((prev) => [...prev, uploaded.videoUrl]);
+        })
+        .catch(() => {
+          const objectUrl = URL.createObjectURL(file);
+          setEditVideos((prev) => [...prev, objectUrl]);
+        });
     });
 
     e.target.value = '';
@@ -1009,27 +1121,11 @@ export const FeedView: React.FC<FeedViewProps> = ({
     const text = (commentInputs[postId] || '').trim();
     if (!text) return;
 
-    addPostCommentInDb({
-      postId,
-      userId: currentUser.id,
-      content: text,
-    }).catch((err) => {
-      console.warn('addPostCommentInDb fallback:', err);
-    });
-
-    const targetPost = posts.find((p) => p.id === postId);
-    if (targetPost && targetPost.userId !== currentUser.id) {
-      notifyPostComment(targetPost, text, {
-        id: currentUser.id,
-        fullName: currentUser.fullName,
-        avatarUrl: currentUser.avatarUrl,
-      });
-    }
-
+    const tempCommentId = Date.now();
     const newComment: PostComment = {
-      id: Date.now(),
+      id: tempCommentId,
       postId,
-      userId: currentUser.userId,
+      userId: currentUser.userId || currentUser.id,
       fullName: currentUser.fullName,
       avatarUrl: currentUser.avatarUrl,
       content: text,
@@ -1042,10 +1138,12 @@ export const FeedView: React.FC<FeedViewProps> = ({
     setPosts((prev) =>
       prev.map((p) => {
         if (p.id === postId) {
+          const updated = [...(p.comments || []), newComment];
           return {
             ...p,
-            commentsCount: p.commentsCount + 1,
-            comments: [...p.comments, newComment],
+            commentsCount: Math.max((p.commentsCount || 0) + 1, updated.length),
+            comments: updated,
+            commentsList: updated,
           };
         }
         return p;
@@ -1054,6 +1152,54 @@ export const FeedView: React.FC<FeedViewProps> = ({
 
     setCommentInputs({ ...commentInputs, [postId]: '' });
     playSound('comment');
+
+    const targetPost = posts.find((p) => p.id === postId);
+    if (targetPost && targetPost.userId !== currentUser.id) {
+      notifyPostComment(targetPost, text, {
+        id: currentUser.id,
+        fullName: currentUser.fullName,
+        avatarUrl: currentUser.avatarUrl,
+      });
+    }
+
+    addPostCommentInDb({
+      postId,
+      userId: currentUser.id,
+      content: text,
+      fullName: currentUser.fullName,
+      avatarUrl: currentUser.avatarUrl,
+    })
+      .then((res) => {
+        if (res?.success && res.comment) {
+          setPosts((prev) =>
+            prev.map((p) => {
+              if (p.id !== postId) return p;
+              const reconciled = (p.comments || []).map((c) =>
+                c.id === tempCommentId
+                  ? { ...c, id: res.comment!.id, createdAt: res.comment!.createdAt }
+                  : c
+              );
+              // Deduplicate in case Realtime event arrived before promise resolved
+              const seenIds = new Set<number>();
+              const deduped = reconciled.filter((c) => {
+                const cid = Number(c.id);
+                if (seenIds.has(cid)) return false;
+                seenIds.add(cid);
+                return true;
+              });
+              return {
+                ...p,
+                comments: deduped,
+                commentsList: deduped,
+                commentsCount: Math.max(p.commentsCount || 0, deduped.length),
+              };
+            })
+          );
+        }
+      })
+      .catch((err) => {
+        console.warn('addPostCommentInDb error:', err);
+      });
   };
 
   // Add Reply
@@ -1061,16 +1207,11 @@ export const FeedView: React.FC<FeedViewProps> = ({
     const text = (replyInputs[parentCommentId] || '').trim();
     if (!text) return;
 
-    addPostCommentInDb({
-      postId,
-      userId: currentUser.id,
-      content: text,
-    }).catch(() => {});
-
+    const tempReplyId = Date.now();
     const newReply: PostComment = {
-      id: Date.now(),
+      id: tempReplyId,
       postId,
-      userId: currentUser.userId,
+      userId: currentUser.userId || currentUser.id,
       fullName: currentUser.fullName,
       avatarUrl: currentUser.avatarUrl,
       content: text,
@@ -1103,6 +1244,42 @@ export const FeedView: React.FC<FeedViewProps> = ({
 
     setReplyInputs({ ...replyInputs, [parentCommentId]: '' });
     setActiveReplyId(null);
+
+    addPostCommentInDb({
+      postId,
+      userId: currentUser.id,
+      content: text,
+      fullName: currentUser.fullName,
+      avatarUrl: currentUser.avatarUrl,
+      parentCommentId,
+    })
+      .then((res) => {
+        if (res?.success && res.comment) {
+          setPosts((prev) =>
+            prev.map((p) => {
+              if (p.id !== postId) return p;
+              const updatedComments = (p.comments || []).map((c) => {
+                if (c.id !== parentCommentId) return c;
+                const reconciledReplies = (c.replies || []).map((r) =>
+                  r.id === tempReplyId
+                    ? { ...r, id: res.comment!.id, createdAt: res.comment!.createdAt }
+                    : r
+                );
+                const seen = new Set<number>();
+                const dedupedReplies = reconciledReplies.filter((r) => {
+                  const rid = Number(r.id);
+                  if (seen.has(rid)) return false;
+                  seen.add(rid);
+                  return true;
+                });
+                return { ...c, replies: dedupedReplies };
+              });
+              return { ...p, comments: updatedComments };
+            })
+          );
+        }
+      })
+      .catch(() => {});
   };
 
   return (
@@ -1290,7 +1467,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
             }}
             className="flex-1 text-left px-4 py-2.5 sm:py-3 rounded-full bg-slate-100 hover:bg-slate-200/75 dark:bg-slate-800/80 dark:hover:bg-slate-800 border border-slate-200/70 dark:border-slate-700/70 text-xs sm:text-sm text-slate-500 dark:text-slate-400 transition-all cursor-pointer truncate"
           >
-            What's on your mind, Dr. {currentUser.fullName.split(' ')[0] || 'Alumnus'}?
+            What's on your mind, {currentUser.fullName || 'Alumnus'}?
           </button>
         </div>
 
@@ -1613,9 +1790,16 @@ export const FeedView: React.FC<FeedViewProps> = ({
             const isOwner = post.userId === currentUser.userId || (post as any).authorId === currentUser.id;
             const postContent = typeof post.content === 'string' ? post.content : '';
             const extractedUrls = extractUrlsFromText(postContent);
-            const rawVideos = Array.isArray(post.videos) ? post.videos : [];
+            const rawVideos = Array.isArray(post.videos) ? post.videos.filter(Boolean) : [];
+            const isDirectVideoFile = (v: string) =>
+              v.startsWith('data:video/') ||
+              v.startsWith('blob:') ||
+              /\.(mp4|webm|ogg|mov)(\?.*)?$/i.test(v) ||
+              v.includes('/storage/v1/object/');
+            const carouselDirectVideos = rawVideos.filter(isDirectVideoFile);
+            const externalVideoLinks = rawVideos.filter((v) => !isDirectVideoFile(v));
             const allSharedMediaAndLinks = Array.from(
-              new Set([...rawVideos, ...extractedUrls])
+              new Set([...externalVideoLinks, ...extractedUrls])
             );
             const hasSharedLinks = extractedUrls.length > 0;
             const isLongContent = postContent.length > 360 && !hasSharedLinks;
@@ -1686,18 +1870,47 @@ export const FeedView: React.FC<FeedViewProps> = ({
                           </span>
                         )}
                       </div>
-                      <div className="text-[10.5px] sm:text-[11px] text-slate-500 dark:text-slate-400 font-medium flex items-center gap-1 sm:gap-2 flex-wrap">
+                      <div className="text-[10.5px] sm:text-[11px] text-slate-500 dark:text-slate-400 font-medium flex items-center gap-1 sm:gap-1.5 flex-wrap">
                         <span>Batch {post.batchYear}</span>
                         <span>·</span>
-                        <span>{post.createdAt}</span>
-                        {post.category && (
-                          <>
-                            <span>·</span>
-                            <span className="px-1.5 py-0.2 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-semibold text-[9.5px] sm:text-[10px]">
-                              {post.category}
-                            </span>
-                          </>
-                        )}
+                        <span
+                          title={
+                            post.createdAt && post.createdAt !== 'Just now' && !Number.isNaN(new Date(post.createdAt).getTime())
+                              ? new Date(post.createdAt).toLocaleString('en-US', {
+                                  weekday: 'long',
+                                  year: 'numeric',
+                                  month: 'long',
+                                  day: 'numeric',
+                                  hour: 'numeric',
+                                  minute: '2-digit',
+                                })
+                              : 'Just now'
+                          }
+                          className="hover:underline"
+                        >
+                          {(() => {
+                            const raw = post.createdAt;
+                            if (!raw || raw === 'Just now') return 'Just now';
+                            const parsed = new Date(raw);
+                            if (Number.isNaN(parsed.getTime())) return raw;
+                            const diffSec = Math.max(0, Math.floor((Date.now() - parsed.getTime()) / 1000));
+                            if (diffSec < 60) return 'Just now';
+                            const diffMin = Math.floor(diffSec / 60);
+                            if (diffMin < 60) return `${diffMin}m`;
+                            const diffHr = Math.floor(diffMin / 60);
+                            if (diffHr < 24) return `${diffHr}h`;
+                            const diffDays = Math.floor(diffHr / 24);
+                            if (diffDays === 1) {
+                              return `Yesterday at ${parsed.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`;
+                            }
+                            if (diffDays < 7) return `${diffDays}d`;
+                            const nowYear = new Date().getFullYear();
+                            if (parsed.getFullYear() === nowYear) {
+                              return `${parsed.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} at ${parsed.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`;
+                            }
+                            return parsed.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+                          })()}
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -1812,12 +2025,13 @@ export const FeedView: React.FC<FeedViewProps> = ({
                   </div>
                 )}
 
-                {/* Post Images & Videos Media with Carousel & Layout Templates */}
-                {((post.images && post.images.length > 0) || (post.videos && post.videos.length > 0)) && (
+                {/* Post Images & Direct Videos Media with Carousel & Layout Templates */}
+                {((post.images && post.images.length > 0) || carouselDirectVideos.length > 0) && (
                   <div className="mb-3.5 sm:mb-4">
                     <PostMediaCarousel
                       images={post.images}
-                      videos={post.videos}
+                      videos={carouselDirectVideos}
+                      autoPlayVideo={autoPlayOnScroll}
                       layout={post.layout_template || (post.images?.length > 1 ? 'carousel' : 'grid')}
                       onPhotoClick={(idx) => handleOpenLightbox(post, idx)}
                     />
@@ -1832,15 +2046,17 @@ export const FeedView: React.FC<FeedViewProps> = ({
                 )}
 
                 {/* Post Videos & Shared Social/Web Links (YouTube, Facebook, Instagram, LinkedIn, Direct Videos, etc.) */}
-                {allSharedMediaAndLinks.length > 0 && !post.linked_url && (
+                {allSharedMediaAndLinks.length > 0 && (
                   <div className="space-y-3.5 mb-4">
-                    {allSharedMediaAndLinks.map((mediaUrl, idx) => (
-                      <SharedEmbedCard
-                        key={`${post.id}-media-${idx}`}
-                        url={mediaUrl}
-                        autoPlayOnScroll={autoPlayOnScroll}
-                      />
-                    ))}
+                    {allSharedMediaAndLinks
+                      .filter((mediaUrl) => !post.linked_url || mediaUrl !== post.linked_url)
+                      .map((mediaUrl, idx) => (
+                        <SharedEmbedCard
+                          key={`${post.id}-media-${idx}`}
+                          url={mediaUrl}
+                          autoPlayOnScroll={autoPlayOnScroll}
+                        />
+                      ))}
                   </div>
                 )}
 
@@ -1954,7 +2170,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
                           </div>
 
                           <div className="flex items-center gap-3 text-[11px] text-slate-400 dark:text-slate-500 mt-1 pl-2">
-                            <span>{comment.createdAt}</span>
+                            <span>{formatFacebookRelativeTime(comment.createdAt)}</span>
                             <button
                               type="button"
                               onClick={() =>

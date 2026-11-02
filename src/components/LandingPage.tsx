@@ -328,14 +328,13 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                 Facebook
               </a>
               <span className="text-slate-300 dark:text-slate-700">·</span>
-              <a
-                href="https://wa.me/8801764436846"
-                target="_blank"
-                rel="noopener noreferrer"
+              <button
+                type="button"
+                onClick={() => onNavigate('contact')}
                 className="hover:text-blue-600 dark:hover:text-blue-400 transition-colors cursor-pointer"
               >
-                WhatsApp
-              </a>
+                Helpline
+              </button>
               <span className="text-slate-300 dark:text-slate-700">·</span>
               <button
                 type="button"

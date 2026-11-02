@@ -907,7 +907,255 @@ ON CONFLICT (ref_no) DO UPDATE SET
   updated_at = now();
 
 -- -----------------------------------------------------------------------------
--- 10. REALTIME ENABLEMENT & PERFORMANCE TUNING
+-- 10. SITE SETTINGS, HALL OF FAME, VIDEO POSTS & REALTIME COLLECTIONS
+-- -----------------------------------------------------------------------------
+
+-- Ensure posts table supports direct video uploads, HLS streams, and social video URLs
+ALTER TABLE public.posts
+  ADD COLUMN IF NOT EXISTS videos TEXT[] NOT NULL DEFAULT '{}',
+  ADD COLUMN IF NOT EXISTS linked_url TEXT NULL,
+  ADD COLUMN IF NOT EXISTS reactions_summary JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+-- 10.1 Site Settings Table (Master Site Config, Hall of Fame, Auto-Verification)
+CREATE TABLE IF NOT EXISTS public.site_settings (
+  key TEXT PRIMARY KEY,
+  value JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE public.site_settings ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Site Settings: Public Read" ON public.site_settings;
+CREATE POLICY "Site Settings: Public Read"
+  ON public.site_settings FOR SELECT
+  USING (true);
+
+DROP POLICY IF EXISTS "Site Settings: Admin & Service Write" ON public.site_settings;
+CREATE POLICY "Site Settings: Admin & Service Write"
+  ON public.site_settings FOR ALL
+  TO authenticated
+  USING (public.is_admin_or_mod())
+  WITH CHECK (public.is_admin_or_mod());
+
+-- 10.2 Featured Alumni / Hall of Fame Table
+CREATE TABLE IF NOT EXISTS public.featured_alumni (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  is_alumni BOOLEAN NOT NULL DEFAULT TRUE,
+  non_alumni_role TEXT NULL,
+  batch SMALLINT NOT NULL DEFAULT 0,
+  category TEXT NOT NULL DEFAULT 'Medicine',
+  designation TEXT NOT NULL DEFAULT '',
+  institution TEXT NOT NULL DEFAULT '',
+  city TEXT NULL DEFAULT 'Bogura',
+  country TEXT NULL DEFAULT 'Bangladesh',
+  avatar_url TEXT NOT NULL DEFAULT '',
+  achievement_summary TEXT NOT NULL DEFAULT '',
+  display_order INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE public.featured_alumni ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Featured Alumni: Public Read" ON public.featured_alumni;
+CREATE POLICY "Featured Alumni: Public Read"
+  ON public.featured_alumni FOR SELECT
+  USING (true);
+
+DROP POLICY IF EXISTS "Featured Alumni: Admin Write" ON public.featured_alumni;
+CREATE POLICY "Featured Alumni: Admin Write"
+  ON public.featured_alumni FOR ALL
+  TO authenticated
+  USING (public.is_admin_or_mod())
+  WITH CHECK (public.is_admin_or_mod());
+
+-- 10.3 Hall of Fame Alias Table (for direct table subscriptions)
+CREATE TABLE IF NOT EXISTS public.hall_of_fame (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  is_alumni BOOLEAN NOT NULL DEFAULT TRUE,
+  non_alumni_role TEXT NULL,
+  batch SMALLINT NOT NULL DEFAULT 0,
+  category TEXT NOT NULL DEFAULT 'Medicine',
+  designation TEXT NOT NULL DEFAULT '',
+  institution TEXT NOT NULL DEFAULT '',
+  city TEXT NULL DEFAULT 'Bogura',
+  country TEXT NULL DEFAULT 'Bangladesh',
+  avatar_url TEXT NOT NULL DEFAULT '',
+  achievement_summary TEXT NOT NULL DEFAULT '',
+  display_order INTEGER NOT NULL DEFAULT 0,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE public.hall_of_fame ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Hall of Fame: Public Read" ON public.hall_of_fame;
+CREATE POLICY "Hall of Fame: Public Read"
+  ON public.hall_of_fame FOR SELECT
+  USING (true);
+
+DROP POLICY IF EXISTS "Hall of Fame: Admin Write" ON public.hall_of_fame;
+CREATE POLICY "Hall of Fame: Admin Write"
+  ON public.hall_of_fame FOR ALL
+  TO authenticated
+  USING (public.is_admin_or_mod())
+  WITH CHECK (public.is_admin_or_mod());
+
+-- 10.4 Career, Mentorship & Events Tables (for Real-Time Subscriptions)
+CREATE TABLE IF NOT EXISTS public.career_opportunities (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  company TEXT NOT NULL,
+  location TEXT NOT NULL DEFAULT 'Bangladesh',
+  type TEXT NOT NULL DEFAULT 'Full-time',
+  description TEXT NOT NULL DEFAULT '',
+  poster_id BIGINT NULL,
+  poster_name TEXT NULL,
+  poster_batch SMALLINT NULL,
+  poster_avatar TEXT NULL,
+  poster_email TEXT NULL,
+  status TEXT NOT NULL DEFAULT 'Open',
+  applicants JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE public.career_opportunities ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Career Opportunities: Public Read" ON public.career_opportunities;
+CREATE POLICY "Career Opportunities: Public Read" ON public.career_opportunities FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Career Opportunities: Authenticated Write" ON public.career_opportunities;
+CREATE POLICY "Career Opportunities: Authenticated Write" ON public.career_opportunities FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+CREATE TABLE IF NOT EXISTS public.mentorship_requests (
+  id TEXT PRIMARY KEY,
+  mentee_id BIGINT NULL,
+  mentee_name TEXT NOT NULL,
+  mentee_batch SMALLINT NULL,
+  mentee_avatar TEXT NULL,
+  category TEXT NOT NULL DEFAULT 'Medical',
+  topic TEXT NOT NULL,
+  details TEXT NOT NULL DEFAULT '',
+  preferred_contact TEXT NOT NULL DEFAULT 'WhatsApp',
+  status TEXT NOT NULL DEFAULT 'Open',
+  responses JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE public.mentorship_requests ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Mentorship Requests: Public Read" ON public.mentorship_requests;
+CREATE POLICY "Mentorship Requests: Public Read" ON public.mentorship_requests FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Mentorship Requests: Authenticated Write" ON public.mentorship_requests;
+CREATE POLICY "Mentorship Requests: Authenticated Write" ON public.mentorship_requests FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+CREATE TABLE IF NOT EXISTS public.mentor_offers (
+  id TEXT PRIMARY KEY,
+  user_id BIGINT NULL,
+  full_name TEXT NOT NULL,
+  batch_year SMALLINT NULL,
+  avatar_url TEXT NULL,
+  category TEXT NOT NULL DEFAULT 'Medical',
+  expertise TEXT NOT NULL,
+  short_description TEXT NULL,
+  institution TEXT NULL,
+  position TEXT NULL,
+  contact_preference TEXT NOT NULL DEFAULT 'WhatsApp',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE public.mentor_offers ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Mentor Offers: Public Read" ON public.mentor_offers;
+CREATE POLICY "Mentor Offers: Public Read" ON public.mentor_offers FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Mentor Offers: Authenticated Write" ON public.mentor_offers;
+CREATE POLICY "Mentor Offers: Authenticated Write" ON public.mentor_offers FOR ALL TO authenticated USING (true) WITH CHECK (true);
+
+CREATE TABLE IF NOT EXISTS public.events (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  description TEXT NULL,
+  event_date TIMESTAMPTZ NULL,
+  venue TEXT NULL,
+  banner_url TEXT NULL,
+  status TEXT NOT NULL DEFAULT 'open',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE public.events ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Events: Public Read" ON public.events;
+CREATE POLICY "Events: Public Read" ON public.events FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Events: Admin Write" ON public.events;
+CREATE POLICY "Events: Admin Write" ON public.events FOR ALL TO authenticated USING (public.is_admin_or_mod()) WITH CHECK (public.is_admin_or_mod());
+
+CREATE TABLE IF NOT EXISTS public.event_registrations (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  event_id TEXT NOT NULL,
+  profile_id BIGINT NULL,
+  full_name TEXT NOT NULL,
+  batch_year SMALLINT NULL,
+  ticket_type TEXT NOT NULL DEFAULT 'general',
+  amount NUMERIC(10, 2) NOT NULL DEFAULT 0,
+  payment_status TEXT NOT NULL DEFAULT 'pending',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE public.event_registrations ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Event Registrations: Read Own or Admin" ON public.event_registrations;
+CREATE POLICY "Event Registrations: Read Own or Admin" ON public.event_registrations FOR SELECT TO authenticated USING (profile_id = public.current_profile_id() OR public.is_admin_or_mod());
+DROP POLICY IF EXISTS "Event Registrations: Authenticated Insert" ON public.event_registrations;
+CREATE POLICY "Event Registrations: Authenticated Insert" ON public.event_registrations FOR INSERT TO authenticated WITH CHECK (true);
+
+-- 10.5 RPC: Toggle 7-Day Auto-Verification (Restricted to Admin / Moderator)
+CREATE OR REPLACE FUNCTION public.toggle_auto_verification(
+  p_paused BOOLEAN DEFAULT FALSE,
+  p_reset_7_days BOOLEAN DEFAULT FALSE
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_until TIMESTAMPTZ;
+  v_payload JSONB;
+BEGIN
+  IF NOT public.is_admin_or_mod() THEN
+    RAISE EXCEPTION 'Forbidden: Administrator permissions required to toggle auto-verification.';
+  END IF;
+
+  IF p_reset_7_days THEN
+    v_until := NOW() + INTERVAL '7 days';
+  ELSE
+    SELECT COALESCE((value->>'until')::TIMESTAMPTZ, NOW() + INTERVAL '7 days')
+    INTO v_until
+    FROM public.site_settings
+    WHERE key = 'auto_verification';
+    IF v_until IS NULL THEN
+      v_until := NOW() + INTERVAL '7 days';
+    END IF;
+  END IF;
+
+  v_payload := jsonb_build_object(
+    'enabled', TRUE,
+    'paused', p_paused,
+    'until', v_until,
+    'updated_at', NOW()
+  );
+
+  INSERT INTO public.site_settings (key, value, updated_at)
+  VALUES ('auto_verification', v_payload, NOW())
+  ON CONFLICT (key) DO UPDATE
+    SET value = EXCLUDED.value,
+        updated_at = NOW();
+
+  RETURN v_payload;
+END;
+$$;
+
+-- -----------------------------------------------------------------------------
+-- 11. REALTIME ENABLEMENT & PERFORMANCE TUNING
 -- -----------------------------------------------------------------------------
 DO $$
 BEGIN
@@ -916,6 +1164,9 @@ BEGIN
   END IF;
 END $$;
 
+ALTER TABLE IF EXISTS public.site_settings REPLICA IDENTITY FULL;
+ALTER TABLE IF EXISTS public.featured_alumni REPLICA IDENTITY FULL;
+ALTER TABLE IF EXISTS public.hall_of_fame REPLICA IDENTITY FULL;
 ALTER TABLE IF EXISTS public.posts REPLICA IDENTITY FULL;
 ALTER TABLE IF EXISTS public.post_comments REPLICA IDENTITY FULL;
 ALTER TABLE IF EXISTS public.post_likes REPLICA IDENTITY FULL;
@@ -931,11 +1182,19 @@ ALTER TABLE IF EXISTS public.verification_requests REPLICA IDENTITY FULL;
 ALTER TABLE IF EXISTS public.gallery_albums REPLICA IDENTITY FULL;
 ALTER TABLE IF EXISTS public.gallery_photos REPLICA IDENTITY FULL;
 ALTER TABLE IF EXISTS public.batches REPLICA IDENTITY FULL;
+ALTER TABLE IF EXISTS public.career_opportunities REPLICA IDENTITY FULL;
+ALTER TABLE IF EXISTS public.mentorship_requests REPLICA IDENTITY FULL;
+ALTER TABLE IF EXISTS public.mentor_offers REPLICA IDENTITY FULL;
+ALTER TABLE IF EXISTS public.events REPLICA IDENTITY FULL;
+ALTER TABLE IF EXISTS public.event_registrations REPLICA IDENTITY FULL;
 
 DO $$
 DECLARE
   tbl text;
   tables text[] := ARRAY[
+    'site_settings',
+    'featured_alumni',
+    'hall_of_fame',
     'posts',
     'post_comments',
     'post_likes',
@@ -950,7 +1209,12 @@ DECLARE
     'verification_requests',
     'gallery_albums',
     'gallery_photos',
-    'batches'
+    'batches',
+    'career_opportunities',
+    'mentorship_requests',
+    'mentor_offers',
+    'events',
+    'event_registrations'
   ];
 BEGIN
   FOREACH tbl IN ARRAY tables LOOP
@@ -979,5 +1243,7 @@ CREATE INDEX IF NOT EXISTS idx_blood_requests_status_created ON public.blood_req
 CREATE INDEX IF NOT EXISTS idx_blood_donors_availability ON public.blood_donors(availability);
 CREATE INDEX IF NOT EXISTS idx_alumni_profiles_batch_year ON public.alumni_profiles(batch_year);
 CREATE INDEX IF NOT EXISTS idx_alumni_profiles_auth_user ON public.alumni_profiles(auth_user_id);
+CREATE INDEX IF NOT EXISTS idx_featured_alumni_order ON public.featured_alumni(display_order ASC);
 
 COMMIT;
+

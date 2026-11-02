@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { PostItem } from '../types/post';
 import { togglePostLike, addComment, toggleSavePost } from '../services/postService';
+import { usePostCommentsChannel } from '../hooks/useChannel';
 import { LinkPreview } from './LinkPreview';
 import { PostMediaCarousel } from './PostMediaCarousel';
 
@@ -48,6 +49,40 @@ export const PostCard: React.FC<PostCardProps> = ({
   const [submittingComment, setSubmittingComment] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
   const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
+
+  // Subscribe to real-time comment inserts for this post via Supabase `useChannel`
+  usePostCommentsChannel({
+    postId: post.id,
+    currentUserId,
+    onCommentInserted: (incomingComment) => {
+      setComments((prev) => {
+        if (prev.some((c: any) => Number(c.id) === Number(incomingComment.id))) {
+          return prev;
+        }
+        const optIdx = prev.findIndex(
+          (c: any) =>
+            Number(c.id) > 1_700_000_000_000 &&
+            String(c.content || '').trim() === incomingComment.content.trim()
+        );
+        const nextList =
+          optIdx !== -1
+            ? prev.map((c: any, idx: number) => (idx === optIdx ? { ...c, ...incomingComment } : c))
+            : [...prev, incomingComment];
+        if (onPostUpdated) {
+          onPostUpdated({
+            ...post,
+            commentsCount: Math.max((post.commentsCount || 0) + 1, nextList.length),
+            comments: nextList,
+            commentsList: nextList,
+          });
+        }
+        return nextList;
+      });
+    },
+    onCommentDeleted: (deletedId) => {
+      setComments((prev) => prev.filter((c: any) => Number(c.id) !== Number(deletedId)));
+    },
+  });
 
   const handleLike = async () => {
     if (!currentUserId) return;
@@ -96,32 +131,34 @@ export const PostCard: React.FC<PostCardProps> = ({
     e.preventDefault();
     if (!commentText.trim() || !currentUserId) return;
 
-    setSubmittingComment(true);
-    const ok = await addComment(post.id, currentUserId, commentText.trim());
-    if (ok) {
-      const newComment = {
-        id: Date.now(),
-        postId: post.id,
-        userId: currentUserId,
-        fullName: currentUserName,
-        avatarUrl: currentUserAvatar,
-        content: commentText.trim(),
-        likesCount: 0,
-        likedByMe: false,
-        createdAt: 'Just now',
-      };
-      const updatedList = [...comments, newComment];
-      setComments(updatedList);
-      setCommentText('');
-      if (onPostUpdated) {
-        onPostUpdated({
-          ...post,
-          commentsCount: (post.commentsCount || 0) + 1,
-          comments: updatedList,
-          commentsList: updatedList,
-        });
-      }
+    const cleanText = commentText.trim();
+    const tempId = Date.now();
+    const newComment = {
+      id: tempId,
+      postId: post.id,
+      userId: currentUserId,
+      fullName: currentUserName,
+      avatarUrl: currentUserAvatar,
+      content: cleanText,
+      likesCount: 0,
+      likedByMe: false,
+      createdAt: 'Just now',
+    };
+
+    const updatedList = [...comments, newComment];
+    setComments(updatedList);
+    setCommentText('');
+    if (onPostUpdated) {
+      onPostUpdated({
+        ...post,
+        commentsCount: Math.max((post.commentsCount || 0) + 1, updatedList.length),
+        comments: updatedList,
+        commentsList: updatedList,
+      });
     }
+
+    setSubmittingComment(true);
+    await addComment(post.id, currentUserId, cleanText, currentUserName, currentUserAvatar);
     setSubmittingComment(false);
   };
 

@@ -6,8 +6,9 @@ import {
   Play,
   Film,
   Image as ImageIcon,
-  Layers,
 } from 'lucide-react';
+import { Video } from './feed/Video';
+import { AutoPlayYouTubeEmbed } from './feed/AutoPlayYouTubeEmbed';
 
 export type CarouselTemplate = 'carousel' | 'grid' | 'column' | 'hero';
 
@@ -25,13 +26,113 @@ interface PostMediaCarouselProps {
   autoPlayVideo?: boolean;
 }
 
+export function isHlsStreamUrl(url: string): boolean {
+  if (!url) return false;
+  const clean = url.split('?')[0].split('#')[0].toLowerCase();
+  return clean.endsWith('.m3u8') || url.toLowerCase().includes('application/vnd.apple.mpegurl') || url.toLowerCase().includes('.m3u8?');
+}
+
+function getEmbeddedVideoInfo(rawUrl: string): { type: 'youtube' | 'facebook' | 'vimeo'; embedUrl: string } | null {
+  if (!rawUrl || rawUrl.startsWith('data:') || rawUrl.startsWith('blob:')) return null;
+  try {
+    const u = new URL(rawUrl.startsWith('http') ? rawUrl : `https://${rawUrl}`);
+    const host = u.hostname.replace(/^www\./, '').toLowerCase();
+
+    if (host === 'youtube.com' || host === 'm.youtube.com' || host === 'youtu.be') {
+      let videoId: string | null = null;
+      if (host === 'youtu.be') {
+        videoId = u.pathname.split('/').filter(Boolean)[0] || null;
+      } else if (u.pathname === '/watch') {
+        videoId = u.searchParams.get('v');
+      } else if (u.pathname.startsWith('/shorts/') || u.pathname.startsWith('/embed/') || u.pathname.startsWith('/live/')) {
+        videoId = u.pathname.split('/')[2] || null;
+      }
+      if (videoId) {
+        return {
+          type: 'youtube',
+          embedUrl: `https://www.youtube-nocookie.com/embed/${videoId}?rel=0&playsinline=1`,
+        };
+      }
+    }
+
+    if (
+      host === 'facebook.com' ||
+      host === 'm.facebook.com' ||
+      host === 'web.facebook.com' ||
+      host === 'fb.watch'
+    ) {
+      return {
+        type: 'facebook',
+        embedUrl: `https://www.facebook.com/plugins/video.php?href=${encodeURIComponent(u.toString())}&show_text=false`,
+      };
+    }
+
+    if (host === 'vimeo.com' || host === 'player.vimeo.com') {
+      const segments = u.pathname.split('/').filter(Boolean);
+      const vimeoId = segments[segments.length - 1];
+      if (vimeoId && /^\d+$/.test(vimeoId)) {
+        return {
+          type: 'vimeo',
+          embedUrl: `https://player.vimeo.com/video/${vimeoId}`,
+        };
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+const SmoothCarouselVideo: React.FC<{
+  src: string;
+  autoPlay?: boolean;
+  className?: string;
+  showControls?: boolean;
+}> = ({ src, autoPlay = true, className = 'w-full max-h-[460px] object-contain mx-auto', showControls = true }) => {
+  const embedInfo = getEmbeddedVideoInfo(src);
+
+  if (embedInfo?.type === 'youtube') {
+    return (
+      <AutoPlayYouTubeEmbed
+        embedUrl={embedInfo.embedUrl}
+        originalUrl={src}
+        autoPlayOnScroll={autoPlay}
+      />
+    );
+  }
+
+  if (embedInfo) {
+    return (
+      <div className="relative w-full aspect-video max-h-[460px] flex items-center justify-center bg-black">
+        <iframe
+          src={embedInfo.embedUrl}
+          title="Embedded Video Player"
+          className="w-full h-full border-0"
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+          allowFullScreen
+          loading="lazy"
+        />
+      </div>
+    );
+  }
+
+  return (
+    <Video
+      src={src}
+      autoPlayOnScroll={autoPlay}
+      controls={showControls}
+      className={className}
+    />
+  );
+};
+
 export const PostMediaCarousel: React.FC<PostMediaCarouselProps> = ({
   images,
   videos,
   layout = 'carousel',
   onPhotoClick,
   className = '',
-  autoPlayVideo = false,
+  autoPlayVideo = true,
 }) => {
   // Normalize images and videos defensively against null or non-array values
   const safeImages: string[] = Array.isArray(images)
@@ -62,12 +163,10 @@ export const PostMediaCarousel: React.FC<PostMediaCarouselProps> = ({
     if (item.type === 'video') {
       return (
         <div className={`rounded-2xl overflow-hidden bg-black ${className}`}>
-          <video
+          <SmoothCarouselVideo
             src={item.url}
-            controls
             autoPlay={autoPlayVideo}
-            className="w-full max-h-[460px] object-contain mx-auto"
-            preload="metadata"
+            className="w-full max-h-[480px] object-contain mx-auto"
           />
         </div>
       );
@@ -114,12 +213,11 @@ export const PostMediaCarousel: React.FC<PostMediaCarouselProps> = ({
         {/* Media Canvas */}
         <div className="relative w-full h-72 sm:h-96 flex items-center justify-center bg-black overflow-hidden">
           {currentItem.type === 'video' ? (
-            <video
+            <SmoothCarouselVideo
               key={`video-${currentIndex}-${currentItem.url}`}
               src={currentItem.url}
-              controls
+              autoPlay={autoPlayVideo}
               className="w-full h-full object-contain"
-              preload="metadata"
             />
           ) : (
             <div
@@ -197,10 +295,10 @@ export const PostMediaCarousel: React.FC<PostMediaCarouselProps> = ({
         {/* Main Stage */}
         <div className="relative rounded-2xl overflow-hidden bg-black h-72 sm:h-96 flex items-center justify-center">
           {featured.type === 'video' ? (
-            <video
+            <SmoothCarouselVideo
               key={`hero-vid-${currentIndex}`}
               src={featured.url}
-              controls
+              autoPlay={autoPlayVideo}
               className="w-full h-full object-contain"
             />
           ) : (
@@ -211,7 +309,7 @@ export const PostMediaCarousel: React.FC<PostMediaCarouselProps> = ({
               className="w-full h-full object-cover cursor-pointer hover:scale-[1.01] transition-transform duration-300"
             />
           )}
-          <span className="absolute top-2.5 right-2.5 px-2.5 py-1 rounded-full bg-black/70 backdrop-blur-xs text-white text-[11px] font-bold">
+          <span className="absolute top-2.5 right-2.5 px-2.5 py-1 rounded-full bg-black/70 backdrop-blur-xs text-white text-[11px] font-bold z-10">
             {currentIndex + 1} of {mediaItems.length}
           </span>
         </div>
@@ -259,11 +357,10 @@ export const PostMediaCarousel: React.FC<PostMediaCarouselProps> = ({
             className="rounded-2xl overflow-hidden bg-slate-950 border border-slate-200/80 dark:border-slate-800"
           >
             {item.type === 'video' ? (
-              <video
+              <SmoothCarouselVideo
                 src={item.url}
-                controls
+                autoPlay={autoPlayVideo}
                 className="w-full max-h-[440px] object-contain bg-black"
-                preload="metadata"
               />
             ) : (
               <img
@@ -292,10 +389,10 @@ export const PostMediaCarousel: React.FC<PostMediaCarouselProps> = ({
           <div
             key={idx}
             className="relative h-48 sm:h-64 bg-slate-950 overflow-hidden cursor-pointer"
-            onClick={() => onPhotoClick && onPhotoClick(idx)}
+            onClick={() => item.type !== 'video' && onPhotoClick && onPhotoClick(idx)}
           >
             {item.type === 'video' ? (
-              <video src={item.url} className="w-full h-full object-cover" />
+              <SmoothCarouselVideo src={item.url} autoPlay={autoPlayVideo} className="w-full h-full object-cover" />
             ) : (
               <img
                 src={item.url}
@@ -316,10 +413,10 @@ export const PostMediaCarousel: React.FC<PostMediaCarouselProps> = ({
           <div
             key={idx}
             className="relative h-36 sm:h-52 bg-slate-950 overflow-hidden cursor-pointer"
-            onClick={() => onPhotoClick && onPhotoClick(idx)}
+            onClick={() => item.type !== 'video' && onPhotoClick && onPhotoClick(idx)}
           >
             {item.type === 'video' ? (
-              <video src={item.url} className="w-full h-full object-cover" />
+              <SmoothCarouselVideo src={item.url} autoPlay={autoPlayVideo} className="w-full h-full object-cover" />
             ) : (
               <img
                 src={item.url}
@@ -344,11 +441,11 @@ export const PostMediaCarousel: React.FC<PostMediaCarouselProps> = ({
         return (
           <div
             key={idx}
-            onClick={() => onPhotoClick && onPhotoClick(idx)}
+            onClick={() => item.type !== 'video' && onPhotoClick && onPhotoClick(idx)}
             className="relative h-36 sm:h-48 bg-slate-950 overflow-hidden cursor-pointer group"
           >
             {item.type === 'video' ? (
-              <video src={item.url} className="w-full h-full object-cover" />
+              <SmoothCarouselVideo src={item.url} autoPlay={autoPlayVideo} className="w-full h-full object-cover" />
             ) : (
               <img
                 src={item.url}
@@ -368,3 +465,4 @@ export const PostMediaCarousel: React.FC<PostMediaCarouselProps> = ({
     </div>
   );
 };
+

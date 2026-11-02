@@ -1,5 +1,7 @@
-import 'dotenv/config';
+import * as dotenv from 'dotenv';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+
+dotenv.config({ quiet: true });
 
 export const DEFAULT_SUPABASE_URL = 'https://hjuyiqyviohinbhzaipl.supabase.co';
 export const DEFAULT_SUPABASE_ANON_KEY =

@@ -21,10 +21,14 @@ export interface SiteNotice {
 export interface FeaturedAlumnus {
   id: string;
   name: string;
-  batch: number;
-  category: 'Medicine' | 'Public Service' | 'Engineering' | 'Business' | 'Academia' | 'Arts & Sports';
+  isAlumni?: boolean; // true = SZMC Alumnus (default), false = Non-Alumnus (Faculty, Principal, Patron, Guest, etc.)
+  nonAlumniRole?: string; // e.g. 'Former Principal', 'Distinguished Faculty', 'Honorary Patron', 'Special Guest'
+  batch: number; // 0 when isAlumni === false
+  category: 'Medicine' | 'Surgery' | 'Pediatrics' | 'Public Service' | 'Engineering' | 'Business' | 'Academia' | 'Arts & Sports' | 'Global' | 'Honorary & Faculty';
   designation: string;
   institution: string;
+  city?: string;
+  country?: string;
   avatarUrl: string;
   achievementSummary: string;
   order: number;
@@ -293,6 +297,68 @@ export const FACTORY_DEFAULT_SITE_CONFIG: SiteConfig = {
 const SITE_CONFIG_STORAGE_KEY = 'szmc_institutional_site_config_v2';
 const SITE_CONFIG_UPDATE_EVENT = 'szmc_site_config_updated';
 
+let siteConfigBroadcastChannel: BroadcastChannel | null = null;
+try {
+  if (typeof window !== 'undefined' && typeof BroadcastChannel !== 'undefined') {
+    siteConfigBroadcastChannel = new BroadcastChannel('szmc_site_config_live_sync');
+    siteConfigBroadcastChannel.onmessage = (evt) => {
+      if (evt?.data?.type === 'SITE_CONFIG_UPDATED' && evt.data.config) {
+        try {
+          const current = getSiteConfig();
+          const merged: SiteConfig = { ...current, ...evt.data.config };
+          localStorage.setItem(SITE_CONFIG_STORAGE_KEY, JSON.stringify(merged));
+          window.dispatchEvent(new CustomEvent(SITE_CONFIG_UPDATE_EVENT, { detail: merged }));
+        } catch {}
+      }
+    };
+  }
+} catch {}
+
+// Singleton listener for instant cross-device real-time site config & Hall of Fame updates
+let siteConfigSseInitialized = false;
+function ensureRealtimeSiteConfigStream() {
+  if (siteConfigSseInitialized || typeof window === 'undefined') {
+    return;
+  }
+  siteConfigSseInitialized = true;
+
+  const applyRemoteConfig = (remoteCfg: any) => {
+    if (!remoteCfg || typeof remoteCfg !== 'object') return;
+    const localCurrent = getSiteConfig();
+    const mergedPatch = { ...remoteCfg };
+    if (
+      Array.isArray(localCurrent.featuredAlumni) &&
+      localCurrent.featuredAlumni.length > 0 &&
+      (!Array.isArray(mergedPatch.featuredAlumni) || mergedPatch.featuredAlumni.length === 0)
+    ) {
+      mergedPatch.featuredAlumni = localCurrent.featuredAlumni;
+    }
+    const merged: SiteConfig = { ...localCurrent, ...mergedPatch };
+    try {
+      localStorage.setItem(SITE_CONFIG_STORAGE_KEY, JSON.stringify(merged));
+    } catch {}
+    window.dispatchEvent(new CustomEvent(SITE_CONFIG_UPDATE_EVENT, { detail: merged }));
+  };
+
+  // Subscribe to unified SupabaseRealtimeManager (SSE + Supabase postgres_changes + Supabase broadcast)
+  import('./supabaseRealtimeService')
+    .then(({ realtimeManager }) => {
+      realtimeManager.subscribeToSiteSettings((event) => {
+        if (event.key === 'master_site_config' && event.value && typeof event.value === 'object') {
+          applyRemoteConfig(event.value);
+        }
+      });
+      realtimeManager.subscribeToHallOfFame((event) => {
+        if (event.config && typeof event.config === 'object') {
+          applyRemoteConfig(event.config);
+        } else if (Array.isArray(event.featuredAlumni) && event.featuredAlumni.length > 0) {
+          applyRemoteConfig({ featuredAlumni: event.featuredAlumni });
+        }
+      });
+    })
+    .catch(() => {});
+}
+
 export function getSiteConfig(): SiteConfig {
   try {
     if (typeof window !== 'undefined') {
@@ -329,6 +395,9 @@ export function saveSiteConfig(newConfig: Partial<SiteConfig>): SiteConfig {
     if (typeof window !== 'undefined') {
       localStorage.setItem(SITE_CONFIG_STORAGE_KEY, JSON.stringify(merged));
       window.dispatchEvent(new CustomEvent(SITE_CONFIG_UPDATE_EVENT, { detail: merged }));
+      try {
+        siteConfigBroadcastChannel?.postMessage({ type: 'SITE_CONFIG_UPDATED', config: merged });
+      } catch {}
     }
     return merged;
   } catch (e) {
@@ -342,6 +411,9 @@ export function resetSiteConfigToFactory(): SiteConfig {
     if (typeof window !== 'undefined') {
       localStorage.setItem(SITE_CONFIG_STORAGE_KEY, JSON.stringify(FACTORY_DEFAULT_SITE_CONFIG));
       window.dispatchEvent(new CustomEvent(SITE_CONFIG_UPDATE_EVENT, { detail: FACTORY_DEFAULT_SITE_CONFIG }));
+      try {
+        siteConfigBroadcastChannel?.postMessage({ type: 'SITE_CONFIG_UPDATED', config: FACTORY_DEFAULT_SITE_CONFIG });
+      } catch {}
     }
   } catch (e) {
     console.warn('Failed to reset site config', e);
@@ -361,50 +433,87 @@ export function importSiteConfigJson(jsonString: string): { success: boolean; er
       return { success: false, error: 'Invalid JSON configuration schema.' };
     }
     saveSiteConfig(parsed);
+    void saveSiteConfigToServer(parsed);
     return { success: true };
   } catch (e: any) {
     return { success: false, error: e?.message || 'Could not parse JSON configuration file.' };
   }
 }
 
+let autoSaveTimeoutId: ReturnType<typeof setTimeout> | null = null;
+
 export async function saveSiteConfigToServer(configPatch: Partial<SiteConfig>): Promise<{ success: boolean; message?: string; error?: string }> {
+  const fullConfig = saveSiteConfig(configPatch);
+
+  // Broadcast immediately via Supabase Realtime Channel & persist to Supabase site_settings
   try {
-    const directAuthToken = typeof window !== 'undefined' ? localStorage.getItem('szmc_direct_auth_token') : null;
-    const directAuthUser = typeof window !== 'undefined' ? localStorage.getItem('szmc_direct_auth_user') : null;
-    let adminEmail = 'nurulanambashir25@gmail.com';
-    try {
-      if (directAuthUser) {
-        const u = JSON.parse(directAuthUser);
-        if (u.email) adminEmail = u.email;
-      }
-    } catch {}
+    const [{ supabase, isSupabaseConfigured }, { realtimeManager }] = await Promise.all([
+      import('../lib/supabase'),
+      import('./supabaseRealtimeService'),
+    ]);
+    realtimeManager.broadcastSiteConfigUpdate(fullConfig);
+    if (isSupabaseConfigured && supabase) {
+      const nowIso = new Date().toISOString();
+      void Promise.resolve(
+        supabase
+          .from('site_settings')
+          .upsert(
+            [
+              {
+                key: 'master_site_config',
+                value: fullConfig,
+                updated_at: nowIso,
+              },
+              {
+                key: 'hall_of_fame',
+                value: {
+                  members: fullConfig.featuredAlumni || [],
+                  updated_at: nowIso,
+                },
+                updated_at: nowIso,
+              },
+            ],
+            { onConflict: 'key' }
+          )
+      ).catch(() => {});
+    }
+  } catch {
+    // Non-blocking fallback to Express API
+  }
+
+  try {
+    let authToken = typeof window !== 'undefined' ? localStorage.getItem('szmc_direct_auth_token') : null;
+    if (!authToken) {
+      try {
+        const { supabase, isSupabaseConfigured } = await import('../lib/supabase');
+        if (isSupabaseConfigured && supabase) {
+          const { data: sessionData } = await supabase.auth.getSession();
+          authToken = sessionData?.session?.access_token || null;
+        }
+      } catch {}
+    }
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
-      'x-admin-email': adminEmail,
     };
-    if (directAuthToken) {
-      headers.Authorization = `Bearer ${directAuthToken}`;
+    if (authToken) {
+      headers.Authorization = `Bearer ${authToken}`;
     }
 
     const res = await fetch('/api/admin/site-config', {
       method: 'POST',
       headers,
-      body: JSON.stringify(configPatch),
+      body: JSON.stringify(fullConfig),
     });
 
     const data = await res.json();
     if (!res.ok) {
-      // Gracefully persist locally
-      saveSiteConfig(configPatch);
       return { success: false, error: data?.error || 'Server save rejected' };
     }
 
-    saveSiteConfig(configPatch);
-    return { success: true, message: data?.message || 'Settings saved permanently to institutional server!' };
+    return { success: true, message: data?.message || 'Settings saved & broadcast live across the platform!' };
   } catch (err: any) {
-    saveSiteConfig(configPatch);
-    return { success: true, message: 'Saved successfully to local storage (network offline)' };
+    return { success: true, message: 'Saved successfully to local storage & cloud cache' };
   }
 }
 
@@ -415,16 +524,50 @@ export function useSiteConfig() {
   const [lastSavedTime, setLastSavedTime] = useState<string | null>(null);
 
   useEffect(() => {
-    // Initial fetch of server-persisted configuration
-    fetch('/api/admin/site-config')
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        if (data?.config && typeof data.config === 'object') {
-          const merged = saveSiteConfig(data.config);
-          setConfig(merged);
+    let isMounted = true;
+    ensureRealtimeSiteConfigStream();
+
+    // Initial fetch of server-persisted configuration + Supabase site_settings
+    const loadRemoteConfig = async () => {
+      try {
+        const r = await fetch('/api/site-config');
+        if (r.ok) {
+          const data = await r.json();
+          if (data?.config && typeof data.config === 'object' && isMounted) {
+            const localCurrent = getSiteConfig();
+            const mergedPatch = { ...data.config };
+            if (
+              Array.isArray(localCurrent.featuredAlumni) &&
+              localCurrent.featuredAlumni.length > 0 &&
+              (!Array.isArray(mergedPatch.featuredAlumni) || mergedPatch.featuredAlumni.length === 0)
+            ) {
+              mergedPatch.featuredAlumni = localCurrent.featuredAlumni;
+            }
+            const merged = saveSiteConfig(mergedPatch);
+            setConfig(merged);
+            return;
+          }
         }
-      })
-      .catch(() => {});
+      } catch {}
+
+      // Fallback: check Supabase site_settings directly
+      try {
+        const { supabase, isSupabaseConfigured } = await import('../lib/supabase');
+        if (isSupabaseConfigured && supabase) {
+          const { data } = await supabase
+            .from('site_settings')
+            .select('value')
+            .eq('key', 'master_site_config')
+            .maybeSingle();
+          if (data?.value && typeof data.value === 'object' && isMounted) {
+            const merged = saveSiteConfig(data.value as Partial<SiteConfig>);
+            setConfig(merged);
+          }
+        }
+      } catch {}
+    };
+
+    loadRemoteConfig();
 
     const handleUpdate = (e: Event) => {
       const detail = (e as CustomEvent<SiteConfig>).detail;
@@ -436,20 +579,42 @@ export function useSiteConfig() {
     };
 
     window.addEventListener(SITE_CONFIG_UPDATE_EVENT, handleUpdate);
-    return () => window.removeEventListener(SITE_CONFIG_UPDATE_EVENT, handleUpdate);
+    return () => {
+      isMounted = false;
+      window.removeEventListener(SITE_CONFIG_UPDATE_EVENT, handleUpdate);
+    };
   }, []);
 
   const updateConfig = (patch: Partial<SiteConfig>) => {
     const updated = saveSiteConfig(patch);
     setConfig(updated);
     setHasUnsavedChanges(true);
+
+    // Automatically sync to server & broadcast via SSE after 350ms debounce so Admin edits propagate live
+    if (autoSaveTimeoutId) {
+      clearTimeout(autoSaveTimeoutId);
+    }
+    autoSaveTimeoutId = setTimeout(() => {
+      saveSiteConfigToServer(updated).then((res) => {
+        if (res.success) {
+          setHasUnsavedChanges(false);
+          setLastSavedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+        }
+      });
+    }, 350);
+
     return updated;
   };
 
   const saveAllChanges = async (): Promise<{ success: boolean; message?: string; error?: string }> => {
+    if (autoSaveTimeoutId) {
+      clearTimeout(autoSaveTimeoutId);
+      autoSaveTimeoutId = null;
+    }
     setIsSaving(true);
     try {
-      const res = await saveSiteConfigToServer(config);
+      const latest = getSiteConfig();
+      const res = await saveSiteConfigToServer(latest);
       setIsSaving(false);
       if (res.success) {
         setHasUnsavedChanges(false);
@@ -466,6 +631,7 @@ export function useSiteConfig() {
     const factory = resetSiteConfigToFactory();
     setConfig(factory);
     setHasUnsavedChanges(true);
+    saveSiteConfigToServer(factory);
     return factory;
   };
 

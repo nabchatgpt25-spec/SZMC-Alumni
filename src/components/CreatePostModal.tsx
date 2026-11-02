@@ -20,9 +20,11 @@ import {
 } from 'lucide-react';
 import { extractFirstUrl, fetchLinkPreview } from '../services/linkPreviewService';
 import { createPost } from '../services/postService';
+import { uploadVideoToStorage, VideoMetadata } from '../services/videoUploadService';
 import { LinkMetadata, PostItem } from '../types/post';
 import { LinkPreview } from './LinkPreview';
 import { PostMediaCarousel, CarouselTemplate } from './PostMediaCarousel';
+import { VideoUploadPicker } from './feed/VideoUploadPicker';
 
 interface CreatePostModalProps {
   isOpen: boolean;
@@ -71,6 +73,10 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
   const [activeViewMode, setActiveViewMode] = useState<'editor' | 'preview'>('editor');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isProcessingMedia, setIsProcessingMedia] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<number>(0);
+  const [showVideoUploadPicker, setShowVideoUploadPicker] = useState(initialTab === 'video');
+  const [selectedVideoFile, setSelectedVideoFile] = useState<File | null>(null);
+  const [selectedVideoPreviewUrl, setSelectedVideoPreviewUrl] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const videoFileInputRef = useRef<HTMLInputElement>(null);
@@ -92,12 +98,12 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
       if (initialTab === 'photo') {
         setTimeout(() => fileInputRef.current?.click(), 80);
       } else if (initialTab === 'video') {
-        setTimeout(() => videoFileInputRef.current?.click(), 80);
+        setShowVideoUploadPicker(true);
       }
     }
   }, [isOpen, initialTab]);
 
-   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   
   if (!isOpen) return null;
 
@@ -180,44 +186,68 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
     e.target.value = '';
   };
 
-  const handleVideoFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleVideoFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
     setIsProcessingMedia(true);
+    setUploadProgress(10);
     const fileList = Array.from(files);
-    let loaded = 0;
 
-    fileList.forEach((file) => {
-      if (file.size <= 20 * 1024 * 1024) {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          if (typeof reader.result === 'string') {
-            setVideos((prev) => [...prev, reader.result as string]);
-          }
-          loaded += 1;
-          if (loaded >= fileList.length) {
-            setIsProcessingMedia(false);
-          }
-        };
-        reader.readAsDataURL(file);
-      } else {
-        const objectUrl = URL.createObjectURL(file);
-        setVideos((prev) => [...prev, objectUrl]);
-        loaded += 1;
-        if (loaded >= fileList.length) {
-          setIsProcessingMedia(false);
-        }
+    for (const file of fileList) {
+      try {
+        const uploaded = await uploadVideoToStorage(file, String(authorId), (pct) => {
+          setUploadProgress(pct);
+        });
+        setVideos((prev) => [...prev, uploaded.videoUrl]);
+      } catch (err: any) {
+        setErrorMessage(err.message || 'Video upload failed.');
       }
-    });
+    }
 
+    setIsProcessingMedia(false);
+    setUploadProgress(0);
     e.target.value = '';
+  };
+
+  const handlePickerVideoSelected = async (file: File, _metadata: VideoMetadata) => {
+    setSelectedVideoFile(file);
+    const objUrl = URL.createObjectURL(file);
+    setSelectedVideoPreviewUrl(objUrl);
+    setIsProcessingMedia(true);
+    setUploadProgress(10);
+    try {
+      const uploaded = await uploadVideoToStorage(file, String(authorId), (pct) => {
+        setUploadProgress(pct);
+      });
+      setVideos((prev) => Array.from(new Set([...prev, uploaded.videoUrl])));
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Video upload failed.');
+    } finally {
+      setIsProcessingMedia(false);
+      setUploadProgress(0);
+    }
+  };
+
+  const handlePickerClearVideo = () => {
+    if (selectedVideoPreviewUrl) {
+      URL.revokeObjectURL(selectedVideoPreviewUrl);
+    }
+    setSelectedVideoFile(null);
+    setSelectedVideoPreviewUrl(null);
   };
 
   const handleAddVideoUrl = () => {
     const trimmed = videoUrlInput.trim();
     if (!trimmed) return;
-    setVideos((prev) => [...prev, trimmed]);
+    const normalized =
+      trimmed.startsWith('http://') ||
+      trimmed.startsWith('https://') ||
+      trimmed.startsWith('data:') ||
+      trimmed.startsWith('blob:')
+        ? trimmed
+        : `https://${trimmed}`;
+    setVideos((prev) => [...prev, normalized]);
     setVideoUrlInput('');
     setShowVideoInputDrawer(false);
   };
@@ -479,6 +509,31 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
                 </div>
               )}
 
+              {/* Video Upload Picker with Live Preview & Duration Extraction */}
+              {showVideoUploadPicker && (
+                <div className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-700 dark:text-slate-200 flex items-center gap-1.5">
+                      <VideoIcon className="w-3.5 h-3.5 text-rose-500" />
+                      <span>Upload Video File</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setShowVideoUploadPicker(false)}
+                      className="text-xs text-slate-400 hover:text-slate-600 cursor-pointer"
+                    >
+                      Close
+                    </button>
+                  </div>
+                  <VideoUploadPicker
+                    onVideoSelected={handlePickerVideoSelected}
+                    onClearVideo={handlePickerClearVideo}
+                    selectedFile={selectedVideoFile}
+                    previewUrl={selectedVideoPreviewUrl}
+                  />
+                </div>
+              )}
+
               {/* Video Link URL Drawer */}
               {showVideoInputDrawer && (
                 <div className="p-3 bg-purple-50 dark:bg-purple-950/40 rounded-2xl border border-purple-200 dark:border-purple-800 space-y-2">
@@ -605,7 +660,9 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
               {isProcessingMedia && (
                 <div className="flex items-center gap-2 text-xs text-blue-600 dark:text-blue-400 py-1">
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  <span>Optimizing media for instant playback...</span>
+                  <span>
+                    Optimizing & uploading media{uploadProgress > 0 ? ` (${uploadProgress}%)` : ''}...
+                  </span>
                 </div>
               )}
             </>
@@ -644,12 +701,15 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
               <span>Photo</span>
             </button>
 
-            {/* Video Button - Opens computer storage directly to select downloaded video files */}
+            {/* Video Button - Toggles VideoUploadPicker and opens file selector */}
             <button
               type="button"
-              onClick={() => videoFileInputRef.current?.click()}
+              onClick={() => {
+                setShowVideoUploadPicker(true);
+                videoFileInputRef.current?.click();
+              }}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-slate-700 dark:text-slate-300 hover:bg-rose-50 hover:text-rose-700 dark:hover:bg-rose-950/40 dark:hover:text-rose-300 text-xs font-bold transition-colors cursor-pointer"
-              title="Upload Downloaded Video from Computer Storage"
+              title="Upload Video from Computer Storage"
             >
               <VideoIcon className="w-4 h-4 text-rose-500 shrink-0" />
               <span>Video</span>

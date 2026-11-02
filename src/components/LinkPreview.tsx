@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { ExternalLink, Play, Globe } from 'lucide-react';
 import { LinkMetadata } from '../types/post';
+import { AutoPlayVideoPlayer, AutoPlayYouTubeEmbed, SharedEmbedCard } from './SmartPostMediaAndEmbeds';
 
 interface LinkPreviewProps {
   url?: string;
@@ -8,7 +9,7 @@ interface LinkPreviewProps {
 }
 
 export const LinkPreview: React.FC<LinkPreviewProps> = ({ url: directUrl, data }) => {
-  const [showEmbedPlayer, setShowEmbedPlayer] = useState(false);
+  const [showEmbedPlayer, setShowEmbedPlayer] = useState(true);
   const [embedError, setEmbedError] = useState(false);
   const effectiveUrl = data?.canonical_url || directUrl || '';
 
@@ -16,39 +17,33 @@ export const LinkPreview: React.FC<LinkPreviewProps> = ({ url: directUrl, data }
 
   const type = data?.type || 'generic';
 
-  // 1. YouTube & YouTube Shorts Embed
+  // 1. YouTube & YouTube Shorts Embed (Smooth Scroll Auto-Play)
   if (type === 'youtube' && data?.video_id) {
-    const ytEmbedUrl = `https://www.youtube-nocookie.com/embed/${data.video_id}?enablejsapi=1&rel=0&playsinline=1`;
+    const ytEmbedUrl = `https://www.youtube.com/embed/${data.video_id}?enablejsapi=1&rel=0&playsinline=1`;
     return (
       <div className="w-full my-3">
-        <div className="relative w-full aspect-video rounded-2xl overflow-hidden bg-black shadow-md border border-slate-200 dark:border-slate-800">
-          <iframe
-            src={ytEmbedUrl}
-            className="w-full h-full border-0"
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-            allowFullScreen
-            title={data.title || 'YouTube video'}
-          />
-        </div>
-        <div className="mt-1.5 text-right">
-          <a
-            href={effectiveUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline"
-          >
-            <span>{data.is_reel ? 'Watch on YouTube Shorts' : 'Watch on YouTube'}</span>
-            <ExternalLink className="w-3.5 h-3.5" />
-          </a>
-        </div>
+        <AutoPlayYouTubeEmbed
+          embedUrl={ytEmbedUrl}
+          originalUrl={effectiveUrl}
+          titleHint={data.title || (data.is_reel ? 'YouTube Shorts' : 'YouTube Video')}
+          autoPlayOnScroll={true}
+        />
       </div>
     );
   }
 
-  // 2. Facebook Video / Reel with Fallback
+  // 2. Facebook Video / Reel (Smooth Auto-Play)
   if (type === 'facebook_video') {
+    if (data?.video_url) {
+      return (
+        <div className="w-full my-3">
+          <AutoPlayVideoPlayer src={data.video_url} poster={data.image} autoPlayOnScroll={true} />
+        </div>
+      );
+    }
+
     const encodedUrl = encodeURIComponent(effectiveUrl);
-    const videoEmbedSrc = `https://www.facebook.com/plugins/video.php?href=${encodedUrl}&show_text=false&autoplay=1`;
+    const videoEmbedSrc = `https://www.facebook.com/plugins/video.php?href=${encodedUrl}&show_text=false&autoplay=true&mute=1`;
 
     return (
       <div className="w-full my-3 rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm">
@@ -70,35 +65,23 @@ export const LinkPreview: React.FC<LinkPreviewProps> = ({ url: directUrl, data }
           </a>
         </div>
 
-        {showEmbedPlayer ? (
-          embedError ? (
-            <div className="p-6 bg-slate-950 text-center text-white space-y-2">
-              <p className="text-xs text-slate-300">Facebook requires viewing this video directly on their platform.</p>
-              <a
-                href={effectiveUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 px-4 py-1.5 bg-[#1877F2] text-white rounded-xl text-xs font-bold"
-              >
-                <span>Watch on Facebook</span>
-                <ExternalLink className="w-3.5 h-3.5" />
-              </a>
-            </div>
-          ) : (
-            <div className="relative aspect-video bg-black">
-              <iframe
-                src={videoEmbedSrc}
-                className="w-full h-full border-0"
-                allow="autoplay; encrypted-media; picture-in-picture"
-                allowFullScreen
-                onError={() => setEmbedError(true)}
-                title="Facebook Video"
-              />
-            </div>
-          )
+        {showEmbedPlayer && !embedError ? (
+          <div className="relative aspect-video bg-black">
+            <iframe
+              src={videoEmbedSrc}
+              className="w-full h-full border-0"
+              allow="autoplay; encrypted-media; picture-in-picture; web-share"
+              allowFullScreen
+              onError={() => setEmbedError(true)}
+              title="Facebook Video"
+            />
+          </div>
         ) : (
           <div
-            onClick={() => setShowEmbedPlayer(true)}
+            onClick={() => {
+              setEmbedError(false);
+              setShowEmbedPlayer(true);
+            }}
             className="relative cursor-pointer aspect-video bg-slate-950 flex items-center justify-center group overflow-hidden"
           >
             {data?.image && (
@@ -118,11 +101,28 @@ export const LinkPreview: React.FC<LinkPreviewProps> = ({ url: directUrl, data }
     );
   }
 
-  // 3. Direct HTML5 Video Player
+  // 3. Direct HTML5 Video Player (Smooth Auto-Play)
   if (type === 'direct_video' || data?.video_url) {
     return (
-      <div className="w-full my-3 rounded-2xl overflow-hidden bg-black border border-slate-800">
-        <video src={data?.video_url || effectiveUrl} controls className="w-full max-h-[500px]" />
+      <div className="w-full my-3">
+        <AutoPlayVideoPlayer
+          src={data?.video_url || effectiveUrl}
+          poster={data?.image}
+          autoPlayOnScroll={true}
+        />
+      </div>
+    );
+  }
+
+  // Check if URL itself is a YouTube / Facebook / Direct video even if metadata wasn't pre-populated
+  if (
+    /(?:youtube\.com|youtu\.be|facebook\.com\/.*(?:video|reel|watch)|fb\.watch|\.(?:mp4|webm|ogg|mov)(?:\?|$))/i.test(
+      effectiveUrl
+    )
+  ) {
+    return (
+      <div className="w-full my-3">
+        <SharedEmbedCard url={effectiveUrl} autoPlayOnScroll={true} />
       </div>
     );
   }
@@ -170,3 +170,4 @@ export const LinkPreview: React.FC<LinkPreviewProps> = ({ url: directUrl, data }
     </a>
   );
 };
+

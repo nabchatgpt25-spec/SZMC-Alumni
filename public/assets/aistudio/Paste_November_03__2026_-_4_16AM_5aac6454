@@ -1,0 +1,1189 @@
+Here is the complete Video System code suite, modularized and ready to copy-paste directly into your project.
+It includes:
+src/components/feed/Video.tsx – Production-grade HTML5 Video player with viewport IntersectionObserver scroll-sync (auto-pause when scrolled away, auto-resume with sound when in view, single-active media coordination).
+src/services/videoUploadService.ts – Upload service with Supabase Storage integration, progress callbacks, MIME/size validation, and client-side video thumbnail (poster) capture.
+src/components/feed/AutoPlayYouTubeEmbed.tsx – YouTube IFrame API player with scroll auto-pause/resume and mute synchronization.
+src/components/feed/VideoLightboxModal.tsx – Fullscreen theater modal with timeline scrubbing, PiP, keyboard controls (Space, M, F, Esc), and download capability.
+src/components/feed/VideoUploadPicker.tsx – Post creator drag-and-drop video upload input with live preview and duration extraction.
+1. Direct Video Player Component (src/components/feed/Video.tsx)
+code
+Tsx
+import React, { useEffect, useRef, useState, useCallback } from 'react';
+import { Volume2, VolumeX, Play, Pause, Maximize, Loader2 } from 'lucide-react';
+
+export interface VideoProps {
+  src: string;
+  poster?: string;
+  className?: string;
+  autoPlayOnScroll?: boolean;
+  loop?: boolean;
+  controls?: boolean;
+  mutedDefault?: boolean;
+  onOpenFullscreenModal?: () => void;
+}
+
+/**
+ * High-performance Video Player with IntersectionObserver:
+ * - Automatically pauses when scrolled out of view (<40% visible)
+ * - Automatically resumes when back in viewport (>=50% visible)
+ * - Restores sound automatically upon scroll-in and user interaction
+ * - Ensures only one video plays at a time across the entire page
+ */
+export const Video: React.FC<VideoProps> = ({
+  src,
+  poster,
+  className = '',
+  autoPlayOnScroll = true,
+  loop = true,
+  controls = true,
+  mutedDefault = false,
+  onOpenFullscreenModal,
+}) => {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const [isMuted, setIsMuted] = useState<boolean>(mutedDefault);
+  const userExplicitlyMutedRef = useRef<boolean>(mutedDefault);
+  const [isPlaying, setIsPlaying] = useState<boolean>(false);
+  const [isInView, setIsInView] = useState<boolean>(false);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+
+  // Resume or start playback WITH SOUND
+  const startPlayback = useCallback(() => {
+    const videoEl = videoRef.current;
+    if (!videoEl) return;
+
+    // Pause all other video elements in the document to prevent audio clash
+    document.querySelectorAll('video').forEach((other) => {
+      if (other !== videoEl && !other.paused) {
+        other.pause();
+      }
+    });
+
+    // Broadcast event to notify YouTube/Facebook embeds to pause
+    window.dispatchEvent(
+      new CustomEvent('ndc-pause-all-media', { detail: { except: videoEl } })
+    );
+
+    const shouldMute = userExplicitlyMutedRef.current;
+    videoEl.muted = shouldMute;
+    setIsMuted(shouldMute);
+
+    videoEl
+      .play()
+      .then(() => {
+        setIsPlaying(true);
+        if (!shouldMute && videoEl.muted) {
+          videoEl.muted = false;
+          setIsMuted(false);
+        }
+      })
+      .catch(() => {
+        // If initial autoplay is constrained by browser gesture policies,
+        // start muted temporarily and unmute on the very next user interaction
+        videoEl.muted = true;
+        videoEl
+          .play()
+          .then(() => setIsPlaying(true))
+          .catch(() => setIsPlaying(false));
+      });
+  }, []);
+
+  // Pause playback helper
+  const pausePlayback = useCallback(() => {
+    const videoEl = videoRef.current;
+    if (videoEl && !videoEl.paused) {
+      videoEl.pause();
+      setIsPlaying(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const videoEl = videoRef.current;
+    const containerEl = containerRef.current;
+    if (!videoEl || !containerEl) return;
+
+    // Listen for any user gesture to safely activate sound if not explicitly muted
+    const handleUserGesture = () => {
+      if (!userExplicitlyMutedRef.current && videoEl && videoEl.muted) {
+        videoEl.muted = false;
+        setIsMuted(false);
+      }
+    };
+
+    window.addEventListener('click', handleUserGesture, { passive: true });
+    window.addEventListener('touchstart', handleUserGesture, { passive: true });
+    window.addEventListener('keydown', handleUserGesture, { passive: true });
+
+    const evaluateVisibility = () => {
+      if (!containerEl || !videoEl) return;
+      const rect = containerEl.getBoundingClientRect();
+      const windowHeight = window.innerHeight || document.documentElement.clientHeight;
+      const windowWidth = window.innerWidth || document.documentElement.clientWidth;
+
+      // Off-screen check
+      const isOffScreen =
+        rect.bottom <= 20 ||
+        rect.top >= windowHeight - 20 ||
+        rect.right <= 0 ||
+        rect.left >= windowWidth;
+
+      if (isOffScreen) {
+        setIsInView(false);
+        if (!videoEl.paused) {
+          videoEl.pause();
+          setIsPlaying(false);
+        }
+        return;
+      }
+
+      const visibleHeight = Math.min(rect.bottom, windowHeight) - Math.max(rect.top, 0);
+      const ratio = rect.height > 0 ? visibleHeight / rect.height : 0;
+
+      if (ratio < 0.4) {
+        // Less than 40% visible: PAUSE
+        setIsInView(false);
+        if (!videoEl.paused) {
+          videoEl.pause();
+          setIsPlaying(false);
+        }
+      } else if (ratio >= 0.5) {
+        // 50% or more visible: RESUME WITH SOUND
+        setIsInView(true);
+        if (autoPlayOnScroll) {
+          if (videoEl.paused) {
+            startPlayback();
+          }
+          if (!userExplicitlyMutedRef.current && videoEl.muted) {
+            videoEl.muted = false;
+            setIsMuted(false);
+          }
+        }
+      }
+    };
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting || entry.intersectionRatio < 0.4) {
+            setIsInView(false);
+            if (!videoEl.paused) {
+              videoEl.pause();
+              setIsPlaying(false);
+            }
+          } else if (entry.isIntersecting && entry.intersectionRatio >= 0.5) {
+            setIsInView(true);
+            if (autoPlayOnScroll) {
+              if (videoEl.paused) {
+                startPlayback();
+              }
+              if (!userExplicitlyMutedRef.current && videoEl.muted) {
+                videoEl.muted = false;
+                setIsMuted(false);
+              }
+            }
+          }
+        });
+      },
+      { threshold: [0, 0.15, 0.35, 0.5, 0.75, 1.0] }
+    );
+
+    observer.observe(containerEl);
+
+    let rafId: number | null = null;
+    const handleScroll = () => {
+      if (rafId !== null) return;
+      rafId = window.requestAnimationFrame(() => {
+        rafId = null;
+        evaluateVisibility();
+      });
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.hidden && !videoEl.paused) {
+        videoEl.pause();
+        setIsPlaying(false);
+      }
+    };
+
+    const handleGlobalPause = (e: Event) => {
+      const custom = e as CustomEvent;
+      if (custom.detail?.except !== videoEl && !videoEl.paused) {
+        videoEl.pause();
+        setIsPlaying(false);
+      }
+    };
+
+    window.addEventListener('scroll', handleScroll, { passive: true, capture: true });
+    document.addEventListener('scroll', handleScroll, { passive: true, capture: true });
+    window.addEventListener('resize', handleScroll, { passive: true });
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('ndc-pause-all-media', handleGlobalPause);
+
+    evaluateVisibility();
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('scroll', handleScroll, { capture: true });
+      document.removeEventListener('scroll', handleScroll, { capture: true });
+      window.removeEventListener('resize', handleScroll);
+      window.removeEventListener('click', handleUserGesture);
+      window.removeEventListener('touchstart', handleUserGesture);
+      window.removeEventListener('keydown', handleUserGesture);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('ndc-pause-all-media', handleGlobalPause);
+      if (rafId !== null) {
+        window.cancelAnimationFrame(rafId);
+      }
+    };
+  }, [autoPlayOnScroll, startPlayback]);
+
+  const toggleMute = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const videoEl = videoRef.current;
+    if (!videoEl) return;
+    const nextMuted = !isMuted;
+    videoEl.muted = nextMuted;
+    setIsMuted(nextMuted);
+    userExplicitlyMutedRef.current = nextMuted;
+  };
+
+  const handleVideoPlayPause = () => {
+    const videoEl = videoRef.current;
+    if (!videoEl) return;
+    if (videoEl.paused) {
+      startPlayback();
+    } else {
+      pausePlayback();
+    }
+  };
+
+  return (
+    <div
+      ref={containerRef}
+      className={`relative rounded-2xl overflow-hidden border border-slate-200/80 dark:border-slate-800 bg-black group shadow-sm ${className}`}
+    >
+      {/* Loading Spinner */}
+      {isLoading && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/40 z-10 pointer-events-none">
+          <Loader2 className="w-8 h-8 text-blue-500 animate-spin" />
+        </div>
+      )}
+
+      <video
+        ref={videoRef}
+        src={src}
+        poster={poster}
+        controls={controls}
+        playsInline
+        webkit-playsinline="true"
+        muted={isMuted}
+        loop={loop}
+        preload="metadata"
+        onLoadedData={() => setIsLoading(false)}
+        onWaiting={() => setIsLoading(true)}
+        onPlaying={() => {
+          setIsLoading(false);
+          setIsPlaying(true);
+        }}
+        onPause={() => setIsPlaying(false)}
+        onClick={handleVideoPlayPause}
+        className="w-full max-h-[540px] object-contain bg-black cursor-pointer"
+      />
+
+      {/* Floating Quick Action Overlay */}
+      <div className="absolute top-3 right-3 flex items-center gap-2 pointer-events-none z-20">
+        {!controls && (
+          <button
+            type="button"
+            onClick={handleVideoPlayPause}
+            className="pointer-events-auto p-2 rounded-full bg-black/75 hover:bg-black text-white transition-all shadow-md backdrop-blur-sm cursor-pointer"
+            aria-label={isPlaying ? 'Pause' : 'Play'}
+          >
+            {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
+          </button>
+        )}
+
+        {/* 1-Tap Unmute / Mute Toggle */}
+        <button
+          type="button"
+          onClick={toggleMute}
+          aria-label={isMuted ? 'Unmute video' : 'Mute video'}
+          className="pointer-events-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-black/75 hover:bg-black text-white text-xs font-bold transition-all shadow-md backdrop-blur-sm cursor-pointer"
+          title={isMuted ? 'Click to unmute' : 'Click to mute'}
+        >
+          {isMuted ? (
+            <>
+              <VolumeX className="w-3.5 h-3.5 text-rose-400" />
+              <span className="text-[10px] text-rose-300 font-bold">Muted</span>
+            </>
+          ) : (
+            <>
+              <Volume2 className="w-3.5 h-3.5 text-emerald-400" />
+              <span className="text-[10px] text-emerald-300 font-bold">Sound On</span>
+            </>
+          )}
+        </button>
+
+        {/* Theater / Fullscreen Modal Launcher */}
+        {onOpenFullscreenModal && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpenFullscreenModal();
+            }}
+            className="pointer-events-auto p-2 rounded-full bg-black/75 hover:bg-black text-white transition-all shadow-md backdrop-blur-sm cursor-pointer"
+            title="Expand to Fullscreen Theater"
+          >
+            <Maximize className="w-3.5 h-3.5 text-slate-200 hover:text-white" />
+          </button>
+        )}
+      </div>
+
+      {/* Viewport Status Indicator */}
+      {autoPlayOnScroll && (
+        <div className="absolute bottom-3 left-3 pointer-events-none z-20 opacity-0 group-hover:opacity-100 transition-opacity">
+          <span className="px-2.5 py-1 rounded-full bg-black/70 backdrop-blur-sm text-[10px] font-semibold text-white/90 border border-white/10">
+            {isInView
+              ? isMuted
+                ? '● In View (Muted)'
+                : '● Playing with Sound'
+              : '○ Paused on Scroll'}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default Video;
+2. Video Upload & Processing Service (src/services/videoUploadService.ts)
+code
+TypeScript
+import { supabase } from '../lib/supabase';
+
+export interface VideoMetadata {
+  duration: number; // in seconds
+  width: number;
+  height: number;
+  posterBlob?: Blob;
+  posterDataUrl?: string;
+}
+
+const ALLOWED_VIDEO_TYPES = [
+  'video/mp4',
+  'video/webm',
+  'video/quicktime', // .mov
+  'video/ogg',
+];
+
+const MAX_VIDEO_SIZE_BYTES = 100 * 1024 * 1024; // 100 MB
+
+/**
+ * Validates file type and size
+ */
+export function validateVideoFile(file: File): { isValid: boolean; error?: string } {
+  if (!ALLOWED_VIDEO_TYPES.includes(file.type)) {
+    return {
+      isValid: false,
+      error: 'Invalid video format. Please upload MP4, WebM, MOV, or OGG.',
+    };
+  }
+
+  if (file.size > MAX_VIDEO_SIZE_BYTES) {
+    return {
+      isValid: false,
+      error: `Video exceeds the 100 MB limit (${(file.size / (1024 * 1024)).toFixed(1)} MB).`,
+    };
+  }
+
+  return { isValid: true };
+}
+
+/**
+ * Captures the first frame of a video file as a high-quality JPEG poster data URL & Blob
+ */
+export function extractVideoPoster(file: File | Blob): Promise<VideoMetadata> {
+  return new Promise((resolve, reject) => {
+    const video = document.createElement('video');
+    video.preload = 'metadata';
+    video.muted = true;
+    video.playsInline = true;
+
+    const objectUrl = URL.createObjectURL(file);
+    video.src = objectUrl;
+
+    video.onloadedmetadata = () => {
+      // Seek to 0.5s or 10% of duration to capture a representative thumbnail
+      video.currentTime = Math.min(0.5, video.duration / 4);
+    };
+
+    video.onseeked = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth || 640;
+        canvas.height = video.videoHeight || 360;
+
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          URL.revokeObjectURL(objectUrl);
+          return resolve({
+            duration: video.duration,
+            width: video.videoWidth,
+            height: video.videoHeight,
+          });
+        }
+
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const posterDataUrl = canvas.toDataURL('image/jpeg', 0.85);
+
+        canvas.toBlob(
+          (blob) => {
+            URL.revokeObjectURL(objectUrl);
+            resolve({
+              duration: video.duration,
+              width: video.videoWidth,
+              height: video.videoHeight,
+              posterBlob: blob || undefined,
+              posterDataUrl,
+            });
+          },
+          'image/jpeg',
+          0.85
+        );
+      } catch (err) {
+        URL.revokeObjectURL(objectUrl);
+        reject(err);
+      }
+    };
+
+    video.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error('Failed to load video file for thumbnail generation.'));
+    };
+  });
+}
+
+/**
+ * Uploads a video file and its generated poster thumbnail to Supabase Storage
+ */
+export async function uploadVideoToStorage(
+  file: File,
+  userId: string,
+  onProgress?: (percent: number) => void
+): Promise<{ videoUrl: string; posterUrl?: string; duration: number }> {
+  const validation = validateVideoFile(file);
+  if (!validation.isValid) {
+    throw new Error(validation.error);
+  }
+
+  onProgress?.(10);
+
+  // 1. Extract metadata and poster thumbnail
+  let metadata: VideoMetadata | null = null;
+  try {
+    metadata = await extractVideoPoster(file);
+  } catch {
+    // Graceful fallback if client cannot render canvas preview
+  }
+
+  onProgress?.(30);
+
+  const timestamp = Date.now();
+  const fileExt = file.name.split('.').pop() || 'mp4';
+  const videoPath = `posts/${userId}/video_${timestamp}.${fileExt}`;
+
+  // 2. Upload video file to bucket 'post-media'
+  const { error: videoError } = await supabase.storage
+    .from('post-media')
+    .upload(videoPath, file, {
+      cacheControl: '3600',
+      upsert: false,
+      contentType: file.type,
+    });
+
+  if (videoError) {
+    throw new Error(`Video upload failed: ${videoError.message}`);
+  }
+
+  onProgress?.(70);
+
+  const { data: videoPublicUrlData } = supabase.storage
+    .from('post-media')
+    .getPublicUrl(videoPath);
+
+  let posterUrl: string | undefined;
+
+  // 3. Upload thumbnail if available
+  if (metadata?.posterBlob) {
+    const posterPath = `posts/${userId}/poster_${timestamp}.jpg`;
+    const { error: posterError } = await supabase.storage
+      .from('post-media')
+      .upload(posterPath, metadata.posterBlob, {
+        cacheControl: '3600',
+        upsert: false,
+        contentType: 'image/jpeg',
+      });
+
+    if (!posterError) {
+      const { data: posterPublicUrlData } = supabase.storage
+        .from('post-media')
+        .getPublicUrl(posterPath);
+      posterUrl = posterPublicUrlData.publicUrl;
+    }
+  }
+
+  onProgress?.(100);
+
+  return {
+    videoUrl: videoPublicUrlData.publicUrl,
+    posterUrl: posterUrl || metadata?.posterDataUrl,
+    duration: metadata?.duration || 0,
+  };
+}
+3. YouTube Embed Player with Viewport Auto-Pause (src/components/feed/AutoPlayYouTubeEmbed.tsx)
+code
+Tsx
+import React, { useEffect, useRef, useState, useMemo } from 'react';
+import { Volume2, VolumeX, ExternalLink } from 'lucide-react';
+
+interface AutoPlayYouTubeEmbedProps {
+  embedUrl: string;
+  originalUrl: string;
+  titleHint?: string;
+  autoPlayOnScroll?: boolean;
+}
+
+export const AutoPlayYouTubeEmbed: React.FC<AutoPlayYouTubeEmbedProps> = ({
+  embedUrl,
+  originalUrl,
+  titleHint = 'YouTube Video',
+  autoPlayOnScroll = true,
+}) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const ytPlayerRef = useRef<any>(null);
+  const wasPlayingRef = useRef<boolean>(false);
+  const [isInView, setIsInView] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
+
+  // Normalize embed URL with enablejsapi=1 & playsinline=1
+  const normalizedEmbedUrl = useMemo(() => {
+    try {
+      const u = new URL(embedUrl);
+      u.searchParams.set('enablejsapi', '1');
+      u.searchParams.set('playsinline', '1');
+      u.searchParams.set('rel', '0');
+      if (typeof window !== 'undefined') {
+        u.searchParams.set('origin', window.location.origin);
+      }
+      return u.toString();
+    } catch {
+      const sep = embedUrl.includes('?') ? '&' : '?';
+      return `${embedUrl}${sep}enablejsapi=1&playsinline=1&rel=0`;
+    }
+  }, [embedUrl]);
+
+  const sendYouTubeCommand = (func: 'playVideo' | 'pauseVideo' | 'stopVideo' | 'mute' | 'unMute') => {
+    const win = iframeRef.current?.contentWindow;
+    if (!win) return;
+    try {
+      win.postMessage(
+        JSON.stringify({ event: 'command', func, args: [] }),
+        '*'
+      );
+    } catch {
+      // Cross-origin fallback
+    }
+  };
+
+  // Load YouTube IFrame API script tag once
+  useEffect(() => {
+    let isCancelled = false;
+
+    if (typeof window !== 'undefined' && !(window as any).YT) {
+      const existing = document.getElementById('youtube-iframe-api');
+      if (!existing) {
+        const tag = document.createElement('script');
+        tag.id = 'youtube-iframe-api';
+        tag.src = 'https://www.youtube.com/iframe_api';
+        document.body.appendChild(tag);
+      }
+    }
+
+    const initPlayer = () => {
+      if (isCancelled || !iframeRef.current || !(window as any).YT?.Player) return;
+      try {
+        ytPlayerRef.current = new (window as any).YT.Player(iframeRef.current, {
+          events: {
+            onStateChange: (event: any) => {
+              if (event.data === 1) wasPlayingRef.current = true;
+              else if (event.data === 2) wasPlayingRef.current = false;
+            },
+          },
+        });
+      } catch {}
+    };
+
+    if ((window as any).YT?.Player) {
+      initPlayer();
+    } else {
+      const timer = setInterval(() => {
+        if ((window as any).YT?.Player) {
+          clearInterval(timer);
+          initPlayer();
+        }
+      }, 150);
+      setTimeout(() => clearInterval(timer), 4000);
+    }
+
+    return () => {
+      isCancelled = true;
+      if (ytPlayerRef.current?.destroy) {
+        try {
+          ytPlayerRef.current.destroy();
+        } catch {}
+      }
+    };
+  }, []);
+
+  // Viewport intersection monitoring
+  useEffect(() => {
+    const containerEl = containerRef.current;
+    if (!containerEl) return;
+
+    const pause = () => {
+      setIsInView(false);
+      ytPlayerRef.current?.pauseVideo?.();
+      sendYouTubeCommand('pauseVideo');
+    };
+
+    const resume = () => {
+      setIsInView(true);
+      if (wasPlayingRef.current || autoPlayOnScroll) {
+        ytPlayerRef.current?.playVideo?.();
+        sendYouTubeCommand('playVideo');
+      }
+    };
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting && entry.intersectionRatio >= 0.5) {
+            resume();
+          } else if (!entry.isIntersecting || entry.intersectionRatio < 0.35) {
+            pause();
+          }
+        });
+      },
+      { threshold: [0, 0.15, 0.35, 0.5, 0.75, 1.0] }
+    );
+
+    observer.observe(containerEl);
+
+    return () => observer.disconnect();
+  }, [autoPlayOnScroll]);
+
+  const handleToggleMute = () => {
+    const nextMuted = !isMuted;
+    setIsMuted(nextMuted);
+    if (nextMuted) {
+      ytPlayerRef.current?.mute?.();
+      sendYouTubeCommand('mute');
+    } else {
+      ytPlayerRef.current?.unMute?.();
+      sendYouTubeCommand('unMute');
+    }
+  };
+
+  return (
+    <div
+      ref={containerRef}
+      className="rounded-2xl overflow-hidden border border-slate-200/80 dark:border-slate-800 bg-slate-950 shadow-sm"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2.5 bg-slate-900 text-white text-xs">
+        <div className="flex items-center gap-2">
+          <span className="px-2 py-0.5 rounded-md bg-red-600 text-white font-bold text-[10px] uppercase">
+            YouTube
+          </span>
+          <span className="font-semibold text-slate-200 truncate max-w-[200px] sm:max-w-xs">
+            {titleHint}
+          </span>
+          {autoPlayOnScroll && (
+            <span
+              className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
+                isInView
+                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                  : 'bg-slate-800 text-slate-400'
+              }`}
+            >
+              {isInView ? '● Active' : '○ Paused'}
+            </span>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={handleToggleMute}
+            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-white text-[11px] font-bold cursor-pointer transition-colors"
+          >
+            {isMuted ? (
+              <>
+                <VolumeX className="w-3.5 h-3.5 text-rose-400" />
+                <span>Unmute</span>
+              </>
+            ) : (
+              <>
+                <Volume2 className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Sound On</span>
+              </>
+            )}
+          </button>
+          <a
+            href={originalUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-[11px] font-bold text-blue-400 hover:underline px-2 py-1"
+          >
+            <span>Open</span>
+            <ExternalLink className="w-3 h-3" />
+          </a>
+        </div>
+      </div>
+
+      <div className="aspect-video w-full bg-black">
+        <iframe
+          ref={iframeRef}
+          src={normalizedEmbedUrl}
+          title={titleHint}
+          className="w-full h-full border-0"
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+          allowFullScreen
+        />
+      </div>
+    </div>
+  );
+};
+4. Fullscreen Video Theater Lightbox (src/components/feed/VideoLightboxModal.tsx)
+code
+Tsx
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import {
+  X,
+  Play,
+  Pause,
+  Volume2,
+  VolumeX,
+  Maximize,
+  Minimize,
+  Download,
+  RotateCcw,
+  PictureInPicture2,
+  ShieldCheck,
+} from 'lucide-react';
+
+export interface VideoLightboxProps {
+  isOpen: boolean;
+  videoSrc: string;
+  posterSrc?: string;
+  onClose: () => void;
+  author?: {
+    fullName: string;
+    avatarUrl: string;
+    batchYear?: number;
+  };
+  caption?: string;
+}
+
+export const VideoLightboxModal: React.FC<VideoLightboxProps> = ({
+  isOpen,
+  videoSrc,
+  posterSrc,
+  onClose,
+  author,
+  caption,
+}) => {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const [isPlaying, setIsPlaying] = useState<boolean>(true);
+  const [isMuted, setIsMuted] = useState<boolean>(false);
+  const [currentTime, setCurrentTime] = useState<number>(0);
+  const [duration, setDuration] = useState<number>(0);
+  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+  const [controlsVisible, setControlsVisible] = useState<boolean>(true);
+
+  const controlsTimeoutRef = useRef<number | null>(null);
+
+  const formatSeconds = (sec: number) => {
+    if (isNaN(sec)) return '0:00';
+    const mins = Math.floor(sec / 60);
+    const secs = Math.floor(sec % 60);
+    return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+  };
+
+  const togglePlay = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.paused) {
+      video.play().then(() => setIsPlaying(true)).catch(() => {});
+    } else {
+      video.pause();
+      setIsPlaying(false);
+    }
+  }, []);
+
+  const toggleMute = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.muted = !video.muted;
+    setIsMuted(video.muted);
+  }, []);
+
+  const toggleFullscreen = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    if (!document.fullscreenElement) {
+      el.requestFullscreen?.().catch(() => {});
+      setIsFullscreen(true);
+    } else {
+      document.exitFullscreen?.().catch(() => {});
+      setIsFullscreen(false);
+    }
+  }, []);
+
+  const togglePiP = async () => {
+    const video = videoRef.current;
+    if (!video) return;
+    try {
+      if (document.pictureInPictureElement) {
+        await document.exitPictureInPicture();
+      } else if (document.pictureInPictureEnabled) {
+        await video.requestPictureInPicture();
+      }
+    } catch {}
+  };
+
+  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const video = videoRef.current;
+    if (!video) return;
+    const nextTime = parseFloat(e.target.value);
+    video.currentTime = nextTime;
+    setCurrentTime(nextTime);
+  };
+
+  // Keyboard controls: Space (Play/Pause), M (Mute), F (Fullscreen), Esc (Close)
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+      else if (e.key === ' ' || e.code === 'Space') {
+        e.preventDefault();
+        togglePlay();
+      } else if (e.key === 'm' || e.key === 'M') {
+        toggleMute();
+      } else if (e.key === 'f' || e.key === 'F') {
+        toggleFullscreen();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      document.body.style.overflow = originalOverflow;
+    };
+  }, [isOpen, onClose, togglePlay, toggleMute, toggleFullscreen]);
+
+  // Auto-hide controls after inactivity
+  const showControls = () => {
+    setControlsVisible(true);
+    if (controlsTimeoutRef.current) window.clearTimeout(controlsTimeoutRef.current);
+    controlsTimeoutRef.current = window.setTimeout(() => {
+      if (isPlaying) setControlsVisible(false);
+    }, 3000);
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div
+      ref={containerRef}
+      onMouseMove={showControls}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 backdrop-blur-md select-none transition-opacity duration-300"
+    >
+      {/* Top Header */}
+      <div
+        className={`absolute top-0 inset-x-0 p-4 flex items-center justify-between z-30 bg-gradient-to-b from-black/80 to-transparent text-white transition-opacity duration-300 ${
+          controlsVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
+        }`}
+      >
+        <div className="flex items-center gap-3">
+          {author && (
+            <div className="flex items-center gap-2.5">
+              <img
+                src={author.avatarUrl}
+                alt={author.fullName}
+                className="w-9 h-9 rounded-full object-cover ring-2 ring-blue-500/40"
+              />
+              <div>
+                <div className="flex items-center gap-1 font-bold text-sm text-white">
+                  <span>{author.fullName}</span>
+                  <ShieldCheck className="w-3.5 h-3.5 text-blue-400" />
+                </div>
+                {author.batchYear && (
+                  <span className="text-[11px] text-blue-300">Batch {author.batchYear}</span>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2">
+          <a
+            href={videoSrc}
+            download={`video-${Date.now()}.mp4`}
+            className="p-2 text-slate-200 hover:text-white bg-white/10 hover:bg-white/20 rounded-xl transition-colors cursor-pointer"
+            title="Download Video"
+          >
+            <Download className="w-4 h-4" />
+          </a>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-2 text-white bg-white/15 hover:bg-rose-600 rounded-xl transition-colors cursor-pointer"
+            title="Close (Esc)"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+      </div>
+
+      {/* Main Video Element */}
+      <video
+        ref={videoRef}
+        src={videoSrc}
+        poster={posterSrc}
+        playsInline
+        autoPlay
+        muted={isMuted}
+        onClick={togglePlay}
+        onTimeUpdate={() => {
+          if (videoRef.current) setCurrentTime(videoRef.current.currentTime);
+        }}
+        onLoadedMetadata={() => {
+          if (videoRef.current) setDuration(videoRef.current.duration);
+        }}
+        onEnded={() => setIsPlaying(false)}
+        className="max-w-[94vw] max-h-[82vh] object-contain cursor-pointer rounded-xl shadow-2xl"
+      />
+
+      {/* Bottom Controls Bar */}
+      <div
+        className={`absolute bottom-0 inset-x-0 p-4 sm:p-6 bg-gradient-to-t from-black/90 via-black/60 to-transparent flex flex-col gap-2 z-30 transition-opacity duration-300 ${
+          controlsVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
+        }`}
+      >
+        {caption && (
+          <p className="text-xs sm:text-sm text-slate-200 text-center line-clamp-1 mb-1">
+            "{caption}"
+          </p>
+        )}
+
+        {/* Progress Bar / Scrubber */}
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-slate-300 font-mono w-10 text-right">
+            {formatSeconds(currentTime)}
+          </span>
+          <input
+            type="range"
+            min={0}
+            max={duration || 100}
+            step={0.1}
+            value={currentTime}
+            onChange={handleSeek}
+            className="flex-1 h-1.5 bg-white/20 rounded-lg appearance-none cursor-pointer accent-blue-500 focus:outline-none"
+          />
+          <span className="text-xs text-slate-300 font-mono w-10">
+            {formatSeconds(duration)}
+          </span>
+        </div>
+
+        {/* Action Buttons Row */}
+        <div className="flex items-center justify-between mt-1">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={togglePlay}
+              className="p-2 rounded-lg bg-white/10 hover:bg-white/20 text-white cursor-pointer transition-colors"
+            >
+              {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (videoRef.current) videoRef.current.currentTime = 0;
+              }}
+              className="p-2 rounded-lg bg-white/10 hover:bg-white/20 text-white cursor-pointer transition-colors"
+              title="Restart"
+            >
+              <RotateCcw className="w-4 h-4" />
+            </button>
+            <button
+              type="button"
+              onClick={toggleMute}
+              className="p-2 rounded-lg bg-white/10 hover:bg-white/20 text-white cursor-pointer transition-colors"
+            >
+              {isMuted ? (
+                <VolumeX className="w-4 h-4 text-rose-400" />
+              ) : (
+                <Volume2 className="w-4 h-4 text-emerald-400" />
+              )}
+            </button>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={togglePiP}
+              className="p-2 rounded-lg bg-white/10 hover:bg-white/20 text-white cursor-pointer transition-colors"
+              title="Picture-in-Picture"
+            >
+              <PictureInPicture2 className="w-4 h-4" />
+            </button>
+            <button
+              type="button"
+              onClick={toggleFullscreen}
+              className="p-2 rounded-lg bg-white/10 hover:bg-white/20 text-white cursor-pointer transition-colors"
+              title="Fullscreen"
+            >
+              {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+5. Video Upload & Live Preview Input Component (src/components/feed/VideoUploadPicker.tsx)
+code
+Tsx
+import React, { useRef, useState } from 'react';
+import { Video, Upload, X, AlertCircle, Film } from 'lucide-react';
+import { validateVideoFile, extractVideoPoster, VideoMetadata } from '../../services/videoUploadService';
+
+interface VideoUploadPickerProps {
+  onVideoSelected: (file: File, metadata: VideoMetadata) => void;
+  onClearVideo: () => void;
+  selectedFile: File | null;
+  previewUrl: string | null;
+}
+
+export const VideoUploadPicker: React.FC<VideoUploadPickerProps> = ({
+  onVideoSelected,
+  onClearVideo,
+  selectedFile,
+  previewUrl,
+}) => {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [duration, setDuration] = useState<number | null>(null);
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setErrorMessage(null);
+    const validation = validateVideoFile(file);
+    if (!validation.isValid) {
+      setErrorMessage(validation.error || 'Invalid video file.');
+      return;
+    }
+
+    try {
+      const meta = await extractVideoPoster(file);
+      setDuration(meta.duration);
+      onVideoSelected(file, meta);
+    } catch {
+      onVideoSelected(file, { duration: 0, width: 0, height: 0 });
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="video/mp4,video/webm,video/quicktime,video/ogg"
+        onChange={handleFileChange}
+        className="hidden"
+      />
+
+      {errorMessage && (
+        <div className="flex items-center gap-2 p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 text-xs">
+          <AlertCircle className="w-4 h-4 shrink-0" />
+          <span>{errorMessage}</span>
+        </div>
+      )}
+
+      {!selectedFile ? (
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          className="w-full flex flex-col items-center justify-center p-6 border-2 border-dashed border-slate-300 dark:border-slate-700 hover:border-blue-500 rounded-2xl bg-slate-50 dark:bg-slate-900/50 hover:bg-blue-50/30 dark:hover:bg-blue-900/10 transition-colors cursor-pointer group"
+        >
+          <div className="w-12 h-12 rounded-full bg-blue-100 dark:bg-blue-900/40 flex items-center justify-center text-blue-600 dark:text-blue-400 mb-2 group-hover:scale-110 transition-transform">
+            <Film className="w-6 h-6" />
+          </div>
+          <span className="text-sm font-bold text-slate-800 dark:text-slate-200">
+            Click to upload video
+          </span>
+          <span className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+            MP4, WebM, MOV up to 100 MB
+          </span>
+        </button>
+      ) : (
+        <div className="relative rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 bg-black">
+          {previewUrl && (
+            <video
+              src={previewUrl}
+              controls
+              playsInline
+              className="w-full max-h-[300px] object-contain bg-black"
+            />
+          )}
+
+          <div className="absolute top-2 left-2 px-2.5 py-1 rounded-lg bg-black/70 backdrop-blur-sm text-white text-[11px] font-semibold flex items-center gap-1.5">
+            <Video className="w-3.5 h-3.5 text-blue-400" />
+            <span className="truncate max-w-[180px]">{selectedFile.name}</span>
+            {duration ? <span>({Math.round(duration)}s)</span> : null}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              onClearVideo();
+              if (fileInputRef.current) fileInputRef.current.value = '';
+            }}
+            className="absolute top-2 right-2 p-1.5 rounded-full bg-black/70 hover:bg-rose-600 text-white transition-colors cursor-pointer"
+            title="Remove Video"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
+Integration Summary
+In-Feed Playback: Render <Video src={post.media_urls[0]} autoPlayOnScroll={true} /> in any feed post or card. It automatically pauses on scroll without leaking sound in the background.
+YouTube Embeds: Use <AutoPlayYouTubeEmbed embedUrl={parsed.embedUrl} originalUrl={url} /> to control iframes smoothly without external dependencies.
+Upload Workflow: Use <VideoUploadPicker /> inside your create post form, and send the file to uploadVideoToStorage(file, user.id, setProgress).

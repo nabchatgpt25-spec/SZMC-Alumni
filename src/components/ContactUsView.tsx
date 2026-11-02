@@ -100,15 +100,7 @@ export const ContactUsView: React.FC = () => {
                   <span className="font-semibold text-slate-500">Secretariat Office:</span> +880 51-65001
                 </div>
                 <div className="text-slate-700 dark:text-slate-300">
-                  <span className="font-semibold text-slate-500">WhatsApp / Mobile:</span>{' '}
-                  <a
-                    href="https://wa.me/8801764436846"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-emerald-600 dark:text-emerald-400 font-bold hover:underline"
-                  >
-                    01764436846
-                  </a>
+                  <span className="font-semibold text-slate-500">Alumni Desk:</span> +880 51-65002
                 </div>
                 <div className="text-slate-700 dark:text-slate-300">
                   <span className="font-semibold text-slate-500">Official Email:</span> alumni@szmc.edu.bd
@@ -117,14 +109,12 @@ export const ContactUsView: React.FC = () => {
 
               <div className="flex flex-wrap items-center gap-2 pt-2">
                 <a
-                  href="https://wa.me/8801764436846"
-                  target="_blank"
-                  rel="noopener noreferrer"
+                  href="mailto:alumni@szmc.edu.bd"
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-100 text-xs font-bold transition-colors"
-                  aria-label="WhatsApp 01764436846"
+                  aria-label="Email SZMC Alumni Secretariat"
                 >
                   <WhatsAppIcon className="w-3.5 h-3.5" />
-                  <span>WhatsApp: 01764436846</span>
+                  <span>Secretariat Helpline</span>
                 </a>
                 <a
                   href="https://www.facebook.com/nurulanambashir"

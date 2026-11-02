@@ -84,6 +84,7 @@ function clearDirectAuthUser() {
   try {
     if (typeof window !== 'undefined') {
       localStorage.removeItem(DIRECT_AUTH_STORAGE_KEY);
+      localStorage.removeItem('szmc_direct_auth_token');
     }
   } catch (e) {
     console.warn('Failed to clear direct auth user', e);
@@ -393,12 +394,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return headers;
     }
 
-    if (isAdminUser || currentUser.role === 'admin' || cleanEmailMatchAdmin(currentUser.email)) {
-      if (!headers.Authorization || headers.Authorization === `Bearer ${anonKey}`) {
-        headers.Authorization = 'Bearer super-admin-direct';
-      }
-      headers['x-admin-email'] = (currentUser.email || 'nurulanambashir25@gmail.com').toLowerCase();
-      headers['x-admin-role'] = 'admin';
+    const storedDirectToken =
+      typeof window !== 'undefined' ? localStorage.getItem('szmc_direct_auth_token') : null;
+    if (storedDirectToken) {
+      headers.Authorization = `Bearer ${storedDirectToken}`;
       return headers;
     }
 
@@ -438,88 +437,51 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const cleanInput = phoneOrEmail.trim();
     const isEmail = cleanInput.includes('@');
 
-    // Dedicated Super Admin Credentials Recognition (Strict Password Policy)
-    const isAdminIdentifier =
-      cleanInput.toLowerCase() === 'nurulanambashir25@gmail.com' ||
-      cleanInput.toLowerCase() === 'nurulanambashir20@gmail.com' ||
-      cleanInput.includes('01764436846') ||
-      cleanInput.replace(/\D/g, '').endsWith('1764436846');
-
-    if (isAdminIdentifier) {
-      let backendSuccess = false;
-      let returnedToken: string | null = null;
-
-      // 1. Authenticate with backend server first
-      try {
-        const loginRes = await fetch('/api/auth/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ identifier: cleanInput, password: pass }),
-        });
+    // 1. Try Server-Verified Authentication First (verifies password hash on backend & issues HMAC token)
+    try {
+      const loginRes = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier: cleanInput, password: pass }),
+      });
+      if (loginRes.status === 401) {
+        const errJson = await loginRes.json().catch(() => ({}));
+        throw new Error(errJson.error || 'Incorrect password. Access denied.');
+      }
+      if (loginRes.ok) {
         const loginJson = await loginRes.json();
-        if (loginRes.ok && (loginJson.success || loginJson.profile)) {
-          backendSuccess = true;
-          returnedToken = loginJson.token || loginJson.session?.access_token || null;
-        } else if (!loginRes.ok) {
-          throw new Error(loginJson.error || 'Incorrect administrator password. Access denied.');
+        if (loginJson.success && loginJson.profile) {
+          const returnedToken = loginJson.token || loginJson.session?.access_token || null;
+          if (returnedToken) {
+            inMemorySupabaseToken = returnedToken;
+            setSupabaseToken(returnedToken);
+            if (typeof window !== 'undefined') {
+              localStorage.setItem('szmc_direct_auth_token', returnedToken);
+            }
+          }
+          const profile: AlumniProfile = loginJson.profile;
+          const isAdmin = profile.role === 'admin' || cleanEmailMatchAdmin(profile.email);
+          resolvedAuthUserIdRef.current = profile.authUserId || String(profile.id);
+          setCurrentUser(profile);
+          setIsAdminUser(isAdmin);
+          setIsLoggedIn(true);
+          saveDirectAuthUser(profile);
+
+          if (profile.email) {
+            supabase.auth
+              .signInWithPassword({
+                email: profile.email.toLowerCase(),
+                password: pass,
+              })
+              .catch(() => {});
+          }
+          return true;
         }
-      } catch (fetchErr: any) {
-        if (fetchErr.message && fetchErr.message.includes('password')) {
-          throw fetchErr;
-        }
       }
-
-      // 2. Fallback check ONLY for master administrator credential '01764436846'
-      if (!backendSuccess && pass !== '01764436846') {
-        throw new Error('Incorrect administrator password. Please verify your credentials.');
+    } catch (serverAuthErr: any) {
+      if (serverAuthErr?.message?.includes('Access denied') || serverAuthErr?.message?.includes('Incorrect')) {
+        throw serverAuthErr;
       }
-
-      const superAdminProfile: AlumniProfile = {
-        id: 1,
-        userId: 1,
-        authUserId: 'super-admin-nurul',
-        fullName: 'Dr. Nurul Anam Bashir',
-        avatarUrl: '/assets/aistudio/images__1__2778177d.png',
-        batchYear: 25,
-        academicStream: 'MBBS',
-        academicGroup: null,
-        section: 'MBBS',
-        verificationStatus: 'verified',
-        verificationMethod: 'admin_verified',
-        vouchesCount: 10,
-        vouchTargetCount: 2,
-        profession: 'Medical Doctor / Physician',
-        position: 'Super Admin / Lead Physician',
-        institution: 'Shaheed Ziaur Rahman Medical College Hospital',
-        specialty: ['Internal Medicine', 'Surgery'],
-        degree: ['MBBS', 'FCPS'],
-        city: 'Bogura',
-        country: 'Bangladesh',
-        email: cleanInput.includes('@') ? cleanInput.toLowerCase() : 'nurulanambashir25@gmail.com',
-        phone: '01764436846',
-        role: 'admin',
-        isPublic: true,
-        online: true,
-        badges: ['SZMCian', 'Super Admin', 'Batch 25'],
-      };
-
-      if (returnedToken) {
-        inMemorySupabaseToken = returnedToken;
-        setSupabaseToken(returnedToken);
-      }
-      resolvedAuthUserIdRef.current = 'super-admin-nurul';
-      setCurrentUser(superAdminProfile);
-      setIsAdminUser(true);
-      setIsLoggedIn(true);
-      saveDirectAuthUser(superAdminProfile);
-
-      // Also attempt native Supabase sign-in in background
-      supabase.auth.signInWithPassword({
-        email: cleanInput.includes('@') ? cleanInput.toLowerCase() : 'nurulanambashir25@gmail.com',
-        password: pass,
-      }).catch(() => {});
-
-      return true;
     }
 
     let authData: any = null;

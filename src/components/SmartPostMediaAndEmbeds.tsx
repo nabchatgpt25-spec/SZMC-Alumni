@@ -1,19 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ExternalLink,
-  Volume2,
-  VolumeX,
   Play,
-  Pause,
   Globe,
   Video as VideoIcon,
-  Share2,
   Loader2,
   Image as ImageIcon,
   Copy,
   Check,
   Maximize2,
-  AlertCircle,
   X,
 } from 'lucide-react';
 import {
@@ -23,6 +18,10 @@ import {
   type FacebookOEmbedData,
 } from '../services/facebookOEmbedService';
 import { apiUrl } from '../lib/apiConfig';
+import { Video } from './feed/Video';
+import { AutoPlayYouTubeEmbed } from './feed/AutoPlayYouTubeEmbed';
+
+export { Video, AutoPlayYouTubeEmbed };
 
 export type DetectedEmbedType =
   | 'youtube'
@@ -278,11 +277,11 @@ function buildFacebookPluginInfo(rawUrl: string, parsedUrl: URL): ParsedEmbedInf
 export function parseUrlForEmbed(rawInputUrl: string): ParsedEmbedInfo {
   const url = normalizeUrlInput(rawInputUrl);
 
-  // 1. Direct uploaded or linked video (data:video/... or blob:... or .mp4/.webm/.ogg/.mov)
+  // 1. Direct uploaded or linked video (data:video/... or blob:... or .mp4/.webm/.ogg/.mov/.m3u8 HLS)
   if (
     url.startsWith('data:video/') ||
     url.startsWith('blob:') ||
-    /\.(mp4|webm|ogg|mov)(\?.*)?$/i.test(url)
+    /\.(mp4|webm|ogg|mov|m3u8)(\?.*)?$/i.test(url)
   ) {
     return {
       originalUrl: rawInputUrl,
@@ -597,308 +596,7 @@ export const AutoPlayVideoPlayer: React.FC<{
   poster?: string;
   autoPlayOnScroll?: boolean;
 }> = ({ src, poster, autoPlayOnScroll = true }) => {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [isMuted, setIsMuted] = useState(true);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [isInView, setIsInView] = useState(false);
-
-  useEffect(() => {
-    const videoEl = videoRef.current;
-    const containerEl = containerRef.current;
-    if (!videoEl || !containerEl) return;
-
-    if (!autoPlayOnScroll) {
-      if (!videoEl.paused) {
-        videoEl.pause();
-        setIsPlaying(false);
-      }
-      return;
-    }
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          if (entry.isIntersecting && entry.intersectionRatio >= 0.45) {
-            setIsInView(true);
-            document.querySelectorAll('video').forEach((otherVid) => {
-              if (otherVid !== videoEl && !otherVid.paused) {
-                otherVid.pause();
-              }
-            });
-
-            videoEl.muted = isMuted;
-            const playPromise = videoEl.play();
-            if (playPromise !== undefined) {
-              playPromise
-                .then(() => {
-                  setIsPlaying(true);
-                })
-                .catch(() => {
-                  videoEl.muted = true;
-                  setIsMuted(true);
-                  videoEl
-                    .play()
-                    .then(() => setIsPlaying(true))
-                    .catch(() => {});
-                });
-            }
-          } else if (!entry.isIntersecting || entry.intersectionRatio < 0.25) {
-            setIsInView(false);
-            if (!videoEl.paused) {
-              videoEl.pause();
-              setIsPlaying(false);
-            }
-          }
-        });
-      },
-      {
-        threshold: [0, 0.25, 0.45, 0.75],
-      }
-    );
-
-    observer.observe(containerEl);
-
-    return () => {
-      observer.disconnect();
-    };
-  }, [autoPlayOnScroll, isMuted]);
-
-  const toggleMute = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    const videoEl = videoRef.current;
-    if (!videoEl) return;
-    const nextMuted = !isMuted;
-    videoEl.muted = nextMuted;
-    setIsMuted(nextMuted);
-  };
-
-  return (
-    <div
-      ref={containerRef}
-      className="relative rounded-2xl overflow-hidden border border-slate-200/80 dark:border-slate-800 bg-black group shadow-xs"
-    >
-      <video
-        ref={videoRef}
-        src={src}
-        poster={poster}
-        controls
-        playsInline
-        muted={isMuted}
-        loop
-        preload="metadata"
-        onPlay={() => setIsPlaying(true)}
-        onPause={() => setIsPlaying(false)}
-        className="w-full max-h-[520px] object-contain bg-black"
-      />
-
-      {/* Top Overlay: Auto-Scroll Status Badge + Mute/Unmute Toggle */}
-      <div className="absolute top-3 left-3 right-3 flex items-center justify-between pointer-events-none z-10">
-        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-black/75 backdrop-blur-xs text-white text-[10px] font-bold shadow-sm">
-          {isPlaying ? (
-            <>
-              <Play className="w-3 h-3 fill-emerald-400 text-emerald-400" />
-              <span>{isInView && autoPlayOnScroll ? 'Auto-Play ON (In View)' : 'Playing'}</span>
-            </>
-          ) : (
-            <>
-              <Pause className="w-3 h-3 text-slate-300" />
-              <span>{autoPlayOnScroll ? 'Auto-Paused (Scroll into view)' : 'Paused'}</span>
-            </>
-          )}
-        </span>
-
-        <button
-          type="button"
-          onClick={toggleMute}
-          className="pointer-events-auto inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full bg-black/80 hover:bg-black text-white text-[11px] font-bold transition-colors cursor-pointer shadow-md"
-          title={isMuted ? 'Unmute video' : 'Mute video'}
-        >
-          {isMuted ? (
-            <>
-              <VolumeX className="w-3.5 h-3.5 text-rose-400" />
-              <span>Muted · Tap for sound</span>
-            </>
-          ) : (
-            <>
-              <Volume2 className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Sound On</span>
-            </>
-          )}
-        </button>
-      </div>
-    </div>
-  );
-};
-
-/**
- * YouTube IFrame Player that automatically plays (muted) when scrolled into view
- * and automatically pauses when scrolled out of view via YouTube IFrame JS API postMessage.
- */
-export const AutoPlayYouTubeEmbed: React.FC<{
-  embedUrl: string;
-  originalUrl: string;
-  titleHint?: string;
-  autoPlayOnScroll?: boolean;
-}> = ({ embedUrl, originalUrl, titleHint = 'YouTube Video', autoPlayOnScroll = true }) => {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const iframeRef = useRef<HTMLIFrameElement>(null);
-  const [isInView, setIsInView] = useState(false);
-  const [isMuted, setIsMuted] = useState(true);
-
-  const sendYouTubeCommand = (func: 'playVideo' | 'pauseVideo' | 'mute' | 'unMute') => {
-    const win = iframeRef.current?.contentWindow;
-    if (!win) return;
-    try {
-      win.postMessage(
-        JSON.stringify({
-          event: 'command',
-          func,
-          args: [],
-        }),
-        '*'
-      );
-    } catch {
-      // Ignore cross-origin frame timing errors
-    }
-  };
-
-  useEffect(() => {
-    const containerEl = containerRef.current;
-    if (!containerEl) return;
-
-    if (!autoPlayOnScroll) {
-      sendYouTubeCommand('pauseVideo');
-      setIsInView(false);
-      return;
-    }
-
-    let retryTimer1: number | undefined;
-    let retryTimer2: number | undefined;
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          if (entry.isIntersecting && entry.intersectionRatio >= 0.45) {
-            setIsInView(true);
-            const triggerPlay = () => {
-              if (isMuted) {
-                sendYouTubeCommand('mute');
-              }
-              sendYouTubeCommand('playVideo');
-            };
-            triggerPlay();
-            retryTimer1 = window.setTimeout(triggerPlay, 350);
-            retryTimer2 = window.setTimeout(triggerPlay, 900);
-          } else if (!entry.isIntersecting || entry.intersectionRatio < 0.25) {
-            setIsInView(false);
-            window.clearTimeout(retryTimer1);
-            window.clearTimeout(retryTimer2);
-            sendYouTubeCommand('pauseVideo');
-          }
-        });
-      },
-      {
-        threshold: [0, 0.25, 0.45, 0.75],
-      }
-    );
-
-    observer.observe(containerEl);
-    return () => {
-      window.clearTimeout(retryTimer1);
-      window.clearTimeout(retryTimer2);
-      observer.disconnect();
-    };
-  }, [autoPlayOnScroll, isMuted]);
-
-  const handleToggleYouTubeMute = () => {
-    const nextMuted = !isMuted;
-    setIsMuted(nextMuted);
-    if (nextMuted) {
-      sendYouTubeCommand('mute');
-    } else {
-      sendYouTubeCommand('unMute');
-      sendYouTubeCommand('playVideo');
-    }
-  };
-
-  return (
-    <div
-      ref={containerRef}
-      className="rounded-2xl overflow-hidden border border-slate-200/80 dark:border-slate-800 bg-slate-950 shadow-xs"
-    >
-      {/* Platform Header Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2.5 bg-slate-900 text-white text-xs">
-        <div className="flex items-center gap-2">
-          <span className="px-2 py-0.5 rounded-md bg-red-600 text-white font-bold text-[10px] uppercase tracking-wider">
-            YouTube
-          </span>
-          <span className="font-semibold text-slate-200 truncate max-w-[180px] sm:max-w-xs">
-            {titleHint}
-          </span>
-          {autoPlayOnScroll && (
-            <span
-              className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
-                isInView
-                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                  : 'bg-slate-800 text-slate-400'
-              }`}
-            >
-              {isInView ? '● Auto-Play ON' : '○ Paused on Scroll'}
-            </span>
-          )}
-        </div>
-
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={handleToggleYouTubeMute}
-            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-white text-[11px] font-bold transition-colors cursor-pointer"
-          >
-            {isMuted ? (
-              <>
-                <VolumeX className="w-3.5 h-3.5 text-rose-400" />
-                <span>Unmute</span>
-              </>
-            ) : (
-              <>
-                <Volume2 className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Sound On</span>
-              </>
-            )}
-          </button>
-
-          <a
-            href={originalUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 text-[11px] font-bold text-blue-400 hover:underline px-2 py-1"
-          >
-            <span>Open YouTube</span>
-            <ExternalLink className="w-3 h-3" />
-          </a>
-        </div>
-      </div>
-
-      {/* Full 16:9 Responsive IFrame */}
-      <div className="aspect-video w-full bg-black">
-        <iframe
-          ref={iframeRef}
-          src={embedUrl}
-          title={titleHint}
-          onLoad={() => {
-            if (autoPlayOnScroll && isInView) {
-              if (isMuted) sendYouTubeCommand('mute');
-              sendYouTubeCommand('playVideo');
-            }
-          }}
-          className="w-full h-full border-0"
-          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-          allowFullScreen
-        />
-      </div>
-    </div>
-  );
+  return <Video src={src} poster={poster} autoPlayOnScroll={autoPlayOnScroll} />;
 };
 
 /**
@@ -916,7 +614,7 @@ const FacebookEmbedCard: React.FC<{
   const [isMuted, setIsMuted] = useState(true);
   const [copied, setCopied] = useState(false);
   const [isLightboxOpen, setIsLightboxOpen] = useState(false);
-  const [showIframeEmbed, setShowIframeEmbed] = useState(false);
+  const [showIframeEmbed, setShowIframeEmbed] = useState(true);
   const [iframeError, setIframeError] = useState(false);
 
   // Custom OEmbed and Open Graph metadata fetcher
@@ -982,14 +680,14 @@ const FacebookEmbedCard: React.FC<{
     const observer = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {
-          if (entry.isIntersecting && entry.intersectionRatio >= 0.45) {
+          if (entry.isIntersecting && entry.intersectionRatio >= 0.3) {
             setIsInView(true);
-          } else if (!entry.isIntersecting || entry.intersectionRatio < 0.25) {
+          } else if (!entry.isIntersecting || entry.intersectionRatio < 0.15) {
             setIsInView(false);
           }
         });
       },
-      { threshold: [0, 0.25, 0.45, 0.75] }
+      { threshold: [0, 0.15, 0.3, 0.6], rootMargin: '50px 0px' }
     );
 
     observer.observe(containerEl);
@@ -1068,12 +766,12 @@ const FacebookEmbedCard: React.FC<{
           />
         </div>
       ) : isVideo ? (
-        /* 2. Facebook Video / Reel Cinematic Card (Guaranteed 100% reliable, no broken black embed error) */
+        /* 2. Facebook Video / Reel Auto-Play Player with Thumbnail Switch */
         <div className="relative group bg-slate-950 aspect-video min-h-[300px] max-h-[500px] flex items-center justify-center overflow-hidden">
           {showIframeEmbed && effectiveInfo.embedUrl && !iframeError ? (
             <div className="relative w-full h-full bg-black flex flex-col items-center justify-center">
               <iframe
-                src={`${effectiveInfo.embedUrl}${autoPlayOnScroll && isInView ? '&autoplay=true' : ''}`}
+                src={`${effectiveInfo.embedUrl}${autoPlayOnScroll && isInView ? '&autoplay=true&mute=1' : '&mute=1'}`}
                 title={postTitle}
                 className="w-full h-full border-0"
                 scrolling="no"
@@ -1086,14 +784,18 @@ const FacebookEmbedCard: React.FC<{
                 onClick={() => setShowIframeEmbed(false)}
                 className="absolute top-3 right-3 px-2.5 py-1 bg-black/70 hover:bg-black/90 text-white text-[11px] font-bold rounded-lg backdrop-blur-xs transition-colors cursor-pointer z-10"
               >
-                Close Embed
+                Card View
               </button>
             </div>
           ) : (
             <div
               className="relative w-full h-full flex flex-col justify-between p-4 sm:p-6 cursor-pointer"
               onClick={() => {
-                window.open(effectiveInfo.normalizedUrl, '_blank', 'noopener,noreferrer');
+                if (effectiveInfo.embedUrl && !iframeError) {
+                  setShowIframeEmbed(true);
+                } else {
+                  window.open(effectiveInfo.normalizedUrl, '_blank', 'noopener,noreferrer');
+                }
               }}
             >
               {previewImage ? (
@@ -1142,7 +844,7 @@ const FacebookEmbedCard: React.FC<{
                 <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px] text-slate-300">
                   <span className="font-semibold text-white">{authorName}</span>
                   <span>•</span>
-                  <span>Click to watch full reel on Facebook</span>
+                  <span>Click to play video</span>
                   {effectiveInfo.embedUrl && (
                     <button
                       type="button"
@@ -1152,7 +854,7 @@ const FacebookEmbedCard: React.FC<{
                       }}
                       className="ml-auto underline text-slate-400 hover:text-white cursor-pointer"
                     >
-                      Try Embed
+                      Play Embed
                     </button>
                   )}
                 </div>

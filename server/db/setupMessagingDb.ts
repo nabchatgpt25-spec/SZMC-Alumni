@@ -742,6 +742,7 @@ export async function attemptBootstrapMessagingTables(): Promise<{
     return { success: false, message: 'DATABASE_URL not configured' };
   }
 
+  let client: Client | null = null;
   try {
     let servername: string | undefined = undefined;
     try {
@@ -749,7 +750,7 @@ export async function attemptBootstrapMessagingTables(): Promise<{
       servername = u.hostname;
     } catch {}
 
-    const client = new Client({
+    client = new Client({
       connectionString: dbUrl,
       ssl: {
         rejectUnauthorized: false,
@@ -758,13 +759,22 @@ export async function attemptBootstrapMessagingTables(): Promise<{
       connectionTimeoutMillis: 7000,
     });
 
+    // Prevent unhandled 'error' events on pg.Client from crashing the Node process
+    client.on('error', (err) => {
+      console.warn('[Database] Background Postgres client socket notice:', err.message);
+    });
+
     await client.connect();
     await client.query(MESSAGING_SCHEMA_SQL);
-    await client.end();
     console.log('[Database] Meta-Messenger production tables, strict RLS & RPCs provisioned successfully.');
     return { success: true, message: 'Production Meta-Messenger tables & RPCs provisioned successfully' };
   } catch (err: any) {
     console.warn('[Database] Direct Postgres bootstrap attempt notice:', err.message);
     return { success: false, message: err.message };
+  } finally {
+    if (client) {
+      await client.end().catch(() => {});
+    }
   }
 }
+

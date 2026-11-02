@@ -50,32 +50,11 @@ export const supabase: SupabaseClient = createClient(effectiveUrl, effectiveAnon
   },
 });
 
-const envServiceKey =
-  (import.meta.env.VITE_SUPABASE_SERVICE_ROLE_KEY as string | undefined)?.trim() ||
-  (import.meta.env.SUPABASE_SERVICE_ROLE_KEY as string | undefined)?.trim();
-
 /**
- * Supabase Admin Client for institutional administrative operations
- * Configured with service role or admin authority context
+ * Client-side Supabase reference for authenticated sessions.
+ * Privileged service-role operations are strictly executed on the backend / Edge Functions.
  */
-export const supabaseAdmin: SupabaseClient = createClient(
-  effectiveUrl,
-  envServiceKey || effectiveAnonKey,
-  {
-    auth: {
-      persistSession: true,
-      autoRefreshToken: true,
-      detectSessionInUrl: true,
-    },
-    global: {
-      headers: {
-        'x-admin-email': 'nurulanambashir25@gmail.com',
-        'x-admin-phone': '01764436846',
-        'x-admin-role': 'admin',
-      },
-    },
-  }
-);
+export const supabaseAdmin: SupabaseClient = supabase;
 
 /**
  * Explicit non-sensitive column list granted to `authenticated` on `public.alumni_profiles`

@@ -41,7 +41,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, onViewProfile 
   const [denialReason, setDenialReason] = useState<string | null>(null);
   const [verifiedDetails, setVerifiedDetails] = useState<ServerVerificationResult | null>(null);
 
-  const [adminMode, setAdminMode] = useState<'dashboard' | 'hub' | 'command_center'>('dashboard');
+  const [adminMode, setAdminMode] = useState<'dashboard' | 'hub' | 'command_center'>('hub');
 
   // Strict Server-Side Authentication Verification
   const verifyServerAdminAccess = useCallback(async () => {
