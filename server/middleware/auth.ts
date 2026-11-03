@@ -12,6 +12,7 @@ export interface AuthRequest extends Request {
     fullName: string;
     role: string;
     accountStatus: string;
+    auth_user_id?: string;
   };
 }
 

@@ -192,9 +192,13 @@ export const FeaturedAlumniSection: React.FC<FeaturedAlumniSectionProps> = ({
           })
       : [];
 
-    const combined: HallOfFameProfile[] = [...fromSiteConfig, ...FAMOUS_SZMC_ALUMNI];
+    if (fromSiteConfig.length > 0) {
+      return fromSiteConfig;
+    }
+
+    const combined: HallOfFameProfile[] = [...FAMOUS_SZMC_ALUMNI];
     if (liveAlumniList && liveAlumniList.length > 0) {
-      liveAlumniList.forEach((userAlumnus, idx) => {
+      liveAlumniList.slice(0, 6).forEach((userAlumnus, idx) => {
         const sameName = combined.some(
           (p) => p.fullName.toLowerCase().trim() === userAlumnus.fullName.toLowerCase().trim()
         );

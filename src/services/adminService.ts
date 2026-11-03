@@ -543,7 +543,7 @@ export async function reviewAdminDocSubmission(params: {
 
     // 3. Direct Supabase update using ONLY granted columns on admin_doc_submissions (status, reviewed_by, reviewed_at, admin_note)
     if (isSupabaseConfigured) {
-      await supabase
+      const { error: subErr } = await supabase
         .from('admin_doc_submissions')
         .update({
           status,
@@ -553,8 +553,13 @@ export async function reviewAdminDocSubmission(params: {
         })
         .eq('id', submissionId);
 
+      if (subErr) {
+        console.warn('Supabase reviewDocSubmission error on admin_doc_submissions:', subErr);
+        return { success: false, error: subErr.message };
+      }
+
       if (status === 'approved' && targetUserId) {
-        await supabase
+        const { error: profErr } = await supabase
           .from('alumni_profiles')
           .update({
             verification_status: 'verified',
@@ -563,6 +568,11 @@ export async function reviewAdminDocSubmission(params: {
             verified_at: nowIso,
           })
           .eq('id', targetUserId);
+
+        if (profErr) {
+          console.warn('Supabase reviewDocSubmission error on alumni_profiles:', profErr);
+          return { success: false, error: profErr.message };
+        }
       }
     }
 
@@ -792,10 +802,15 @@ export async function updateUserRole(params: {
 
     // 2. Direct Supabase update (do NOT pass updated_at — trigger handles it and column is not in GRANT UPDATE)
     if (isSupabaseConfigured) {
-      await supabase
+      const { error: roleErr } = await supabase
         .from('alumni_profiles')
         .update({ role: dbRole })
         .eq('id', targetUserId);
+
+      if (roleErr) {
+        console.warn('Supabase updateUserRole error:', roleErr);
+        return { success: false, error: roleErr.message };
+      }
     }
 
     // 3. Persist in Supabase site_settings governance state & local cache
@@ -1201,7 +1216,7 @@ export async function instantVerifyAlumnus(params: {
 
     // 2. Direct Supabase update (use valid verification_method_enum 'admin_manual', omit vouches_count & updated_at)
     if (isSupabaseConfigured) {
-      await supabase
+      const { error: vErr } = await supabase
         .from('alumni_profiles')
         .update({
           verification_status: 'verified',
@@ -1211,7 +1226,12 @@ export async function instantVerifyAlumnus(params: {
         })
         .eq('id', targetUserId);
 
-      await supabase
+      if (vErr) {
+        console.warn('Supabase instantVerifyAlumnus error on alumni_profiles:', vErr);
+        return { success: false, error: vErr.message };
+      }
+
+      const { error: subErr } = await supabase
         .from('admin_doc_submissions')
         .update({
           status: 'approved',
@@ -1221,6 +1241,11 @@ export async function instantVerifyAlumnus(params: {
         })
         .eq('user_id', targetUserId)
         .eq('status', 'pending');
+
+      if (subErr) {
+        console.warn('Supabase instantVerifyAlumnus error on admin_doc_submissions:', subErr);
+        return { success: false, error: subErr.message };
+      }
     }
 
     // 3. Persist in Supabase site_settings governance state & local storage

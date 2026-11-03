@@ -31,6 +31,8 @@ import {
   X,
   Settings,
   AlertTriangle,
+  AlertCircle,
+  Loader2,
 } from 'lucide-react';
 import { AlumniProfile, PostItem, PostComment, SPECIALTIES_LIST, DEGREES_LIST } from '../types';
 import { ALUMNI_PROFILES, loadStoredAlumniProfiles } from '../data/mockData';
@@ -484,6 +486,16 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const [currentPass, setCurrentPass] = useState('');
   const [newPass, setNewPass] = useState('');
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+
+  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => {
+      setToast((curr) => (curr?.message === message ? null : curr));
+    }, 4500);
+  };
 
   // Keep profile synchronized when profileId or currentUser changes, respecting any saved localStorage draft for current user
   useEffect(() => {
@@ -737,8 +749,11 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     }
   };
 
-  const handleSaveProfile = (e: React.FormEvent) => {
+  const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
+    setSaveError(null);
+    setIsSavingProfile(true);
+
     const updatedCareerList = editCareer
       .split('\n')
       .map((l) => l.trim())
@@ -769,6 +784,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         ? editProfessionOther.trim()
         : editProfession;
 
+    // Build client update data - notice role, verificationStatus, badges are strictly excluded
     const updatedData: Partial<AlumniProfile> = {
       fullName: editName,
       batchYear: Number(editBatch),
@@ -788,7 +804,6 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
       degree: finalDegrees,
       specialty: finalSpecialties,
       specialtyOther: editSpecialtyOther,
-      badges: editBadges,
     };
 
     setEditDegrees(finalDegrees);
@@ -797,21 +812,33 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     setEditSpecialtyOther('');
     setEditProfessionOther('');
 
-    if (typeof window !== 'undefined') {
-      try {
-        localStorage.removeItem(editDraftStorageKey);
-      } catch (e) {
-        console.warn('Failed to clear profile edit draft', e);
-      }
-    }
+    try {
+      const res = await updateProfile(updatedData);
+      setIsSavingProfile(false);
 
-    updateProfile(updatedData);
-    setProfile((prev) => ({ ...prev, ...updatedData }));
-    setSaveSuccess(true);
-    setTimeout(() => {
-      setSaveSuccess(false);
-      setActiveTab('about');
-    }, 1200);
+      if (!res.success) {
+        setSaveError(res.error || 'Failed to save profile changes to database.');
+        return;
+      }
+
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.removeItem(editDraftStorageKey);
+        } catch (e) {
+          console.warn('Failed to clear profile edit draft', e);
+        }
+      }
+
+      setProfile((prev) => ({ ...prev, ...updatedData }));
+      setSaveSuccess(true);
+      setTimeout(() => {
+        setSaveSuccess(false);
+        setActiveTab('about');
+      }, 1500);
+    } catch (err: any) {
+      setIsSavingProfile(false);
+      setSaveError(err?.message || 'Unexpected failure while persisting profile.');
+    }
   };
 
   return (
@@ -1878,8 +1905,15 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         <div className="liquid-glass-card p-6 sm:p-8 rounded-3xl">
           {saveSuccess && (
             <div className="mb-6 p-4 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 text-xs font-bold flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4" />
-              <span>Profile updated successfully!</span>
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
+              <span>Profile updated and synced successfully across Supabase!</span>
+            </div>
+          )}
+
+          {saveError && (
+            <div className="mb-6 p-4 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs font-bold flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{saveError}</span>
             </div>
           )}
 
@@ -2373,17 +2407,28 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
               <button
                 type="button"
                 onClick={() => setActiveTab('about')}
-                className="px-5 py-2.5 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+                disabled={isSavingProfile}
+                className="px-5 py-2.5 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-50"
               >
                 Cancel
               </button>
 
               <button
                 type="submit"
-                className="inline-flex items-center gap-2 px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-md shadow-blue-600/20 transition-all cursor-pointer"
+                disabled={isSavingProfile}
+                className="inline-flex items-center gap-2 px-6 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white text-xs font-bold rounded-xl shadow-md shadow-blue-600/20 transition-all cursor-pointer disabled:cursor-not-allowed"
               >
-                <Save className="w-4 h-4" />
-                <span>Save Profile Changes</span>
+                {isSavingProfile ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Saving to Supabase...</span>
+                  </>
+                ) : (
+                  <>
+                    <Save className="w-4 h-4" />
+                    <span>Save Profile Changes</span>
+                  </>
+                )}
               </button>
             </div>
           </form>

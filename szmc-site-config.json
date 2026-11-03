@@ -71,9 +71,9 @@
       "order": 1,
       "category": "Medicine",
       "avatarUrl": "https://images.unsplash.com/photo-1622253692010-333f2da6031d?w=300&auto=format&fit=crop&q=80",
-      "designation": "octors ",
+      "designation": "Professor & Head of Cardiology",
       "institution": "National Institute of Cardiovascular Diseases (NICVD)",
-      "achievementSummary": "Pioneered advanced interventional electrophysiology and cardiac .catheterization units in northern Bangladesh."
+      "achievementSummary": "Pioneered advanced interventional electrophysiology and cardiac catheterization units in northern Bangladesh."
     },
     {
       "id": "fa-3",
@@ -405,5 +405,5 @@
   "globalVerificationEnabled": true,
   "phoneVerificationRequired": true,
   "showFeaturedAlumniSection": true,
-  "updatedAt": "2026-11-03T02:28:38.534Z"
+  "updatedAt": "2026-11-03T09:39:10.810Z"
 }

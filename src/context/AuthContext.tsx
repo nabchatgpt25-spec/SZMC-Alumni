@@ -41,7 +41,7 @@ interface AuthContextType {
   loginWithGoogle: () => Promise<boolean>;
   logout: () => void;
   register: (profileData: Partial<AlumniProfile> & { password?: string }) => Promise<boolean>;
-  updateProfile: (updated: Partial<AlumniProfile>) => void;
+  updateProfile: (updated: Partial<AlumniProfile>) => Promise<{ success: boolean; error?: string }>;
   deleteAccount: (confirmationPassword?: string) => Promise<boolean>;
   requestPasswordReset: (email: string) => Promise<{ success: boolean }>;
   completePasswordRecovery: (newPassword: string) => Promise<boolean>;
@@ -1000,7 +1000,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     throw new Error('Registration could not complete profile creation. Please try again.');
   };
 
-  const updateProfile = async (updated: Partial<AlumniProfile>) => {
+  const updateProfile = async (
+    updated: Partial<AlumniProfile>
+  ): Promise<{ success: boolean; error?: string }> => {
     let cleanPhone = updated.phone;
     if (cleanPhone) {
       const norm = normalizePhoneNumber(cleanPhone);
@@ -1009,47 +1011,148 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     }
 
-    setCurrentUser((prev) => {
-      const nextUser = { ...prev, ...updated, phone: cleanPhone ?? prev.phone };
-      saveDirectAuthUser(nextUser);
-      return nextUser;
-    });
-    if (isSupabaseConfigured && currentUser.authUserId) {
+    const nextUser: AlumniProfile = {
+      ...currentUser,
+      ...updated,
+      phone: cleanPhone ?? updated.phone ?? currentUser.phone,
+    };
+
+    // Build strictly permitted client update payload for public.alumni_profiles
+    const updatePayload: Record<string, any> = {
+      updated_at: new Date().toISOString(),
+    };
+    if (updated.fullName !== undefined) updatePayload.full_name = updated.fullName;
+    if (updated.avatarUrl !== undefined) updatePayload.avatar_url = updated.avatarUrl;
+    if (updated.coverUrl !== undefined) updatePayload.cover_url = updated.coverUrl;
+    if (updated.batchYear !== undefined) updatePayload.batch_year = Number(updated.batchYear);
+    if (updated.collegeRoll !== undefined) updatePayload.college_roll = updated.collegeRoll;
+    if (updated.profession !== undefined) updatePayload.profession = updated.profession;
+    if (updated.position !== undefined) updatePayload.position = updated.position;
+    if (updated.institution !== undefined) updatePayload.institution = updated.institution;
+    if (updated.cadre !== undefined) updatePayload.cadre = updated.cadre;
+    if (updated.city !== undefined) updatePayload.city = updated.city;
+    if (updated.country !== undefined) updatePayload.country = updated.country;
+    if (updated.bio !== undefined) updatePayload.bio = updated.bio;
+    if (updated.whatsapp !== undefined) updatePayload.whatsapp = updated.whatsapp;
+    if (updated.fbLink !== undefined) updatePayload.fb_link = updated.fbLink;
+    if (cleanPhone !== undefined) updatePayload.phone = cleanPhone;
+    if (updated.email !== undefined) updatePayload.email = updated.email;
+    if (updated.careerHistory !== undefined) updatePayload.career_history = updated.careerHistory;
+    if (updated.degree !== undefined) updatePayload.degree = updated.degree;
+    if (updated.specialty !== undefined) updatePayload.specialty = updated.specialty;
+    if (updated.specialtyOther !== undefined) updatePayload.specialty_other = updated.specialtyOther;
+    if (updated.bloodGroup !== undefined) updatePayload.blood_group = updated.bloodGroup;
+    if (updated.isPublic !== undefined) updatePayload.is_public = updated.isPublic;
+
+    // FORBIDDEN COLUMNS — strictly stripped from client payload to prevent 42501 RLS / GRANT rejections
+    delete updatePayload.role;
+    delete updatePayload.verification_status;
+    delete updatePayload.verification_method;
+    delete updatePayload.verified_at;
+    delete updatePayload.verified_by_profile_id;
+    delete updatePayload.badges;
+    delete updatePayload.phone_ownership_verified;
+    delete updatePayload.phone_verified_at;
+    delete updatePayload.phone_verified_by_profile_id;
+    delete updatePayload.phone_verification_notes;
+    delete updatePayload.vouches_count;
+    delete updatePayload.vouch_target_count;
+
+    let supabaseSuccess = false;
+    let failureError: string | null = null;
+
+    if (isSupabaseConfigured) {
       try {
-        const updatePayload: Record<string, any> = {
-          full_name: updated.fullName,
-          avatar_url: updated.avatarUrl,
-          cover_url: updated.coverUrl,
-          profession: updated.profession,
-          position: updated.position,
-          institution: updated.institution,
-          city: updated.city,
-          country: updated.country,
-          bio: updated.bio,
-          whatsapp: updated.whatsapp,
-          fb_link: updated.fbLink,
-        };
-
-        if (cleanPhone !== undefined) {
-          updatePayload.phone = cleanPhone;
+        let authUserId = currentUser.authUserId;
+        if (!authUserId) {
+          const { data: supaUser } = await supabase.auth.getUser();
+          authUserId = supaUser?.user?.id;
         }
 
-        const { error: updateErr } = await supabase
-          .from('alumni_profiles')
-          .update(updatePayload)
-          .eq('auth_user_id', currentUser.authUserId);
+        // 1. Update public.alumni_profiles by auth_user_id or id
+        let query = supabase.from('alumni_profiles').update(updatePayload);
+        if (authUserId) {
+          query = query.eq('auth_user_id', authUserId);
+        } else if (currentUser.id) {
+          query = query.eq('id', currentUser.id);
+        }
 
+        const { data: updatedRows, error: updateErr } = await query.select('id');
         if (updateErr) {
+          console.warn('Supabase alumni_profiles update rejected:', updateErr);
           if (updateErr.message.toLowerCase().includes('unique') || updateErr.message.toLowerCase().includes('phone')) {
-            throw new Error('This mobile number is already registered to another alumni account.');
+            failureError = 'This mobile number is already registered to another alumni account.';
+          } else {
+            failureError = updateErr.message;
           }
-          console.warn('Supabase profile update warning:', updateErr);
+        } else if (Array.isArray(updatedRows) && updatedRows.length > 0) {
+          supabaseSuccess = true;
         }
-      } catch (err) {
+
+        // 2. Dual-table synchronization: Keep public.profiles in step for Messenger
+        if (authUserId && (updatePayload.full_name || updatePayload.avatar_url || updatePayload.batch_year)) {
+          const profileDisplay: Record<string, any> = {
+            updated_at: new Date().toISOString(),
+          };
+          if (updatePayload.full_name) profileDisplay.full_name = updatePayload.full_name;
+          if (updatePayload.avatar_url) profileDisplay.avatar_url = updatePayload.avatar_url;
+          if (updatePayload.batch_year) profileDisplay.batch = updatePayload.batch_year;
+
+          await supabase
+            .from('profiles')
+            .update(profileDisplay)
+            .eq('user_id', authUserId);
+        }
+      } catch (err: any) {
         console.warn('Supabase profile update warning:', err);
-        throw err;
+        failureError = err?.message || 'Database update failed';
       }
     }
+
+    // 3. Fallback / Server-side synchronization to /api/profile/update
+    let serverSuccess = false;
+    try {
+      let authToken = typeof window !== 'undefined' ? localStorage.getItem('szmc_direct_auth_token') : null;
+      if (!authToken) {
+        const { data: sessionData } = await supabase.auth.getSession().catch(() => ({ data: null }));
+        authToken = sessionData?.session?.access_token || null;
+      }
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (authToken) {
+        headers.Authorization = `Bearer ${authToken}`;
+      }
+      const sRes = await fetch('/api/profile/update', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          id: currentUser.id,
+          authUserId: currentUser.authUserId,
+          ...updated,
+          phone: cleanPhone ?? updated.phone,
+        }),
+      });
+      if (sRes.ok) {
+        const sData = await sRes.json();
+        if (sData?.success) {
+          serverSuccess = true;
+        }
+      }
+    } catch (sErr: any) {
+      console.warn('Server profile update sync notice:', sErr);
+    }
+
+    // Strict validation: fail if neither Supabase nor Server confirmed the write
+    if (!supabaseSuccess && !serverSuccess && isSupabaseConfigured) {
+      return {
+        success: false,
+        error: failureError || 'Failed to persist profile changes to the server database.',
+      };
+    }
+
+    // Persist to local state & storage only when backend write succeeds
+    setCurrentUser(nextUser);
+    saveDirectAuthUser(nextUser);
+    return { success: true };
   };
 
   const deleteAccount = async (): Promise<boolean> => {

@@ -56,6 +56,7 @@ import {
   toggleAcademicStreamGroupActive,
   updateAlumniPassword,
   deleteAlumniProfile,
+  updateAlumniProfileRecord,
   adminVerifyAlumniPhoneOwnership,
   adminRevokeAlumniPhoneOwnership,
   isServerAutoVerifyActive,
@@ -3023,6 +3024,65 @@ app.post(
     } catch (error: any) {
       console.error('Failed to register alumni profile:', error);
       res.status(400).json({ error: error.message || 'Failed to register alumni profile' });
+    }
+  }
+);
+
+// Update own Alumnus Profile in Database & Memory (with privilege column sanitization)
+app.post(
+  '/api/profile/update',
+  rateLimitGuard(40, 60_000),
+  optionalAuth,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const user = req.user as any;
+      const callerEmail = user?.email || req.dbUser?.email || req.body.email;
+      const callerAuthId = user?.uid || user?.id || req.dbUser?.auth_user_id || req.body.authUserId;
+      let targetProfileId = Number(req.dbUser?.id || req.body.id);
+
+      if (!targetProfileId && callerEmail) {
+        const found = await findAlumniByCredential(callerEmail);
+        if (found) targetProfileId = found.id;
+      }
+      if (!targetProfileId && req.body.phone) {
+        const found = await findAlumniByCredential(req.body.phone);
+        if (found) targetProfileId = found.id;
+      }
+
+      if (!targetProfileId) {
+        return res.status(400).json({ error: 'Could not identify target profile to update.' });
+      }
+
+      const updates: Record<string, any> = {};
+      if (req.body.fullName) updates.fullName = req.body.fullName;
+      if (req.body.avatarUrl) updates.avatarUrl = req.body.avatarUrl;
+      if (req.body.coverUrl) updates.coverUrl = req.body.coverUrl;
+      if (req.body.batchYear) updates.batchYear = Number(req.body.batchYear);
+      if (req.body.collegeRoll) updates.collegeRoll = req.body.collegeRoll;
+      if (req.body.profession) updates.profession = req.body.profession;
+      if (req.body.position) updates.position = req.body.position;
+      if (req.body.institution) updates.institution = req.body.institution;
+      if (req.body.cadre) updates.cadre = req.body.cadre;
+      if (req.body.city) updates.city = req.body.city;
+      if (req.body.country) updates.country = req.body.country;
+      if (req.body.bio) updates.bio = req.body.bio;
+      if (req.body.whatsapp) updates.whatsapp = req.body.whatsapp;
+      if (req.body.fbLink) updates.fbLink = req.body.fbLink;
+      if (req.body.phone) updates.phone = req.body.phone;
+      if (req.body.email) updates.email = req.body.email;
+      if (req.body.careerHistory) updates.careerHistory = req.body.careerHistory;
+      if (req.body.degree) updates.degree = req.body.degree;
+      if (req.body.specialty) updates.specialty = req.body.specialty;
+      if (req.body.specialtyOther) updates.specialtyOther = req.body.specialtyOther;
+      if (req.body.bloodGroup) updates.bloodGroup = req.body.bloodGroup;
+      if (req.body.isPublic !== undefined) updates.isPublic = req.body.isPublic;
+
+      // Note: role, verificationStatus, badges are strictly ignored to prevent client privilege escalation
+      const updated = await updateAlumniProfileRecord(targetProfileId, updates);
+      return res.json({ success: true, profile: updated });
+    } catch (error: any) {
+      console.error('Failed to update profile on server:', error);
+      return res.status(400).json({ error: error.message || 'Failed to update profile' });
     }
   }
 );

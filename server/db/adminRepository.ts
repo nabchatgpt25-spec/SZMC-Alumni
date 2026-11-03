@@ -867,6 +867,60 @@ export async function deleteAlumniProfile(profileId: number) {
   return true;
 }
 
+export async function updateAlumniProfileRecord(
+  profileId: number,
+  updates: Record<string, any>
+) {
+  const dbUpdates: Record<string, any> = {
+    updated_at: new Date().toISOString(),
+  };
+  if (updates.fullName !== undefined) dbUpdates.full_name = updates.fullName;
+  if (updates.avatarUrl !== undefined) dbUpdates.avatar_url = updates.avatarUrl;
+  if (updates.coverUrl !== undefined) dbUpdates.cover_url = updates.coverUrl;
+  if (updates.batchYear !== undefined) dbUpdates.batch_year = Number(updates.batchYear);
+  if (updates.collegeRoll !== undefined) dbUpdates.college_roll = updates.collegeRoll;
+  if (updates.profession !== undefined) dbUpdates.profession = updates.profession;
+  if (updates.position !== undefined) dbUpdates.position = updates.position;
+  if (updates.institution !== undefined) dbUpdates.institution = updates.institution;
+  if (updates.cadre !== undefined) dbUpdates.cadre = updates.cadre;
+  if (updates.city !== undefined) dbUpdates.city = updates.city;
+  if (updates.country !== undefined) dbUpdates.country = updates.country;
+  if (updates.bio !== undefined) dbUpdates.bio = updates.bio;
+  if (updates.whatsapp !== undefined) dbUpdates.whatsapp = updates.whatsapp;
+  if (updates.fbLink !== undefined) dbUpdates.fb_link = updates.fbLink;
+  if (updates.phone !== undefined) dbUpdates.phone = updates.phone;
+  if (updates.email !== undefined) dbUpdates.email = updates.email;
+  if (updates.careerHistory !== undefined) dbUpdates.career_history = updates.careerHistory;
+  if (updates.degree !== undefined) dbUpdates.degree = updates.degree;
+  if (updates.specialty !== undefined) dbUpdates.specialty = updates.specialty;
+  if (updates.specialtyOther !== undefined) dbUpdates.specialty_other = updates.specialtyOther;
+  if (updates.bloodGroup !== undefined) dbUpdates.blood_group = updates.bloodGroup;
+  if (updates.isPublic !== undefined) dbUpdates.is_public = updates.isPublic;
+
+  // 1. Update in Supabase
+  if (isSupabaseServerConfigured && profileId) {
+    try {
+      await supabaseServer
+        .from(SUPABASE_TABLES.ALUMNI_PROFILES)
+        .update(dbUpdates)
+        .eq('id', profileId);
+    } catch (err) {
+      console.warn('Supabase updateAlumniProfileRecord error:', err);
+    }
+  }
+
+  // 2. Update in inMemoryAlumniProfiles
+  const idx = inMemoryAlumniProfiles.findIndex((p) => p.id === profileId);
+  if (idx !== -1) {
+    inMemoryAlumniProfiles[idx] = {
+      ...inMemoryAlumniProfiles[idx],
+      ...updates,
+    };
+    return inMemoryAlumniProfiles[idx];
+  }
+  return { id: profileId, ...updates };
+}
+
 export async function adminUpdateAlumniGovernance(params: {
   profileId: number;
   verificationStatus?: string;

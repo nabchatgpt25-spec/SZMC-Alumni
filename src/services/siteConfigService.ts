@@ -452,10 +452,16 @@ export async function saveSiteConfigToServer(configPatch: Partial<SiteConfig>): 
       import('./supabaseRealtimeService'),
     ]);
     realtimeManager.broadcastSiteConfigUpdate(fullConfig);
+
+    let supabaseSuccess = false;
+    let supabaseErrorMsg: string | null = null;
+
+    // 1. Direct Supabase public.site_settings write via client
     if (isSupabaseConfigured && supabase) {
-      const nowIso = new Date().toISOString();
-      void Promise.resolve(
-        supabase
+      try {
+        const nowIso = new Date().toISOString();
+        const hofMembers = Array.isArray(fullConfig.featuredAlumni) ? fullConfig.featuredAlumni : [];
+        const { error: upsertErr } = await supabase
           .from('site_settings')
           .upsert(
             [
@@ -467,29 +473,34 @@ export async function saveSiteConfigToServer(configPatch: Partial<SiteConfig>): 
               {
                 key: 'hall_of_fame',
                 value: {
-                  members: fullConfig.featuredAlumni || [],
+                  members: hofMembers,
                   updated_at: nowIso,
                 },
                 updated_at: nowIso,
               },
             ],
             { onConflict: 'key' }
-          )
-      ).catch(() => {});
-    }
-  } catch {
-    // Non-blocking fallback to Express API
-  }
+          );
 
-  try {
-    let authToken = typeof window !== 'undefined' ? localStorage.getItem('szmc_direct_auth_token') : null;
-    if (!authToken) {
-      try {
-        const { supabase, isSupabaseConfigured } = await import('../lib/supabase');
-        if (isSupabaseConfigured && supabase) {
-          const { data: sessionData } = await supabase.auth.getSession();
-          authToken = sessionData?.session?.access_token || null;
+        if (!upsertErr) {
+          supabaseSuccess = true;
+        } else {
+          supabaseErrorMsg = upsertErr.message;
+          console.warn('Supabase site_settings upsert error:', upsertErr);
         }
+      } catch (dbErr: any) {
+        supabaseErrorMsg = dbErr?.message || 'Supabase write exception';
+      }
+    }
+
+    // 2. Persist to Express API & broadcast via SSE to all active devices
+    let serverSuccess = false;
+    let serverErrorMsg: string | null = null;
+    let authToken = typeof window !== 'undefined' ? localStorage.getItem('szmc_direct_auth_token') : null;
+    if (!authToken && supabase) {
+      try {
+        const { data: sessionData } = await supabase.auth.getSession();
+        authToken = sessionData?.session?.access_token || null;
       } catch {}
     }
 
@@ -501,20 +512,60 @@ export async function saveSiteConfigToServer(configPatch: Partial<SiteConfig>): 
       headers['x-admin-token'] = authToken;
     }
 
-    const res = await fetch('/api/admin/site-config', {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(fullConfig),
-    });
+    try {
+      const res = await fetch('/api/admin/site-config', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(fullConfig),
+      });
 
-    const data = await res.json();
-    if (!res.ok) {
-      return { success: false, error: data?.error || 'Server save rejected' };
+      const data = await res.json();
+      if (res.ok && data?.success) {
+        serverSuccess = true;
+      } else {
+        serverErrorMsg = data?.error || 'Server save rejected';
+      }
+    } catch (fetchErr: any) {
+      serverErrorMsg = fetchErr?.message || 'Server connection failed';
     }
 
-    return { success: true, message: data?.message || 'Settings saved & broadcast live across all devices!' };
+    // Strict error propagation: fail if Supabase is configured and failed to write
+    let isSupaActive = false;
+    try {
+      const supaModule = await import('../lib/supabase');
+      isSupaActive = Boolean(supaModule.isSupabaseConfigured);
+    } catch {}
+
+    if (isSupaActive && !supabaseSuccess) {
+      const errMsg = supabaseErrorMsg || 'Supabase rejected the site settings write (check admin permissions or RLS policies on public.site_settings).';
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('szmc-site-config-error', { detail: errMsg }));
+      }
+      return {
+        success: false,
+        error: errMsg,
+      };
+    }
+
+    if (!isSupaActive && !serverSuccess) {
+      return {
+        success: false,
+        error: serverErrorMsg || 'Failed to save site settings to server.',
+      };
+    }
+
+    // Mirror to local storage only after backend / database write confirms success
+    saveSiteConfig(fullConfig);
+
+    return {
+      success: true,
+      message: 'Site configuration & Hall of Fame saved and broadcast live across all devices!',
+    };
   } catch (err: any) {
-    return { success: true, message: 'Saved successfully to local storage & cloud cache' };
+    return {
+      success: false,
+      error: err?.message || 'Unexpected failure while persisting site settings.',
+    };
   }
 }
 
@@ -528,38 +579,18 @@ export function useSiteConfig() {
     let isMounted = true;
     ensureRealtimeSiteConfigStream();
 
-    // Initial fetch of server-persisted configuration + Supabase site_settings
+    // Primary Source of Truth: Supabase public.site_settings
     const loadRemoteConfig = async () => {
-      try {
-        const r = await fetch('/api/site-config');
-        if (r.ok) {
-          const data = await r.json();
-          if (data?.config && typeof data.config === 'object' && isMounted) {
-            const localCurrent = getSiteConfig();
-            const mergedPatch = { ...data.config };
-            if (
-              Array.isArray(localCurrent.featuredAlumni) &&
-              localCurrent.featuredAlumni.length > 0 &&
-              (!Array.isArray(mergedPatch.featuredAlumni) || mergedPatch.featuredAlumni.length === 0)
-            ) {
-              mergedPatch.featuredAlumni = localCurrent.featuredAlumni;
-            }
-            const merged = saveSiteConfig(mergedPatch);
-            setConfig(merged);
-            return;
-          }
-        }
-      } catch {}
-
-      // Fallback: check Supabase site_settings directly
+      // 1. Fetch from Supabase site_settings first
       try {
         const { supabase, isSupabaseConfigured } = await import('../lib/supabase');
         if (isSupabaseConfigured && supabase) {
-          const { data } = await supabase
+          const { data, error } = await supabase
             .from('site_settings')
             .select('key, value')
             .in('key', ['master_site_config', 'hall_of_fame']);
-          if (Array.isArray(data) && isMounted) {
+
+          if (!error && Array.isArray(data) && data.length > 0 && isMounted) {
             const masterRow = data.find((r) => r.key === 'master_site_config');
             const hofRow = data.find((r) => r.key === 'hall_of_fame');
             const patch: Partial<SiteConfig> = (masterRow?.value as any) || {};
@@ -568,9 +599,25 @@ export function useSiteConfig() {
               patch.featuredAlumni = hofMembers;
             }
             if (Object.keys(patch).length > 0) {
-              const merged = saveSiteConfig(patch);
+              const merged = saveSiteConfig(patch); // Mirror to localStorage
               setConfig(merged);
+              return;
             }
+          }
+        }
+      } catch (supaErr) {
+        console.warn('Supabase site_settings load notice:', supaErr);
+      }
+
+      // 2. Secondary fallback: Express server cache
+      try {
+        const r = await fetch('/api/site-config');
+        if (r.ok) {
+          const data = await r.json();
+          if (data?.config && typeof data.config === 'object' && isMounted) {
+            const merged = saveSiteConfig(data.config);
+            setConfig(merged);
+            return;
           }
         }
       } catch {}
@@ -608,6 +655,11 @@ export function useSiteConfig() {
         if (res.success) {
           setHasUnsavedChanges(false);
           setLastSavedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+        } else {
+          console.warn('[SiteConfig] Auto-save failed:', res.error);
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('szmc-site-config-error', { detail: res.error || 'Auto-save failed' }));
+          }
         }
       });
     }, 350);
