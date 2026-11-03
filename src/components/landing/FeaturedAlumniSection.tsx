@@ -61,8 +61,17 @@ export const FeaturedAlumniSection: React.FC<FeaturedAlumniSectionProps> = ({
   }, [alumniList]);
 
   useEffect(() => {
-    if (Array.isArray(config.featuredAlumni)) {
+    if (Array.isArray(config.featuredAlumni) && config.featuredAlumni.length > 0) {
       setLiveHallOfFame(config.featuredAlumni);
+    } else {
+      fetch('/api/hall-of-fame')
+        .then((r) => r.json())
+        .then((d) => {
+          if (Array.isArray(d?.members) && d.members.length > 0) {
+            setLiveHallOfFame(d.members);
+          }
+        })
+        .catch(() => {});
     }
   }, [config.featuredAlumni]);
 

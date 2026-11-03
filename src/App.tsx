@@ -10,9 +10,7 @@ import { ThemeProvider } from './context/ThemeContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
-import { FeedView } from './components/FeedView';
 import type { AlumniProfile } from './types';
-import { LandingPage } from './components/LandingPage';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { ensureVouchRequestFromUrlParams } from './utils/verificationService';
 import { CursorSpotlight } from './components/motion/CinematicMotion';
@@ -20,6 +18,8 @@ import { SZMCLogo } from './components/SZMCLogo';
 import { OutstandingLoadingScreen } from './components/OutstandingLoadingScreen';
 
 // Code-split dynamic views for instant snappy initial page load
+const LandingPage = lazy(() => import('./components/LandingPage').then(m => ({ default: m.LandingPage })));
+const FeedView = lazy(() => import('./components/FeedView').then(m => ({ default: m.FeedView })));
 const DirectoryView = lazy(() => import('./components/DirectoryView').then(m => ({ default: m.DirectoryView })));
 const AlumniDirectoryView = lazy(() => import('./components/AlumniDirectoryView').then(m => ({ default: m.AlumniDirectoryView })));
 const BatchesView = lazy(() => import('./components/BatchesView').then(m => ({ default: m.BatchesView })));
@@ -270,22 +270,24 @@ function AlumniAppContent() {
           />
         )}
 
-        <LandingPage
-          onOpenLogin={() => setAuthModalMode('login')}
-          onOpenRegister={() => setAuthModalMode('register')}
-          isAuthModalOpen={authModalMode !== null}
-          onReplaySplash={() => setShowSplash(true)}
-          onNavigate={(target) => {
-            if (target === 'landing') {
-              navigateTo(target);
-            } else if (!isLoggedIn) {
-              // Guest browsing prompt to log in/register to access portal
-              setAuthModalMode('login');
-            } else {
-              navigateTo(target);
-            }
-          }}
-        />
+        <Suspense fallback={<ViewSkeletonFallback />}>
+          <LandingPage
+            onOpenLogin={() => setAuthModalMode('login')}
+            onOpenRegister={() => setAuthModalMode('register')}
+            isAuthModalOpen={authModalMode !== null}
+            onReplaySplash={() => setShowSplash(true)}
+            onNavigate={(target) => {
+              if (target === 'landing') {
+                navigateTo(target);
+              } else if (!isLoggedIn) {
+                // Guest browsing prompt to log in/register to access portal
+                setAuthModalMode('login');
+              } else {
+                navigateTo(target);
+              }
+            }}
+          />
+        </Suspense>
 
         {authModalMode && (
           <Suspense fallback={null}>

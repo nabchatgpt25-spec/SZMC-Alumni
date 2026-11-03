@@ -498,6 +498,7 @@ export async function saveSiteConfigToServer(configPatch: Partial<SiteConfig>): 
     };
     if (authToken) {
       headers.Authorization = `Bearer ${authToken}`;
+      headers['x-admin-token'] = authToken;
     }
 
     const res = await fetch('/api/admin/site-config', {
@@ -511,7 +512,7 @@ export async function saveSiteConfigToServer(configPatch: Partial<SiteConfig>): 
       return { success: false, error: data?.error || 'Server save rejected' };
     }
 
-    return { success: true, message: data?.message || 'Settings saved & broadcast live across the platform!' };
+    return { success: true, message: data?.message || 'Settings saved & broadcast live across all devices!' };
   } catch (err: any) {
     return { success: true, message: 'Saved successfully to local storage & cloud cache' };
   }
@@ -556,12 +557,20 @@ export function useSiteConfig() {
         if (isSupabaseConfigured && supabase) {
           const { data } = await supabase
             .from('site_settings')
-            .select('value')
-            .eq('key', 'master_site_config')
-            .maybeSingle();
-          if (data?.value && typeof data.value === 'object' && isMounted) {
-            const merged = saveSiteConfig(data.value as Partial<SiteConfig>);
-            setConfig(merged);
+            .select('key, value')
+            .in('key', ['master_site_config', 'hall_of_fame']);
+          if (Array.isArray(data) && isMounted) {
+            const masterRow = data.find((r) => r.key === 'master_site_config');
+            const hofRow = data.find((r) => r.key === 'hall_of_fame');
+            const patch: Partial<SiteConfig> = (masterRow?.value as any) || {};
+            const hofMembers = hofRow?.value?.members || hofRow?.value;
+            if (Array.isArray(hofMembers) && hofMembers.length > 0) {
+              patch.featuredAlumni = hofMembers;
+            }
+            if (Object.keys(patch).length > 0) {
+              const merged = saveSiteConfig(patch);
+              setConfig(merged);
+            }
           }
         }
       } catch {}

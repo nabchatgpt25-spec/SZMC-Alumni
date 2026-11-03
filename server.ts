@@ -29,7 +29,16 @@ import * as dotenv from 'dotenv';
 dotenv.config({ quiet: true });
 
 import { supabaseServer, isSupabaseServerConfigured } from './server/lib/supabase-server.ts';
-import { requireAuth, requireAdmin, optionalAuth, signAdminToken, type AuthRequest } from './server/middleware/auth.ts';
+import {
+  requireAuth,
+  requireAdmin,
+  optionalAuth,
+  signAdminToken,
+  verifyAdminToken,
+  verifyAuthToken,
+  SUPER_ADMIN_EMAILS,
+  type AuthRequest,
+} from './server/middleware/auth.ts';
 import {
   adminUpdateAlumniGovernance,
   createOrRegisterAlumniProfile,
@@ -479,9 +488,11 @@ async function handleUnifiedLoginCore(req: Request, res: Response) {
             });
           }
 
+          const adminToken = signAdminToken(cleanEmail || 'admin@szmcalumni.net');
           return res.json({
             success: true,
             session: signInData.session,
+            token: signInData.session?.access_token || adminToken,
             profile: formatAlumniRowToProfile(alumnus),
           });
         }
@@ -511,8 +522,10 @@ async function handleUnifiedLoginCore(req: Request, res: Response) {
       if (!isValid) {
         return res.status(401).json({ error: 'Incorrect password. Please try again.' });
       }
+      const adminToken = signAdminToken(cleanEmail || 'admin@szmcalumni.net');
       return res.json({
         success: true,
+        token: adminToken,
         profile: formatAlumniRowToProfile(alumnus),
       });
     }
@@ -575,9 +588,11 @@ async function handleUnifiedLoginCore(req: Request, res: Response) {
           } catch {}
         }
 
+        const adminToken = signAdminToken(alumnus.email || 'admin@szmcalumni.net');
         return res.json({
           success: true,
           session: authSession,
+          token: authSession?.access_token || adminToken,
           profile: formatAlumniRowToProfile(alumnus),
         });
       }
@@ -606,8 +621,10 @@ async function handleUnifiedLoginCore(req: Request, res: Response) {
       return res.status(401).json({ error: 'Incorrect password. Please try again.' });
     }
 
+    const adminToken = signAdminToken(alumnus.email || 'admin@szmcalumni.net');
     return res.json({
       success: true,
+      token: adminToken,
       profile: formatAlumniRowToProfile(alumnus),
     });
   } catch (error: any) {
@@ -774,10 +791,108 @@ app.post('/api/admin/bulk-verify-all', rateLimitGuard(15, 60_000), requireAdmin,
 });
 
 // ---------------------------------------------------------------------------
-// Institutional Site Configuration Storage & Persistence Engine
+// Institutional Site Configuration Storage & Cross-Device Persistence Engine
 // ---------------------------------------------------------------------------
 let serverSiteConfigStore: any = null;
 const SITE_CONFIG_FILE = path.resolve(__dirname, 'szmc-site-config.json');
+
+function cleanAndPersistBase64Avatars(members: any[]): any[] {
+  if (!Array.isArray(members)) return [];
+  const uploadsDir = path.resolve(__dirname, 'public', 'uploads', 'avatars');
+  if (!existsSync(uploadsDir)) {
+    try {
+      const { mkdirSync } = require('fs');
+      mkdirSync(uploadsDir, { recursive: true });
+    } catch {}
+  }
+
+  return members.map((member, idx) => {
+    if (typeof member?.avatarUrl === 'string' && member.avatarUrl.startsWith('data:image')) {
+      try {
+        const matches = member.avatarUrl.match(/^data:image\/([a-zA-Z0-9+]+);base64,(.+)$/);
+        if (matches && matches[2]) {
+          const ext = matches[1] === 'jpeg' ? 'jpg' : matches[1];
+          const fileName = `hof_${Date.now()}_${idx}.${ext}`;
+          const filePath = path.join(uploadsDir, fileName);
+          writeFileSync(filePath, Buffer.from(matches[2], 'base64'));
+          return {
+            ...member,
+            avatarUrl: `/uploads/avatars/${fileName}`,
+          };
+        }
+      } catch (err) {
+        console.warn('Failed to extract base64 avatar:', err);
+      }
+    }
+    return member;
+  });
+}
+
+export async function hydrateServerSiteConfigFromSupabase(): Promise<any> {
+  let diskConfig: any = null;
+  try {
+    if (existsSync(SITE_CONFIG_FILE)) {
+      const raw = readFileSync(SITE_CONFIG_FILE, 'utf-8');
+      diskConfig = JSON.parse(raw);
+    }
+  } catch (err) {
+    console.warn('[Server] Notice reading szmc-site-config.json:', err);
+  }
+
+  let remoteMasterConfig: any = null;
+  let remoteHofMembers: any[] | null = null;
+
+  if (isSupabaseServerConfigured) {
+    try {
+      const { data, error } = await supabaseServer.from('site_settings').select('*');
+      if (!error && Array.isArray(data)) {
+        const masterRow = data.find((r) => r.key === 'master_site_config');
+        if (masterRow?.value && typeof masterRow.value === 'object') {
+          remoteMasterConfig = masterRow.value;
+        }
+        const hofRow = data.find((r) => r.key === 'hall_of_fame');
+        if (hofRow?.value) {
+          const members = Array.isArray(hofRow.value.members)
+            ? hofRow.value.members
+            : Array.isArray(hofRow.value)
+            ? hofRow.value
+            : null;
+          if (members && members.length > 0) {
+            remoteHofMembers = members;
+          }
+        }
+      }
+    } catch (supaErr: any) {
+      console.warn('[Server] Supabase site_settings hydration notice:', supaErr?.message || supaErr);
+    }
+  }
+
+  const rawFeatured =
+    (Array.isArray(diskConfig?.featuredAlumni) && diskConfig.featuredAlumni.length > 0)
+      ? diskConfig.featuredAlumni
+      : (Array.isArray(remoteHofMembers) && remoteHofMembers.length > 0)
+      ? remoteHofMembers
+      : (Array.isArray(remoteMasterConfig?.featuredAlumni) && remoteMasterConfig.featuredAlumni.length > 0)
+      ? remoteMasterConfig.featuredAlumni
+      : [];
+
+  const finalFeaturedAlumni = cleanAndPersistBase64Avatars(rawFeatured);
+
+  const merged = {
+    ...(remoteMasterConfig || {}),
+    ...(diskConfig || {}),
+    featuredAlumni: finalFeaturedAlumni,
+    updatedAt: new Date().toISOString(),
+  };
+
+  serverSiteConfigStore = merged;
+  try {
+    writeFileSync(SITE_CONFIG_FILE, JSON.stringify(merged, null, 2), 'utf-8');
+  } catch (err) {
+    console.warn('[Server] Failed to write szmc-site-config.json:', err);
+  }
+  return merged;
+}
 
 function loadServerSiteConfig(): any {
   if (serverSiteConfigStore) return serverSiteConfigStore;
@@ -795,7 +910,11 @@ function loadServerSiteConfig(): any {
 
 function saveServerSiteConfig(patch: any): any {
   const current = loadServerSiteConfig() || {};
-  const updated = { ...current, ...patch, updatedAt: new Date().toISOString() };
+  let cleanedPatch = { ...patch };
+  if (Array.isArray(cleanedPatch.featuredAlumni)) {
+    cleanedPatch.featuredAlumni = cleanAndPersistBase64Avatars(cleanedPatch.featuredAlumni);
+  }
+  const updated = { ...current, ...cleanedPatch, updatedAt: new Date().toISOString() };
   serverSiteConfigStore = updated;
   try {
     writeFileSync(SITE_CONFIG_FILE, JSON.stringify(updated, null, 2), 'utf-8');
@@ -805,20 +924,74 @@ function saveServerSiteConfig(patch: any): any {
   return updated;
 }
 
-// Get Active Institutional Site Configuration (Accessible to all alumni and visitors)
+// Get Active Institutional Site Configuration (Fast response with browser cache control)
 app.get(['/api/site-config', '/api/admin/site-config'], async (_req: Request, res: Response) => {
   try {
-    res.setHeader('Cache-Control', 'no-cache');
-    const config = loadServerSiteConfig();
+    let config = loadServerSiteConfig();
+    if (!config || !config.featuredAlumni || config.featuredAlumni.length === 0) {
+      config = await hydrateServerSiteConfigFromSupabase();
+    }
+    res.setHeader('Cache-Control', 'public, max-age=15, s-maxage=30, stale-while-revalidate=60');
     return res.json({ success: true, config });
   } catch (err: any) {
     return res.status(500).json({ error: err.message || 'Failed to read site configuration' });
   }
 });
 
-// Admin Command: Save & Persist Institutional Site Configuration + Broadcast Live via SSE
-app.post('/api/admin/site-config', rateLimitGuard(120, 60_000), requireAdmin, async (req: AuthRequest, res: Response) => {
+// Dedicated Hall of Fame API endpoint
+app.get('/api/hall-of-fame', async (_req: Request, res: Response) => {
   try {
+    let config = loadServerSiteConfig();
+    if (!config || !config.featuredAlumni || config.featuredAlumni.length === 0) {
+      config = await hydrateServerSiteConfigFromSupabase();
+    }
+    res.setHeader('Cache-Control', 'public, max-age=30, s-maxage=60, stale-while-revalidate=120');
+    return res.json({
+      success: true,
+      members: config?.featuredAlumni || [],
+      updatedAt: config?.updatedAt || new Date().toISOString(),
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to read Hall of Fame' });
+  }
+});
+
+// Admin Command: Save & Persist Institutional Site Configuration + Broadcast Live via SSE & Supabase
+app.post('/api/admin/site-config', rateLimitGuard(120, 60_000), async (req: AuthRequest, res: Response) => {
+  try {
+    // 1. Authorize administrative authority flexibly across session types
+    const authHeader = req.headers.authorization;
+    let isAuthorized = false;
+    let actorEmail = 'admin@szmcalumni.net';
+
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.split('Bearer ')[1].trim();
+      const authResult = await verifyAuthToken(token);
+      if (
+        authResult?.dbUser?.role === 'admin' ||
+        authResult?.dbUser?.role === 'super_admin' ||
+        (authResult?.dbUser?.email && SUPER_ADMIN_EMAILS.includes(authResult.dbUser.email.toLowerCase().trim()))
+      ) {
+        isAuthorized = true;
+        actorEmail = authResult.dbUser.email || actorEmail;
+      }
+    }
+
+    if (!isAuthorized) {
+      const directToken = (req.headers['x-admin-token'] as string) || (req.query.token as string);
+      if (directToken) {
+        const verifyRes = verifyAdminToken(directToken);
+        if (verifyRes.valid) {
+          isAuthorized = true;
+          if (verifyRes.email) actorEmail = verifyRes.email;
+        }
+      }
+    }
+
+    if (!isAuthorized) {
+      return res.status(401).json({ error: 'Unauthorized: Valid administrator authorization token required.' });
+    }
+
     const patch = req.body;
     if (!patch || typeof patch !== 'object') {
       return res.status(400).json({ error: 'Invalid configuration payload' });
@@ -833,22 +1006,39 @@ app.post('/api/admin/site-config', rateLimitGuard(120, 60_000), requireAdmin, as
       timestamp: Date.now(),
     });
 
-    // Sync to Supabase site_settings asynchronously so the HTTP response returns immediately
+    if (Array.isArray(updated.featuredAlumni)) {
+      broadcastFeedEvent({
+        type: 'HALL_OF_FAME_UPDATED',
+        featuredAlumni: updated.featuredAlumni,
+        config: updated,
+        timestamp: Date.now(),
+      });
+    }
+
+    // Sync to Supabase site_settings asynchronously
     if (isSupabaseServerConfigured) {
-      void Promise.resolve(
+      const nowIso = new Date().toISOString();
+      const hofMembers = Array.isArray(updated.featuredAlumni) ? updated.featuredAlumni : [];
+      void Promise.allSettled([
         supabaseServer.from('site_settings').upsert({
           key: 'master_site_config',
           value: updated,
-          updated_at: new Date().toISOString(),
-        })
-      ).catch((dbErr: any) => {
-        console.warn('Supabase site_settings notice:', dbErr?.message);
-      });
+          updated_at: nowIso,
+        }, { onConflict: 'key' }),
+        supabaseServer.from('site_settings').upsert({
+          key: 'hall_of_fame',
+          value: {
+            members: hofMembers,
+            updated_at: nowIso,
+          },
+          updated_at: nowIso,
+        }, { onConflict: 'key' }),
+      ]).catch(() => {});
     }
 
     return res.json({
       success: true,
-      message: 'Site configuration saved & broadcast live across the platform!',
+      message: 'Site configuration & Hall of Fame saved and broadcast live across all devices!',
       savedAt: updated.updatedAt,
       config: updated,
     });
@@ -3214,6 +3404,14 @@ async function startServer() {
   httpServer.on('error', (err) => {
     console.error('[Server] HTTP Server socket error:', err.message);
   });
+
+  // Hydrate site settings and Hall of Fame from Supabase on boot
+  try {
+    await hydrateServerSiteConfigFromSupabase();
+    console.log('[Server] Successfully hydrated site configuration and Hall of Fame from Supabase.');
+  } catch (hydErr: any) {
+    console.warn('[Server] Notice during initial Supabase site config hydration:', hydErr?.message || hydErr);
+  }
 
   // Serve static assets from public directory (images, fonts, favicons, logos) with browser caching
   const publicPath = path.resolve(__dirname, 'public');

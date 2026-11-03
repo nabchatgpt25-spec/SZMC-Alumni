@@ -15,13 +15,20 @@ export interface AuthRequest extends Request {
   };
 }
 
-const SUPER_ADMIN_EMAILS = [
+const envAdminEmails = (process.env.ADMIN_EMAILS || '')
+  .split(',')
+  .map((e) => e.trim().toLowerCase())
+  .filter(Boolean);
+
+export const SUPER_ADMIN_EMAILS = Array.from(new Set([
   'admin@szmcalumni.net',
+  'nabchatgpt25@gmail.com',
   'firstaidnetworkbd@gmail.com',
   'support@szmcalumni.net',
   'nurulanambashir25@gmail.com',
   'nurulanambashir20@gmail.com',
-];
+  ...envAdminEmails,
+]));
 
 import crypto from 'crypto';
 
@@ -66,7 +73,7 @@ export function verifyAdminToken(token: string): { valid: boolean; email?: strin
   }
 }
 
-async function verifyAuthToken(token: string) {
+export async function verifyAuthToken(token: string) {
   if (!token) return null;
 
   // 1. Verify cryptographic HMAC-signed admin session token

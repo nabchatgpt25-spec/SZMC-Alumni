@@ -79,6 +79,7 @@ export type UserRole = 'member' | 'batch_representative' | 'moderator' | 'admin'
 
 export const SUPER_ADMIN_EMAILS = [
   'admin@szmcalumni.net',
+  'nabchatgpt25@gmail.com',
   'firstaidnetworkbd@gmail.com',
   'support@szmcalumni.net',
   'nurulanambashir25@gmail.com',

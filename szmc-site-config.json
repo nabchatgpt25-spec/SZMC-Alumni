@@ -1,4 +1,409 @@
 {
+  "logoUrl": "/szmc-logo.png",
+  "notices": [
+    {
+      "id": "notice-1",
+      "refNo": "SZMC-AA/2026/041",
+      "title": "Call for Registrations: 35th Anniversary Grand Alumni Conclave & CME Session",
+      "pdfUrl": "#",
+      "summary": "Official registration for the 35th Anniversary Grand Alumni Conclave is now open for all verified MBBS alumni batches.",
+      "category": "Reunion",
+      "fileSize": "1.8 MB",
+      "isPinned": true,
+      "isUrgent": true,
+      "fullContent": "The Central Executive Committee of Shaheed Ziaur Rahman Medical College Alumni Association cordially invites all respected graduates of Batches 1 through 35 to the Grand Reunion 2026. Academic symposiums, batch galas, and life-membership drives will be organized.",
+      "isPublished": true,
+      "publishedDate": "2026-10-15",
+      "signatoryName": "Dr. Nurul Anam Bashir",
+      "signatoryDesignation": "Super Administrator & Patron",
+      "signatoryOrganization": "SZMC Alumni Central Committee"
+    },
+    {
+      "id": "notice-2",
+      "refNo": "SZMC-AA/2026/039",
+      "title": "Emergency Blood Network Protocol & 24/7 Coordinator Desk Operational Guidelines",
+      "pdfUrl": "#",
+      "summary": "Updated emergency blood broadcast standards for critical patient cases in Northern Bengal hospitals.",
+      "category": "Emergency",
+      "fileSize": "950 KB",
+      "isPinned": false,
+      "isUrgent": true,
+      "fullContent": "All verified medical alumni registered on the SZMC Blood Network are requested to update their availability status and preferred zone for emergency platelet and rare blood group matching.",
+      "isPublished": true,
+      "publishedDate": "2026-10-01",
+      "signatoryName": "General Secretary",
+      "signatoryDesignation": "Executive Council",
+      "signatoryOrganization": "SZMC Alumni Welfare Trust"
+    }
+  ],
+  "bankName": "Sonali Bank PLC",
   "siteTitle": "SZMC Alumni Portal",
-  "updatedAt": "2026-11-01T05:02:03.763Z"
+  "bankBranch": "Silimpur Medical College Branch, Bogura",
+  "faviconUrl": "/szmc-logo.png",
+  "heroPrefix": "The Eternal Brotherhood of",
+  "heroSuffix": "Alumni Worldwide",
+  "anthemTitle": "SZMC Ceremonial Alma Mater Anthem",
+  "reunionDate": "2026-12-25",
+  "siteTagline": "Shaheed Ziaur Rahman Medical College Alumni Association",
+  "collegeMotto": "Once a SZMCian, Always a SZMCian.",
+  "contactEmail": "contact@szmcalumni.net",
+  "heroSubtitle": "Uniting 35 MBBS batches, world-class specialists, clinical researchers, and healthcare changemakers across the globe.",
+  "mottoSubtext": "Excellence in Medical Service",
+  "reunionTitle": "SZMC Grand Alumni Reunion & Academic Conclave 2026",
+  "reunionVenue": "Shaheed Ziaur Rahman Medical College Auditorium & Campus Greens, Bogura",
+  "rocketNumber": "01711234569",
+  "ticketPrices": {
+    "family": 5000,
+    "general": 3500,
+    "student": 1500,
+    "earlyBird": 2500
+  },
+  "helplinePhone": "+880 176443686",
+  "heroHighlight": "Shaheed Ziaur Rahman Medical College",
+  "reunionStatus": "open",
+  "anthemAudioUrl": "https://cdn.freesound.org/previews/612/612610_5674468-lq.mp3",
+  "anthemAutoPlay": false,
+  "featuredAlumni": [
+    {
+      "id": "fa-1",
+      "name": "Prof. Dr. Mahbubur Rahman",
+      "batch": 1,
+      "order": 1,
+      "category": "Medicine",
+      "avatarUrl": "https://images.unsplash.com/photo-1622253692010-333f2da6031d?w=300&auto=format&fit=crop&q=80",
+      "designation": "octors ",
+      "institution": "National Institute of Cardiovascular Diseases (NICVD)",
+      "achievementSummary": "Pioneered advanced interventional electrophysiology and cardiac .catheterization units in northern Bangladesh."
+    },
+    {
+      "id": "fa-3",
+      "name": "Dr. Tanvir Ahmed",
+      "batch": 21,
+      "order": 3,
+      "category": "Academia",
+      "avatarUrl": "https://images.unsplash.com/photo-1537368910025-700350fe46c7?w=300&auto=format&fit=crop&q=80",
+      "designation": "Associate Professor of Neurosurgery",
+      "institution": "Bangabandhu Sheikh Mujib Medical University (BSMMU)",
+      "achievementSummary": "Published 40+ peer-reviewed neuro-oncology papers and received the National Young Surgeon Excellence Award."
+    }
+  ],
+  "showFaqSection": true,
+  "bankAccountName": "SZMC Alumni Association Welfare Fund",
+  "establishedYear": 1992,
+  "maintenanceMode": false,
+  "showHeroSection": true,
+  "reunionBannerUrl": "/assets/szmc/szmc_day_1.jpg",
+  "bankAccountNumber": "01020304050607",
+  "bankRoutingNumber": "200270123",
+  "batchMetadataList": [
+    {
+      "session": "1992-93",
+      "batchNumber": 1,
+      "specialNote": "MBBS Batch 1 Alumni Group",
+      "admissionYear": 1992,
+      "estimatedClassSize": 50,
+      "representativeName": "Batch 1 Coordinator"
+    },
+    {
+      "session": "1993-94",
+      "batchNumber": 2,
+      "specialNote": "MBBS Batch 2 Alumni Group",
+      "admissionYear": 1993,
+      "estimatedClassSize": 50,
+      "representativeName": "Batch 2 Coordinator"
+    },
+    {
+      "session": "1994-95",
+      "batchNumber": 3,
+      "specialNote": "MBBS Batch 3 Alumni Group",
+      "admissionYear": 1994,
+      "estimatedClassSize": 50,
+      "representativeName": "Batch 3 Coordinator"
+    },
+    {
+      "session": "1995-96",
+      "batchNumber": 4,
+      "specialNote": "MBBS Batch 4 Alumni Group",
+      "admissionYear": 1995,
+      "estimatedClassSize": 50,
+      "representativeName": "Batch 4 Coordinator"
+    },
+    {
+      "session": "1996-97",
+      "batchNumber": 5,
+      "specialNote": "MBBS Batch 5 Alumni Group",
+      "admissionYear": 1996,
+      "estimatedClassSize": 50,
+      "representativeName": "Batch 5 Coordinator"
+    },
+    {
+      "session": "1997-98",
+      "batchNumber": 6,
+      "specialNote": "MBBS Batch 6 Alumni Group",
+      "admissionYear": 1997,
+      "estimatedClassSize": 50,
+      "representativeName": "Batch 6 Coordinator"
+    },
+    {
+      "session": "1998-99",
+      "batchNumber": 7,
+      "specialNote": "MBBS Batch 7 Alumni Group",
+      "admissionYear": 1998,
+      "estimatedClassSize": 50,
+      "representativeName": "Batch 7 Coordinator"
+    },
+    {
+      "session": "1999-00",
+      "batchNumber": 8,
+      "specialNote": "MBBS Batch 8 Alumni Group",
+      "admissionYear": 1999,
+      "estimatedClassSize": 50,
+      "representativeName": "Batch 8 Coordinator"
+    },
+    {
+      "session": "2000-01",
+      "batchNumber": 9,
+      "specialNote": "MBBS Batch 9 Alumni Group",
+      "admissionYear": 2000,
+      "estimatedClassSize": 50,
+      "representativeName": "Batch 9 Coordinator"
+    },
+    {
+      "session": "2001-02",
+      "batchNumber": 10,
+      "specialNote": "MBBS Batch 10 Alumni Group",
+      "admissionYear": 2001,
+      "estimatedClassSize": 50,
+      "representativeName": "Batch 10 Coordinator"
+    },
+    {
+      "session": "2002-03",
+      "batchNumber": 11,
+      "specialNote": "MBBS Batch 11 Alumni Group",
+      "admissionYear": 2002,
+      "estimatedClassSize": 100,
+      "representativeName": "Batch 11 Coordinator"
+    },
+    {
+      "session": "2003-04",
+      "batchNumber": 12,
+      "specialNote": "MBBS Batch 12 Alumni Group",
+      "admissionYear": 2003,
+      "estimatedClassSize": 100,
+      "representativeName": "Batch 12 Coordinator"
+    },
+    {
+      "session": "2004-05",
+      "batchNumber": 13,
+      "specialNote": "MBBS Batch 13 Alumni Group",
+      "admissionYear": 2004,
+      "estimatedClassSize": 100,
+      "representativeName": "Batch 13 Coordinator"
+    },
+    {
+      "session": "2005-06",
+      "batchNumber": 14,
+      "specialNote": "MBBS Batch 14 Alumni Group",
+      "admissionYear": 2005,
+      "estimatedClassSize": 100,
+      "representativeName": "Batch 14 Coordinator"
+    },
+    {
+      "session": "2006-07",
+      "batchNumber": 15,
+      "specialNote": "MBBS Batch 15 Alumni Group",
+      "admissionYear": 2006,
+      "estimatedClassSize": 100,
+      "representativeName": "Batch 15 Coordinator"
+    },
+    {
+      "session": "2007-08",
+      "batchNumber": 16,
+      "specialNote": "MBBS Batch 16 Alumni Group",
+      "admissionYear": 2007,
+      "estimatedClassSize": 100,
+      "representativeName": "Batch 16 Coordinator"
+    },
+    {
+      "session": "2008-09",
+      "batchNumber": 17,
+      "specialNote": "MBBS Batch 17 Alumni Group",
+      "admissionYear": 2008,
+      "estimatedClassSize": 100,
+      "representativeName": "Batch 17 Coordinator"
+    },
+    {
+      "session": "2009-10",
+      "batchNumber": 18,
+      "specialNote": "MBBS Batch 18 Alumni Group",
+      "admissionYear": 2009,
+      "estimatedClassSize": 100,
+      "representativeName": "Batch 18 Coordinator"
+    },
+    {
+      "session": "2010-11",
+      "batchNumber": 19,
+      "specialNote": "MBBS Batch 19 Alumni Group",
+      "admissionYear": 2010,
+      "estimatedClassSize": 100,
+      "representativeName": "Batch 19 Coordinator"
+    },
+    {
+      "session": "2011-12",
+      "batchNumber": 20,
+      "specialNote": "MBBS Batch 20 Alumni Group",
+      "admissionYear": 2011,
+      "estimatedClassSize": 100,
+      "representativeName": "Batch 20 Coordinator"
+    },
+    {
+      "session": "2012-13",
+      "batchNumber": 21,
+      "specialNote": "MBBS Batch 21 Alumni Group",
+      "admissionYear": 2012,
+      "estimatedClassSize": 180,
+      "representativeName": "Batch 21 Coordinator"
+    },
+    {
+      "session": "2013-14",
+      "batchNumber": 22,
+      "specialNote": "MBBS Batch 22 Alumni Group",
+      "admissionYear": 2013,
+      "estimatedClassSize": 180,
+      "representativeName": "Batch 22 Coordinator"
+    },
+    {
+      "session": "2014-15",
+      "batchNumber": 23,
+      "specialNote": "MBBS Batch 23 Alumni Group",
+      "admissionYear": 2014,
+      "estimatedClassSize": 180,
+      "representativeName": "Batch 23 Coordinator"
+    },
+    {
+      "session": "2015-16",
+      "batchNumber": 24,
+      "specialNote": "MBBS Batch 24 Alumni Group",
+      "admissionYear": 2015,
+      "estimatedClassSize": 180,
+      "representativeName": "Batch 24 Coordinator"
+    },
+    {
+      "session": "2016-17",
+      "batchNumber": 25,
+      "specialNote": "MBBS Batch 25 Alumni Group",
+      "admissionYear": 2016,
+      "estimatedClassSize": 180,
+      "representativeName": "Batch 25 Coordinator"
+    },
+    {
+      "session": "2017-18",
+      "batchNumber": 26,
+      "specialNote": "MBBS Batch 26 Alumni Group",
+      "admissionYear": 2017,
+      "estimatedClassSize": 180,
+      "representativeName": "Batch 26 Coordinator"
+    },
+    {
+      "session": "2018-19",
+      "batchNumber": 27,
+      "specialNote": "MBBS Batch 27 Alumni Group",
+      "admissionYear": 2018,
+      "estimatedClassSize": 180,
+      "representativeName": "Batch 27 Coordinator"
+    },
+    {
+      "session": "2019-20",
+      "batchNumber": 28,
+      "specialNote": "MBBS Batch 28 Alumni Group",
+      "admissionYear": 2019,
+      "estimatedClassSize": 180,
+      "representativeName": "Batch 28 Coordinator"
+    },
+    {
+      "session": "2020-21",
+      "batchNumber": 29,
+      "specialNote": "MBBS Batch 29 Alumni Group",
+      "admissionYear": 2020,
+      "estimatedClassSize": 180,
+      "representativeName": "Batch 29 Coordinator"
+    },
+    {
+      "session": "2021-22",
+      "batchNumber": 30,
+      "specialNote": "MBBS Batch 30 Alumni Group",
+      "admissionYear": 2021,
+      "estimatedClassSize": 180,
+      "representativeName": "Batch 30 Coordinator"
+    },
+    {
+      "session": "2022-23",
+      "batchNumber": 31,
+      "specialNote": "MBBS Batch 31 Alumni Group",
+      "admissionYear": 2022,
+      "estimatedClassSize": 180,
+      "representativeName": "Batch 31 Coordinator"
+    },
+    {
+      "session": "2023-24",
+      "batchNumber": 32,
+      "specialNote": "MBBS Batch 32 Alumni Group",
+      "admissionYear": 2023,
+      "estimatedClassSize": 180,
+      "representativeName": "Batch 32 Coordinator"
+    },
+    {
+      "session": "2024-25",
+      "batchNumber": 33,
+      "specialNote": "MBBS Batch 33 Alumni Group",
+      "admissionYear": 2024,
+      "estimatedClassSize": 180,
+      "representativeName": "Batch 33 Coordinator"
+    },
+    {
+      "session": "2025-26",
+      "batchNumber": 34,
+      "specialNote": "Pacesetter Batch 34 • Portal Architecture",
+      "admissionYear": 2025,
+      "estimatedClassSize": 180,
+      "representativeName": "Dr. Nurul Anam Bashir"
+    },
+    {
+      "session": "2026-27",
+      "batchNumber": 35,
+      "specialNote": "MBBS Batch 35 Alumni Group",
+      "admissionYear": 2026,
+      "estimatedClassSize": 180,
+      "representativeName": "Batch 35 Coordinator"
+    }
+  ],
+  "liveTickerEnabled": true,
+  "liveTickerMessage": "🚨 Emergency O-Negative Blood needed urgently at SZMCH ICU. Contact Blood Desk or response team immediately!",
+  "liveTickerUrgency": "emergency",
+  "heroCtaPrimaryText": "Alumni Login",
+  "heroOverlayOpacity": 65,
+  "maintenanceMessage": "The portal is currently undergoing scheduled institutional maintenance. Please check back shortly.",
+  "secretariatAddress": "SZMC Campus, Silimpur, Bogura-5800, Bangladesh",
+  "showBatchesSection": true,
+  "showGallerySection": true,
+  "bKashMerchantNumber": "01711234567",
+  "heroBannerBadgeText": "35 MBBS Batches • Silimpur, Bogura • Estd. 1992",
+  "liveTickerActionUrl": "#blood",
+  "nagadMerchantNumber": "01711234568",
+  "guestBrowsingAllowed": true,
+  "heroCtaSecondaryText": "Join the SZMC Alumni Family",
+  "liveTickerActionText": "Respond Now",
+  "autoVerificationUntil": "2026-11-09T08:38:25.235Z",
+  "heroBackgroundTexture": "Campus Photo",
+  "autoVerificationPaused": false,
+  "heroBackgroundImageUrl": "/assets/szmc/szmc_day_1.jpg",
+  "publicRegistrationOpen": true,
+  "reunionRegistrationUrl": "#events",
+  "showBloodNeededSection": true,
+  "autoVerificationEnabled": true,
+  "homepageCustomBackground": "",
+  "globalVerificationEnabled": true,
+  "phoneVerificationRequired": true,
+  "showFeaturedAlumniSection": true,
+  "updatedAt": "2026-11-03T02:28:38.534Z"
 }
