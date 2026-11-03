@@ -150,6 +150,19 @@ function resolveActor(req: AuthRequest) {
 // API ROUTES
 // ---------------------------------------------------------------------------
 
+// Direct download route for the compiled production distribution package
+app.get(['/api/download-dist', '/download-dist', '/download/dist.zip', '/szmc-alumni-dist.zip'], (_req: Request, res: Response) => {
+  const publicZip = path.resolve(__dirname, 'public', 'szmc-alumni-dist.zip');
+  if (existsSync(publicZip)) {
+    return res.download(publicZip, 'szmc-alumni-dist.zip');
+  }
+  const distZip = path.resolve(__dirname, 'dist', 'szmc-alumni-dist.zip');
+  if (existsSync(distZip)) {
+    return res.download(distZip, 'szmc-alumni-dist.zip');
+  }
+  return res.status(404).json({ error: 'Distribution bundle not found' });
+});
+
 // Sync Firebase Auth User with Cloud SQL
 app.post('/api/auth/sync', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
