@@ -11,7 +11,7 @@ import {
   HelpCircle,
   AlertCircle
 } from 'lucide-react';
-import { NDCLogo } from '../NDCLogo';
+import { SZMCLogo } from '../SZMCLogo';
 
 interface VerificationExplainerModalProps {
   isOpen: boolean;
@@ -33,7 +33,7 @@ export const VerificationExplainerModal: React.FC<VerificationExplainerModalProp
         <div className="p-6 bg-gradient-to-r from-blue-900 via-indigo-900 to-slate-900 text-white flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-white p-1 text-slate-900 flex items-center justify-center shrink-0">
-              <NDCLogo className="w-full h-full" />
+              <SZMCLogo className="w-full h-full" />
             </div>
             <div>
               <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-blue-500/30 text-blue-200 text-[10px] font-bold uppercase tracking-wider mb-0.5">

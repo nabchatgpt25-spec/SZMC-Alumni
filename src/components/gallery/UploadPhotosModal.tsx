@@ -76,7 +76,7 @@ export const UploadPhotosModal: React.FC<UploadPhotosModalProps> = ({
             id: saved.id,
             url: saved.url,
             caption: file.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' '),
-            tags: isVideo ? 'Video, Memories, NDC' : 'Alumni, Campus, Photo',
+            tags: isVideo ? 'Video, Memories, SZMC' : 'Alumni, Campus, Photo',
             isVideo,
             formattedSize: saved.formattedSize,
           },

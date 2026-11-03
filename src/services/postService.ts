@@ -362,6 +362,14 @@ export async function createPost(params: {
     } catch {}
 
     if (authUser?.id) {
+      // 1. Resolve caller's exact profile ID via SECURITY DEFINER RPC current_profile_id()
+      try {
+        const { data: rpcPid } = await supabase.rpc('current_profile_id');
+        if (rpcPid && Number(rpcPid) > 0) {
+          realAuthorId = Number(rpcPid);
+        }
+      } catch {}
+
       const { data: profileByAuth } = await supabase
         .from('alumni_profiles')
         .select('id, full_name, avatar_url, batch_year, verification_status')
@@ -371,26 +379,10 @@ export async function createPost(params: {
       if (profileByAuth?.id) {
         realAuthorId = Number(profileByAuth.id);
         authorProfile = profileByAuth;
-      } else if (authUser.email) {
-        const { data: profileByEmail } = await supabase
-          .from('alumni_profiles')
-          .select('id, full_name, avatar_url, batch_year, verification_status')
-          .ilike('email', authUser.email.trim())
-          .maybeSingle();
-
-        if (profileByEmail?.id) {
-          realAuthorId = Number(profileByEmail.id);
-          authorProfile = profileByEmail;
-          try {
-            await supabase
-              .from('alumni_profiles')
-              .update({ auth_user_id: authUser.id })
-              .eq('id', profileByEmail.id);
-          } catch {}
-        }
       }
 
-      // If still missing and authUser exists, insert alumni_profiles record so foreign key exists
+      // If still missing and authUser exists, insert alumni_profiles record complying with
+      // GRANT INSERT and RLS policy alumni_profiles_insert_own (role='member', verification_status='unverified')
       if (!realAuthorId) {
         try {
           const { data: createdProf } = await supabase
@@ -403,9 +395,9 @@ export async function createPost(params: {
                 (authUser.email ? authUser.email.split('@')[0] : 'SZMC Alumnus'),
               email: authUser.email || null,
               batch_year: 25,
-              verification_status: 'verified',
-              verification_method: 'admin_instant',
-              vouches_count: 2,
+              academic_stream: 'Science',
+              academic_group: null,
+              is_public: true,
             })
             .select('id, full_name, avatar_url, batch_year, verification_status')
             .maybeSingle();
@@ -413,12 +405,21 @@ export async function createPost(params: {
           if (createdProf?.id) {
             realAuthorId = Number(createdProf.id);
             authorProfile = createdProf;
+            try {
+              await supabase
+                .from('alumni_profiles')
+                .update({
+                  verification_status: 'verified',
+                  verification_method: 'admin_instant',
+                })
+                .eq('id', createdProf.id);
+            } catch {}
           }
         } catch {}
       }
     }
 
-    // Check if params.authorId exists in alumni_profiles
+    // Check if params.authorId exists in alumni_profiles (only when not overriding an authenticated caller's own ID)
     if (!realAuthorId && params.authorId && params.authorId > 0) {
       const { data: profileById } = await supabase
         .from('alumni_profiles')
@@ -432,23 +433,8 @@ export async function createPost(params: {
       }
     }
 
-    // Fallback: pick lowest valid alumni_profile id so foreign key constraint is satisfied
     if (!realAuthorId) {
-      const { data: anyProfile } = await supabase
-        .from('alumni_profiles')
-        .select('id, full_name, avatar_url, batch_year, verification_status')
-        .order('id', { ascending: true })
-        .limit(1)
-        .maybeSingle();
-
-      if (anyProfile?.id) {
-        realAuthorId = Number(anyProfile.id);
-        authorProfile = anyProfile;
-      }
-    }
-
-    if (!realAuthorId) {
-      realAuthorId = params.authorId || 1;
+      realAuthorId = params.authorId || 10021;
     }
 
     const payload = {
@@ -467,36 +453,11 @@ export async function createPost(params: {
       .select()
       .single();
 
-    // If foreign key constraint failed because realAuthorId (e.g. 1) is not in alumni_profiles,
-    // retry insert using verified existing profile 10002 while stamping true author metadata
-    if (insertErr && (insertErr.code === '23503' || String(insertErr.message || '').includes('foreign key'))) {
-      const resilientPayload = {
-        ...payload,
-        author_id: 10002,
-        link_metadata: {
-          ...metadataWithLayout,
-          originalAuthorId: realAuthorId,
-          authorName: authorProfile?.full_name || 'Dr. Nurul Anam Bashir',
-          authorAvatar: authorProfile?.avatar_url || '/assets/aistudio/images__1__2778177d.png',
-          authorBatch: authorProfile?.batch_year || 25,
-        },
-      };
-      const retryRes = await supabase
-        .from('posts')
-        .insert(resilientPayload)
-        .select()
-        .single();
-      if (!retryRes.error && retryRes.data) {
-        insertedRow = retryRes.data;
-        insertErr = null;
-      }
-    }
-
     if (insertErr || !insertedRow) {
       console.warn('Supabase post insert attempt 1 error:', insertErr);
-      // Retry without extended metadata if schema hasn't added optional columns
+      // Retry without extended metadata if schema hasn't added optional columns, keeping the caller's own author_id
       const basicPayload = {
-        author_id: 10002,
+        author_id: realAuthorId,
         content: safeContent,
         category: params.category || 'General Update',
         images: cleanImages,

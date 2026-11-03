@@ -1,10 +1,10 @@
 import { AlumniProfile, PostItem } from '../types';
 import { loadStoredAlumniProfiles } from '../data/mockData';
 
-export const CACHED_DIRECTORY_KEY = 'ndc_cached_directory';
-export const CACHED_DIRECTORY_TIMESTAMP_KEY = 'ndc_cached_directory_timestamp';
-export const SAVED_POSTS_KEY = 'ndc_cached_saved_posts';
-export const SAVED_POST_IDS_KEY = 'ndc_saved_post_ids';
+export const CACHED_DIRECTORY_KEY = 'szmc_cached_directory';
+export const CACHED_DIRECTORY_TIMESTAMP_KEY = 'szmc_cached_directory_timestamp';
+export const SAVED_POSTS_KEY = 'szmc_cached_saved_posts';
+export const SAVED_POST_IDS_KEY = 'szmc_saved_post_ids';
 
 /**
  * Initial offline fallback directory dataset.

@@ -58,7 +58,7 @@ export interface UnfurledLinkData {
   publisher?: string;
 }
 
-const UNFURL_CACHE_PREFIX = 'ndc_unfurl_v3_';
+const UNFURL_CACHE_PREFIX = 'szmc_unfurl_v3_';
 
 /**
  * Normalizes a raw URL string so links like "www.facebook.com/..." or "facebook.com/..."

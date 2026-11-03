@@ -1,6 +1,6 @@
 /**
  * Phone Number Normalization and Validation Utilities
- * Project: NDC Alumni Network
+ * Project: SZMC Alumni Network (Shaheed Ziaur Rahman Medical College, Bogura, Estd. 1992)
  *
  * Normalizes Bangladeshi and international phone numbers to canonical E.164 (+8801XXXXXXXXX).
  * Mobile numbers serve as an alternative login identifier, NOT a verified identity.

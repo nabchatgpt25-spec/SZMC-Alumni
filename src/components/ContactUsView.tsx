@@ -13,7 +13,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { WhatsAppIcon, FacebookIcon } from './SocialIcons';
-import { NDCLogo } from './NDCLogo';
+import { SZMCLogo } from './SZMCLogo';
 
 export const ContactUsView: React.FC = () => {
   const [formData, setFormData] = useState({
@@ -49,7 +49,7 @@ export const ContactUsView: React.FC = () => {
           </p>
         </div>
         <div className="w-16 h-16 rounded-2xl bg-white dark:bg-slate-800 p-1.5 border border-slate-200 dark:border-slate-700 shadow-sm shrink-0 flex items-center justify-center">
-          <NDCLogo className="w-full h-full" />
+          <SZMCLogo className="w-full h-full" />
         </div>
       </div>
 

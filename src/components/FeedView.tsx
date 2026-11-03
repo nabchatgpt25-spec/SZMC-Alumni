@@ -1548,36 +1548,27 @@ export const FeedView: React.FC<FeedViewProps> = ({
           type="file"
           multiple
           accept="video/*,video/mp4,video/webm,video/quicktime,video/x-matroska"
-          onChange={(e) => {
+          onChange={async (e) => {
             if (e.target.files && e.target.files.length > 0) {
               const files = Array.from(e.target.files);
-              const loadedUrls: string[] = [];
-              files.forEach((f) => {
-                if (f.size <= 25 * 1024 * 1024) {
-                  const reader = new FileReader();
-                  reader.onload = (ev) => {
-                    if (ev.target?.result) {
-                      loadedUrls.push(ev.target.result as string);
-                      if (loadedUrls.length >= files.length) {
-                        setComposerInitialVideos(loadedUrls);
-                        setComposerInitialTab('video');
-                        setIsCreateModalOpen(true);
-                      }
-                    }
-                  };
-                  reader.readAsDataURL(f);
-                } else {
-                  const objUrl = URL.createObjectURL(f);
-                  loadedUrls.push(objUrl);
-                  if (loadedUrls.length >= files.length) {
-                    setComposerInitialVideos(loadedUrls);
-                    setComposerInitialTab('video');
-                    setIsCreateModalOpen(true);
+              e.target.value = '';
+              setComposerInitialTab('video');
+              setIsCreateModalOpen(true);
+              const uploadedUrls: string[] = [];
+              for (const f of files) {
+                try {
+                  const res = await uploadVideoToStorage(f, String(currentUser.id || currentUser.userId || 'alumni'));
+                  if (res.videoUrl) {
+                    uploadedUrls.push(res.videoUrl);
                   }
+                } catch {
+                  // Ignore failed individual file
                 }
-              });
+              }
+              if (uploadedUrls.length > 0) {
+                setComposerInitialVideos(uploadedUrls);
+              }
             }
-            e.target.value = '';
           }}
           className="hidden"
         />

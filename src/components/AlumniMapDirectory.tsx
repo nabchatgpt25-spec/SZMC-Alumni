@@ -814,7 +814,7 @@ export const AlumniMapDirectory: React.FC<AlumniMapDirectoryProps> = ({ onViewPr
     const marker = L.marker([lat, lng], { icon: customIcon });
 
     const popupDiv = document.createElement('div');
-    popupDiv.className = 'ndc-map-popup p-1 min-w-[250px] max-w-[290px] font-sans text-slate-900';
+    popupDiv.className = 'szmc-map-popup p-1 min-w-[250px] max-w-[290px] font-sans text-slate-900';
     popupDiv.innerHTML = `
       <div class="flex items-start gap-3 pb-3 border-b border-slate-200">
         <img src="${safeAvatar}" alt="${safeName}" class="w-12 h-12 rounded-full object-cover shrink-0 ring-2" style="border-color: ${dept.ringColor}" />
@@ -849,7 +849,7 @@ export const AlumniMapDirectory: React.FC<AlumniMapDirectoryProps> = ({ onViewPr
     `;
 
     marker.bindPopup(popupDiv, {
-      className: 'ndc-leaflet-popup',
+      className: 'szmc-leaflet-popup',
       maxWidth: typeof window !== 'undefined' ? Math.min(280, Math.max(220, window.innerWidth - 36)) : 280,
     });
 

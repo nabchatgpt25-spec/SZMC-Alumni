@@ -368,14 +368,14 @@ export function getSiteConfig(): SiteConfig {
         if (
           !parsed.logoUrl ||
           parsed.logoUrl.includes('images__1__2778177d.png') ||
-          parsed.logoUrl.includes('ndc-logo')
+          parsed.logoUrl.includes('legacy-logo')
         ) {
           parsed.logoUrl = '/szmc-logo.png';
         }
         if (
           !parsed.faviconUrl ||
           parsed.faviconUrl.includes('images__1__2778177d.png') ||
-          parsed.faviconUrl.includes('ndc-logo')
+          parsed.faviconUrl.includes('legacy-logo')
         ) {
           parsed.faviconUrl = '/szmc-logo.png';
         }

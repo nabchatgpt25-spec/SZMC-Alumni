@@ -24,7 +24,7 @@ export interface FacebookOEmbedData {
   isShortsOrReel?: boolean;
 }
 
-const FB_OEMBED_CACHE_PREFIX = 'ndc_fb_oembed_v3_';
+const FB_OEMBED_CACHE_PREFIX = 'szmc_fb_oembed_v3_';
 
 export function decodeHtmlEntities(str?: string): string {
   if (!str) return '';

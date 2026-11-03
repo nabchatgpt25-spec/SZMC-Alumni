@@ -31,7 +31,7 @@ import {
   normalizeToBatchNumber
 } from '../../utils/verificationService';
 import { saveMediaFile, isVideoUrl, formatFileSize } from '../../utils/mediaStorage';
-import { NDCLogo } from '../NDCLogo';
+import { SZMCLogo } from '../SZMCLogo';
 import { WhatsAppIcon } from '../SocialIcons';
 import { fetchVerificationRequestsFromDb } from '../../services/supabaseService';
 
@@ -105,8 +105,8 @@ export const VerificationCenterModal: React.FC<VerificationCenterModalProps> = (
     const handleUpdate = () => {
       setVouchRequests(loadVouchRequests());
     };
-    window.addEventListener('ndc_vouch_requests_updated', handleUpdate);
-    return () => window.removeEventListener('ndc_vouch_requests_updated', handleUpdate);
+    window.addEventListener('szmc_vouch_requests_updated', handleUpdate);
+    return () => window.removeEventListener('szmc_vouch_requests_updated', handleUpdate);
   }, []);
 
   if (!isOpen) return null;
@@ -197,7 +197,7 @@ export const VerificationCenterModal: React.FC<VerificationCenterModalProps> = (
         <div className="p-5 sm:p-6 bg-gradient-to-r from-blue-900 via-indigo-900 to-slate-900 text-white flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3">
             <div className="w-11 h-11 rounded-2xl bg-white p-1 text-slate-900 flex items-center justify-center shrink-0 shadow-md">
-              <NDCLogo className="w-full h-full" />
+              <SZMCLogo className="w-full h-full" />
             </div>
             <div>
               <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-blue-500/30 text-blue-200 text-[10px] font-black uppercase tracking-wider mb-0.5">
@@ -339,7 +339,7 @@ export const VerificationCenterModal: React.FC<VerificationCenterModalProps> = (
                         )}
                       </div>
                       <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 font-medium">
-                        Roll: <span className="font-mono font-bold text-slate-900 dark:text-slate-200">{currentUser.collegeRoll || '118042'}</span> · NDC Batch <span className="font-bold text-blue-600 dark:text-blue-400">{currentUser.batchYear}</span> ({currentUser.group || 'Science'})
+                        Roll: <span className="font-mono font-bold text-slate-900 dark:text-slate-200">{currentUser.collegeRoll || 'SZMC-25-042'}</span> · SZMC Batch <span className="font-bold text-blue-600 dark:text-blue-400">{currentUser.batchYear}</span> ({currentUser.group || 'MBBS'})
                       </p>
                     </div>
                   </div>

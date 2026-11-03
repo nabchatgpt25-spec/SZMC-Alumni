@@ -15,7 +15,7 @@ export interface StoredMediaInfo {
   createdAt: number;
 }
 
-const DB_NAME = 'NDC_ALUMNI_MEDIA_DB';
+const DB_NAME = 'SZMC_ALUMNI_MEDIA_DB';
 const DB_VERSION = 1;
 const STORE_NAME = 'media_blobs';
 

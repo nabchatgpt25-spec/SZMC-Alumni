@@ -1,6 +1,6 @@
 import React from 'react';
 import { Quote, Award, ShieldCheck, HeartHandshake } from 'lucide-react';
-import { NDCLogo } from '../NDCLogo';
+import { SZMCLogo } from '../SZMCLogo';
 
 export const LeadershipMessageSection: React.FC = () => {
   return (
@@ -37,7 +37,7 @@ export const LeadershipMessageSection: React.FC = () => {
                     className="w-full h-full object-cover"
                   />
                   <div className="absolute bottom-1 right-1 w-6 h-6 rounded-full bg-blue-700 p-0.5 border border-white dark:border-slate-900 flex items-center justify-center">
-                    <NDCLogo className="w-full h-full" />
+                    <SZMCLogo className="w-full h-full" />
                   </div>
                 </div>
 
@@ -90,7 +90,7 @@ export const LeadershipMessageSection: React.FC = () => {
                     className="w-full h-full object-cover"
                   />
                   <div className="absolute bottom-1 right-1 w-6 h-6 rounded-full bg-amber-500 p-0.5 border border-white dark:border-slate-900 flex items-center justify-center">
-                    <NDCLogo className="w-full h-full" />
+                    <SZMCLogo className="w-full h-full" />
                   </div>
                 </div>
 

@@ -79,7 +79,7 @@ export const NotificationDropdown: React.FC<NotificationDropdownProps> = ({
 
   useEffect(() => {
     syncNotifications();
-    window.addEventListener('ndc_notifications_updated', syncNotifications);
+    window.addEventListener('szmc_notifications_updated', syncNotifications);
     window.addEventListener('storage', syncNotifications);
 
     // Live Realtime push subscription for my rows only (recipient_id = currentUserId)
@@ -98,7 +98,7 @@ export const NotificationDropdown: React.FC<NotificationDropdownProps> = ({
     );
 
     return () => {
-      window.removeEventListener('ndc_notifications_updated', syncNotifications);
+      window.removeEventListener('szmc_notifications_updated', syncNotifications);
       window.removeEventListener('storage', syncNotifications);
       unsubscribeRealtime();
     };

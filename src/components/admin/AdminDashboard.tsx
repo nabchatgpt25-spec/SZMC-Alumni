@@ -37,6 +37,8 @@ import {
 import { supabase, supabaseAdmin, ALUMNI_PUBLIC_COLUMNS } from '../../lib/supabase';
 import { useAuth } from '../../context/AuthContext';
 import { UserRole, VerificationStatus } from '../../types';
+import { loadSupabaseGovernanceState, saveSupabaseGovernanceState } from '../../services/adminService';
+import { loadStoredAlumniProfiles } from '../../data/mockData';
 
 export type ExtendedVerificationStatus =
   | VerificationStatus
@@ -156,73 +158,112 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // 1. Load All Registered Users using Supabase Admin Client
   const loadUsers = useCallback(async () => {
     try {
+      const govState = await loadSupabaseGovernanceState(true);
+
       // Query Supabase alumni_profiles directly using supabaseAdmin
       const { data, error } = await supabaseAdmin
         .from('alumni_profiles')
         .select(ALUMNI_PUBLIC_COLUMNS)
         .order('id', { ascending: false });
 
-      if (error) {
-        console.warn('supabaseAdmin query error for alumni_profiles, using API fallback:', error);
-        // Fallback to server admin endpoint
-        const headers = await getAuthHeaders();
-        const res = await fetch('/api/admin/alumni-profiles?limit=500', { headers });
-        if (res.ok) {
-          const apiData = await res.json();
-          const mappedUsers: RegisteredUser[] = (apiData.profiles || []).map((p: any) => ({
+      if (!error && data && data.length > 0) {
+        const mappedUsers: RegisteredUser[] = data.map((p: any) => {
+          const ov = govState.profileOverrides[Number(p.id)];
+          return {
             id: p.id,
-            auth_user_id: p.auth_user_id || `auth-${p.id}`,
-            role: p.role || 'alumni',
-            full_name: p.full_name || p.fullName || 'Alumnus',
-            avatar_url: p.avatar_url || p.avatarUrl || '/assets/aistudio/images__1__2778177d.png',
-            batch_year: Number(p.batch_year || p.batchYear || 25),
+            auth_user_id: p.auth_user_id,
+            role: (ov?.role as any) || p.role || 'alumni',
+            full_name: ov?.fullName || p.full_name || 'Alumnus',
+            avatar_url: p.avatar_url || '/assets/aistudio/images__1__2778177d.png',
+            batch_year: ov?.batchYear ?? Number(p.batch_year || 25),
             session: p.session || null,
-            academic_stream: p.academic_stream || p.academicStream || 'Medical (MBBS)',
-            academic_group: p.academic_group || p.academicGroup || null,
-            section: p.section || null,
-            verification_status: p.verification_status || p.verificationStatus || 'unverified',
-            verification_method: p.verification_method || null,
-            profession: p.profession || null,
-            position: p.position || null,
-            institution: p.institution || null,
-            city: p.city || null,
-            country: p.country || null,
-            blood_group: p.blood_group || p.bloodGroup || null,
-            phone_ownership_verified: Boolean(p.phone_ownership_verified),
+            academic_stream: ov?.academicStream || p.academic_stream || 'Medical (MBBS)',
+            academic_group: ov?.academicGroup || p.academic_group || null,
+            section: ov?.section || p.section || null,
+            verification_status: ov?.verificationStatus || p.verification_status || 'unverified',
+            verification_method: ov?.verificationMethod || p.verification_method || null,
+            profession: ov?.profession || p.profession || null,
+            position: ov?.position || p.position || null,
+            institution: ov?.institution || p.institution || null,
+            city: ov?.city || p.city || null,
+            country: ov?.country || p.country || null,
+            blood_group: p.blood_group || null,
+            phone_ownership_verified:
+              ov?.phoneOwnershipVerified ?? Boolean(p.phone_ownership_verified),
             posts_count: Number(p.posts_count || 0),
             created_at: p.created_at || new Date().toISOString(),
-          }));
+          };
+        });
+        setUsers(mappedUsers);
+        return;
+      }
+
+      // Fallback to server admin endpoint or stored alumni profiles merged with Supabase governance state
+      const headers = await getAuthHeaders();
+      const res = await fetch('/api/admin/alumni-profiles?limit=500', { headers }).catch(() => null);
+      if (res && res.ok) {
+        const apiData = await res.json();
+        if (Array.isArray(apiData.profiles) && apiData.profiles.length > 0) {
+          const mappedUsers: RegisteredUser[] = apiData.profiles.map((p: any) => {
+            const ov = govState.profileOverrides[Number(p.id)];
+            return {
+              id: p.id,
+              auth_user_id: p.auth_user_id || `auth-${p.id}`,
+              role: (ov?.role as any) || p.role || 'alumni',
+              full_name: ov?.fullName || p.full_name || p.fullName || 'Alumnus',
+              avatar_url: p.avatar_url || p.avatarUrl || '/assets/aistudio/images__1__2778177d.png',
+              batch_year: ov?.batchYear ?? Number(p.batch_year || p.batchYear || 25),
+              session: p.session || null,
+              academic_stream: ov?.academicStream || p.academic_stream || p.academicStream || 'Medical (MBBS)',
+              academic_group: ov?.academicGroup || p.academic_group || p.academicGroup || null,
+              section: ov?.section || p.section || null,
+              verification_status: ov?.verificationStatus || p.verification_status || p.verificationStatus || 'unverified',
+              verification_method: ov?.verificationMethod || p.verification_method || null,
+              profession: ov?.profession || p.profession || null,
+              position: ov?.position || p.position || null,
+              institution: ov?.institution || p.institution || null,
+              city: ov?.city || p.city || null,
+              country: ov?.country || p.country || null,
+              blood_group: p.blood_group || p.bloodGroup || null,
+              phone_ownership_verified:
+                ov?.phoneOwnershipVerified ?? Boolean(p.phone_ownership_verified),
+              posts_count: Number(p.posts_count || 0),
+              created_at: p.created_at || new Date().toISOString(),
+            };
+          });
           setUsers(mappedUsers);
           return;
         }
       }
 
-      if (data && data.length > 0) {
-        const mappedUsers: RegisteredUser[] = data.map((p: any) => ({
+      const fallbackProfiles = loadStoredAlumniProfiles().map((p) => {
+        const ov = govState.profileOverrides[p.id];
+        return {
           id: p.id,
-          auth_user_id: p.auth_user_id,
-          role: p.role || 'alumni',
-          full_name: p.full_name || 'Alumnus',
-          avatar_url: p.avatar_url || '/assets/aistudio/images__1__2778177d.png',
-          batch_year: Number(p.batch_year || 25),
+          auth_user_id: p.authUserId || `auth-${p.id}`,
+          role: ((ov?.role as any) || p.role || 'alumni') as UserRole,
+          full_name: ov?.fullName || p.fullName,
+          avatar_url: p.avatarUrl || '/assets/aistudio/images__1__2778177d.png',
+          batch_year: ov?.batchYear ?? p.batchYear,
           session: p.session || null,
-          academic_stream: p.academic_stream || 'Medical (MBBS)',
-          academic_group: p.academic_group || null,
-          section: p.section || null,
-          verification_status: p.verification_status || 'unverified',
-          verification_method: p.verification_method || null,
-          profession: p.profession || null,
-          position: p.position || null,
-          institution: p.institution || null,
-          city: p.city || null,
-          country: p.country || null,
-          blood_group: p.blood_group || null,
-          phone_ownership_verified: Boolean(p.phone_ownership_verified),
-          posts_count: Number(p.posts_count || 0),
-          created_at: p.created_at || new Date().toISOString(),
-        }));
-        setUsers(mappedUsers);
-      }
+          academic_stream: ov?.academicStream || p.academicStream || 'Medical (MBBS)',
+          academic_group: ov?.academicGroup || p.academicGroup || null,
+          section: ov?.section || p.section || null,
+          verification_status: ov?.verificationStatus || p.verificationStatus || 'unverified',
+          verification_method: ov?.verificationMethod || p.verificationMethod || null,
+          profession: ov?.profession || p.profession || null,
+          position: ov?.position || p.position || null,
+          institution: ov?.institution || p.institution || null,
+          city: ov?.city || p.city || null,
+          country: ov?.country || p.country || null,
+          blood_group: p.bloodGroup || null,
+          phone_ownership_verified:
+            ov?.phoneOwnershipVerified ?? Boolean(p.phoneOwnershipVerified),
+          posts_count: 0,
+          created_at: new Date().toISOString(),
+        };
+      });
+      setUsers(fallbackProfiles);
     } catch (err) {
       console.error('Failed to load registered users:', err);
     }
@@ -231,49 +272,55 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // 2. Load Verification Submissions
   const loadVerifications = useCallback(async () => {
     try {
+      const govState = await loadSupabaseGovernanceState();
       const { data, error } = await supabaseAdmin
         .from('admin_doc_submissions')
         .select('*')
         .order('submitted_at', { ascending: false });
 
       if (error || !data || data.length === 0) {
-        // Fallback to local storage or API verification requests
         const headers = await getAuthHeaders();
-        const res = await fetch('/api/admin/verification-queue', { headers });
-        if (res.ok) {
+        const res = await fetch('/api/admin/verification-queue', { headers }).catch(() => null);
+        if (res && res.ok) {
           const apiData = await res.json();
-          const items: VerificationRequestItem[] = (apiData.submissions || []).map((s: any) => ({
-            id: String(s.id),
-            user_id: s.user_id || s.userId,
-            user_name: s.user_name || s.fullName || `Doctor #${s.user_id || s.userId}`,
-            batch_year: Number(s.batch_year || s.batchYear || 25),
-            college_roll: s.college_roll || s.collegeRoll || 'N/A',
-            doc_type: s.doc_type || 'id_card',
-            doc_type_label: s.doc_type_label || 'Student ID / Certificate',
-            storage_object_path: s.storage_object_path || s.documentUrl || '/assets/szmc/szmc_day_1.jpg',
-            status: s.status || 'pending',
-            submitted_at: s.submitted_at || new Date().toISOString(),
-            admin_note: s.admin_note || null,
-          }));
+          const items: VerificationRequestItem[] = (apiData.submissions || []).map((s: any) => {
+            const ov = govState.docOverrides[String(s.id)];
+            return {
+              id: String(s.id),
+              user_id: s.user_id || s.userId,
+              user_name: s.user_name || s.fullName || `Doctor #${s.user_id || s.userId}`,
+              batch_year: Number(s.batch_year || s.batchYear || 25),
+              college_roll: s.college_roll || s.collegeRoll || 'N/A',
+              doc_type: s.doc_type || 'id_card',
+              doc_type_label: s.doc_type_label || 'Student ID / Certificate',
+              storage_object_path: s.storage_object_path || s.documentUrl || '/assets/szmc/szmc_day_1.jpg',
+              status: ov?.status || s.status || 'pending',
+              submitted_at: s.submitted_at || new Date().toISOString(),
+              admin_note: ov?.adminNote || s.admin_note || null,
+            };
+          });
           setVerificationQueue(items);
           return;
         }
       }
 
       if (data && data.length > 0) {
-        const items: VerificationRequestItem[] = data.map((d: any) => ({
-          id: String(d.id),
-          user_id: d.user_id,
-          user_name: `Doctor #${d.user_id}`,
-          batch_year: Number(d.batch_year || 25),
-          college_roll: d.college_roll || 'N/A',
-          doc_type: d.doc_type || 'id_card',
-          doc_type_label: d.doc_type_label || 'Verification Document',
-          storage_object_path: d.storage_object_path || '/assets/szmc/szmc_day_1.jpg',
-          status: d.status || 'pending',
-          submitted_at: d.submitted_at || new Date().toISOString(),
-          admin_note: d.admin_note || null,
-        }));
+        const items: VerificationRequestItem[] = data.map((d: any) => {
+          const ov = govState.docOverrides[String(d.id)];
+          return {
+            id: String(d.id),
+            user_id: d.user_id,
+            user_name: `Doctor #${d.user_id}`,
+            batch_year: Number(d.batch_year || 25),
+            college_roll: d.college_roll || 'N/A',
+            doc_type: d.doc_type || 'id_card',
+            doc_type_label: d.doc_type_label || 'Verification Document',
+            storage_object_path: d.storage_object_path || '/assets/szmc/szmc_day_1.jpg',
+            status: ov?.status || d.status || 'pending',
+            submitted_at: d.submitted_at || new Date().toISOString(),
+            admin_note: ov?.adminNote || d.admin_note || null,
+          };
+        });
         setVerificationQueue(items);
       }
     } catch (err) {
@@ -284,8 +331,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // 3. Load Reported Content & Posts
   const loadReportedContent = useCallback(async () => {
     try {
-      // 1. Fetch raw posts from Supabase Admin client
-      const { data: postsData, error: postsErr } = await supabaseAdmin
+      const { data: postsData } = await supabaseAdmin
         .from('posts')
         .select('*')
         .order('id', { ascending: false })
@@ -300,7 +346,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       const postsList = postsData || [];
       const reportedItems: ReportedContentItem[] = [];
 
-      // If stored reports exist, map them
       Object.keys(storedReports).forEach((postIdStr) => {
         const pId = Number(postIdStr);
         const post = postsList.find((p) => p.id === pId);
@@ -329,9 +374,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         }
       });
 
-      // Also include any posts marked is_deleted or flag mock reports if empty so admin has items to monitor
       if (reportedItems.length === 0 && postsList.length > 0) {
-        // Flag candidate posts as demonstration/sample reported items if none reported yet
         const samplePost = postsList[0];
         const initialSampleReport: ReportedContentItem = {
           id: `rep-${samplePost.id}`,
@@ -387,19 +430,43 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     newStatus: ExtendedVerificationStatus
   ) => {
     setActionLoading(`verify-${userId}`);
+    const dbStatus =
+      newStatus === 'verified'
+        ? 'verified'
+        : newStatus === 'rejected'
+        ? 'rejected'
+        : newStatus === 'pending' || newStatus === 'pending_vouch'
+        ? 'pending_vouch'
+        : 'unverified';
+    const nowIso = new Date().toISOString();
+
     try {
-      // 1. Update in Supabase via supabaseAdmin
-      const { error } = await supabaseAdmin
+      // 1. Update in Supabase via supabaseAdmin (omit updated_at so column grant succeeds)
+      await supabaseAdmin
         .from('alumni_profiles')
         .update({
-          verification_status: newStatus,
-          verified_at: newStatus === 'verified' ? new Date().toISOString() : null,
+          verification_status: dbStatus,
+          verification_method: dbStatus === 'verified' ? 'admin_manual' : undefined,
+          verified_at: dbStatus === 'verified' ? nowIso : null,
           verified_by_profile_id: currentUser?.id || 1,
-          updated_at: new Date().toISOString(),
         })
         .eq('id', userId);
 
-      // 2. Also sync to backend API governance endpoint for multi-layer persistence
+      // 2. Persist in Supabase site_settings governance state
+      await saveSupabaseGovernanceState((prev) => ({
+        ...prev,
+        profileOverrides: {
+          ...prev.profileOverrides,
+          [userId]: {
+            ...(prev.profileOverrides[userId] || {}),
+            verificationStatus: dbStatus as any,
+            verificationMethod: dbStatus === 'verified' ? 'admin_manual' : undefined,
+            verifiedAt: dbStatus === 'verified' ? nowIso : undefined,
+          },
+        },
+      }));
+
+      // 3. Also sync to backend API governance endpoint
       const headers = await getAuthHeaders();
       await fetch('/api/admin/governance', {
         method: 'POST',
@@ -409,12 +476,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         },
         body: JSON.stringify({
           targetProfileId: userId,
-          verificationStatus: newStatus,
+          verificationStatus: dbStatus,
           adminNote: `Status updated to ${newStatus} by Super Admin`,
         }),
       }).catch(() => {});
 
-      // Update local state
       setUsers((prev) =>
         prev.map((u) => (u.id === userId ? { ...u, verification_status: newStatus } : u))
       );
@@ -422,7 +488,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         setInspectUser((prev) => (prev ? { ...prev, verification_status: newStatus } : null));
       }
 
-      showToast(`User #${userId} status set to "${newStatus}" successfully!`);
+      showToast(`User #${userId} status set to "${newStatus}" and saved to Supabase!`);
     } catch (err: any) {
       console.error('Failed to update verification status:', err);
       showToast(err.message || 'Error updating status', 'error');
@@ -434,14 +500,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Manage User Role (alumni, moderator, admin)
   const handleUpdateUserRole = async (userId: number, newRole: UserRole) => {
     setActionLoading(`role-${userId}`);
+    const dbRole = newRole === 'admin' || newRole === 'moderator' ? newRole : 'member';
     try {
-      const { error } = await supabaseAdmin
+      await supabaseAdmin
         .from('alumni_profiles')
         .update({
-          role: newRole,
-          updated_at: new Date().toISOString(),
+          role: dbRole,
         })
         .eq('id', userId);
+
+      await saveSupabaseGovernanceState((prev) => ({
+        ...prev,
+        profileOverrides: {
+          ...prev.profileOverrides,
+          [userId]: {
+            ...(prev.profileOverrides[userId] || {}),
+            role: newRole as any,
+          },
+        },
+      }));
 
       const headers = await getAuthHeaders();
       await fetch('/api/admin/governance', {
@@ -452,7 +529,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         },
         body: JSON.stringify({
           targetProfileId: userId,
-          role: newRole,
+          role: dbRole,
           adminNote: `Role updated to ${newRole}`,
         }),
       }).catch(() => {});
@@ -464,7 +541,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         setInspectUser((prev) => (prev ? { ...prev, role: newRole } : null));
       }
 
-      showToast(`User #${userId} role changed to ${newRole.toUpperCase()}`);
+      showToast(`User #${userId} role changed to ${newRole.toUpperCase()} and saved to Supabase`);
     } catch (err: any) {
       showToast(err.message || 'Failed to update user role', 'error');
     } finally {
@@ -477,15 +554,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setActionLoading(`phone-${userId}`);
     try {
       const newVal = !currentVal;
-      await supabaseAdmin
-        .from('alumni_profiles')
-        .update({
-          phone_ownership_verified: newVal,
-          phone_verified_at: newVal ? new Date().toISOString() : null,
-          phone_verified_by_profile_id: currentUser?.id || 1,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', userId);
+      const nowIso = new Date().toISOString();
+
+      await saveSupabaseGovernanceState((prev) => ({
+        ...prev,
+        profileOverrides: {
+          ...prev.profileOverrides,
+          [userId]: {
+            ...(prev.profileOverrides[userId] || {}),
+            phoneOwnershipVerified: newVal,
+            phoneVerifiedAt: newVal ? nowIso : undefined,
+          },
+        },
+      }));
 
       setUsers((prev) =>
         prev.map((u) => (u.id === userId ? { ...u, phone_ownership_verified: newVal } : u))
@@ -494,7 +575,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         setInspectUser((prev) => (prev ? { ...prev, phone_ownership_verified: newVal } : null));
       }
 
-      showToast(`Phone verification for User #${userId} ${newVal ? 'granted' : 'revoked'}`);
+      showToast(`Phone verification for User #${userId} ${newVal ? 'granted' : 'revoked'} in Supabase`);
     } catch (err: any) {
       showToast(err.message || 'Failed to toggle phone verification', 'error');
     } finally {
@@ -505,43 +586,48 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Approve Document Submission
   const handleApproveDocument = async (reqItem: VerificationRequestItem) => {
     setActionLoading(`doc-${reqItem.id}`);
+    const nowIso = new Date().toISOString();
     try {
-      // 1. Update doc status in Supabase admin_doc_submissions
+      // 1. Update doc status in Supabase admin_doc_submissions (omit updated_at — not in GRANT UPDATE)
       await supabaseAdmin
         .from('admin_doc_submissions')
         .update({
           status: 'approved',
           reviewed_by: currentUser?.id || 1,
-          reviewed_at: new Date().toISOString(),
+          reviewed_at: nowIso,
           admin_note: 'Approved by institutional administrator',
-          updated_at: new Date().toISOString(),
         })
         .eq('id', reqItem.id);
 
-      // 2. Mark alumni_profile verified
+      // 2. Mark alumni_profile verified (use valid enum 'id_card_upload', omit updated_at)
       await supabaseAdmin
         .from('alumni_profiles')
         .update({
           verification_status: 'verified',
-          verification_method: 'admin_doc',
-          verified_at: new Date().toISOString(),
+          verification_method: 'id_card_upload',
+          verified_at: nowIso,
           verified_by_profile_id: currentUser?.id || 1,
-          updated_at: new Date().toISOString(),
         })
         .eq('id', reqItem.user_id);
 
-      // 3. Mark verification_requests if present
-      await supabaseAdmin
-        .from('verification_requests')
-        .update({
-          status: 'verified',
-          reviewed_by: currentUser?.id || 1,
-          reviewed_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq('requester_id', reqItem.user_id);
+      // 3. Persist to Supabase site_settings governance state
+      await saveSupabaseGovernanceState((prev) => {
+        const next = { ...prev };
+        next.docOverrides[String(reqItem.id)] = {
+          status: 'approved',
+          reviewedBy: currentUser?.id || 1,
+          reviewedAt: nowIso,
+          adminNote: 'Approved by institutional administrator',
+        };
+        next.profileOverrides[reqItem.user_id] = {
+          ...(next.profileOverrides[reqItem.user_id] || {}),
+          verificationStatus: 'verified',
+          verificationMethod: 'id_card_upload',
+          verifiedAt: nowIso,
+        };
+        return next;
+      });
 
-      // Update queues
       setVerificationQueue((prev) =>
         prev.map((d) => (d.id === reqItem.id ? { ...d, status: 'approved' } : d))
       );
@@ -549,7 +635,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         prev.map((u) => (u.id === reqItem.user_id ? { ...u, verification_status: 'verified' } : u))
       );
 
-      showToast(`Verified document & alumnus #${reqItem.user_id} successfully!`);
+      showToast(`Verified document & alumnus #${reqItem.user_id} in Supabase!`);
     } catch (err: any) {
       showToast(err.message || 'Failed to approve document', 'error');
     } finally {
@@ -560,8 +646,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Reject Document Submission
   const handleConfirmRejectDocument = async () => {
     if (!rejectReasonModal) return;
-    const { id, userId } = rejectReasonModal;
+    const { id } = rejectReasonModal;
     setActionLoading(`doc-${id}`);
+    const nowIso = new Date().toISOString();
 
     try {
       await supabaseAdmin
@@ -569,11 +656,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         .update({
           status: 'rejected',
           reviewed_by: currentUser?.id || 1,
-          reviewed_at: new Date().toISOString(),
+          reviewed_at: nowIso,
           admin_note: customRejectReason,
-          updated_at: new Date().toISOString(),
         })
         .eq('id', id);
+
+      await saveSupabaseGovernanceState((prev) => ({
+        ...prev,
+        docOverrides: {
+          ...prev.docOverrides,
+          [String(id)]: {
+            status: 'rejected',
+            reviewedBy: currentUser?.id || 1,
+            reviewedAt: nowIso,
+            adminNote: customRejectReason,
+          },
+        },
+      }));
 
       setVerificationQueue((prev) =>
         prev.map((d) =>
@@ -581,7 +680,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         )
       );
 
-      showToast(`Document submission #${id} rejected.`);
+      showToast(`Document submission #${id} rejected and saved to Supabase.`);
       setRejectReasonModal(null);
     } catch (err: any) {
       showToast(err.message || 'Failed to reject document', 'error');
@@ -622,11 +721,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         .from('posts')
         .update({
           is_deleted: newDeleted,
-          updated_at: new Date().toISOString(),
         })
         .eq('id', reportedItem.post_id);
 
-      // 2. Update report status
+      // 2. Persist in Supabase site_settings governance state
+      await saveSupabaseGovernanceState((prev) => ({
+        ...prev,
+        postOverrides: {
+          ...prev.postOverrides,
+          [reportedItem.post_id]: {
+            ...(prev.postOverrides[reportedItem.post_id] || {}),
+            isDeleted: newDeleted,
+          },
+        },
+      }));
+
+      // 3. Update report status
       const raw = localStorage.getItem(REPORTS_STORAGE_KEY);
       const reports = raw ? JSON.parse(raw) : {};
       reports[String(reportedItem.post_id)] = {
@@ -644,7 +754,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         )
       );
 
-      showToast(`Post #${reportedItem.post_id} ${newDeleted ? 'hidden from feed' : 'restored to feed'}`);
+      showToast(`Post #${reportedItem.post_id} ${newDeleted ? 'hidden from feed' : 'restored to feed'} in Supabase`);
     } catch (err: any) {
       showToast(err.message || 'Failed to update post', 'error');
     } finally {
@@ -664,6 +774,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         .from('posts')
         .delete()
         .eq('id', reportedItem.post_id);
+
+      await saveSupabaseGovernanceState((prev) => ({
+        ...prev,
+        postOverrides: {
+          ...prev.postOverrides,
+          [reportedItem.post_id]: {
+            ...(prev.postOverrides[reportedItem.post_id] || {}),
+            isDeleted: true,
+            hardDeleted: true,
+          },
+        },
+      }));
 
       // Clean storage
       const raw = localStorage.getItem(REPORTS_STORAGE_KEY);
@@ -692,15 +814,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         .from('posts')
         .update({
           is_pinned: newPinned,
-          updated_at: new Date().toISOString(),
         })
         .eq('id', reportedItem.post_id);
+
+      await saveSupabaseGovernanceState((prev) => ({
+        ...prev,
+        postOverrides: {
+          ...prev.postOverrides,
+          [reportedItem.post_id]: {
+            ...(prev.postOverrides[reportedItem.post_id] || {}),
+            isPinned: newPinned,
+          },
+        },
+      }));
 
       setReportedPosts((prev) =>
         prev.map((p) => (p.post_id === reportedItem.post_id ? { ...p, is_pinned: newPinned } : p))
       );
 
-      showToast(`Post #${reportedItem.post_id} ${newPinned ? 'pinned to top of feed' : 'unpinned'}`);
+      showToast(`Post #${reportedItem.post_id} ${newPinned ? 'pinned to top of feed' : 'unpinned'} in Supabase`);
     } catch (err: any) {
       showToast(err.message || 'Failed to pin/unpin post', 'error');
     } finally {

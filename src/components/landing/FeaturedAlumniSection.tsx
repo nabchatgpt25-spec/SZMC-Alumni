@@ -24,7 +24,7 @@ import {
 } from '../motion/CinematicMotion';
 import { useSiteConfig, type FeaturedAlumnus } from '../../services/siteConfigService';
 import { realtimeManager } from '../../services/supabaseRealtimeService';
-import campusHeroImg from '../../assets/images/ndc_campus_hero_1790233370828.jpg';
+import campusHeroImg from '../../assets/images/szmc_campus_hero.jpg';
 
 interface FeaturedAlumniSectionProps {
   alumniList: AlumniProfile[];

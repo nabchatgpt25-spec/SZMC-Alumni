@@ -12,7 +12,7 @@ import {
   Calendar,
   AlertCircle
 } from 'lucide-react';
-import { NDCLogo } from '../NDCLogo';
+import { SZMCLogo } from '../SZMCLogo';
 import { ALUMNI_PROFILES, loadStoredAlumniProfiles } from '../../data/mockData';
 import { getCachedDirectory } from '../../utils/offlineStorage';
 import { AlumniProfile } from '../../types';
@@ -65,7 +65,7 @@ export const MembershipVerifyModal: React.FC<MembershipVerifyModalProps> = ({
         <div className="p-6 bg-gradient-to-r from-blue-900 to-slate-900 text-white flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-white/10 p-1 border border-white/20 flex items-center justify-center">
-              <NDCLogo className="w-full h-full" />
+              <SZMCLogo className="w-full h-full" />
             </div>
             <div>
               <h3 className="font-black text-base tracking-tight leading-tight">
@@ -144,14 +144,14 @@ export const MembershipVerifyModal: React.FC<MembershipVerifyModalProps> = ({
               <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-blue-900 via-blue-950 to-slate-900 text-white p-6 shadow-2xl border border-blue-700/60">
                 {/* Background Crest Watermark */}
                 <div className="absolute right-[-20px] bottom-[-20px] opacity-10 w-64 h-64 pointer-events-none">
-                  <NDCLogo className="w-full h-full" />
+                  <SZMCLogo className="w-full h-full" />
                 </div>
 
                 {/* Card Top Strip */}
                 <div className="flex items-center justify-between border-b border-blue-700/60 pb-4 mb-4">
                   <div className="flex items-center gap-2.5">
                     <div className="w-10 h-10 rounded-xl bg-white p-1 shrink-0">
-                      <NDCLogo className="w-full h-full" />
+                      <SZMCLogo className="w-full h-full" />
                     </div>
                     <div>
                       <div className="font-black text-xs tracking-wider uppercase text-blue-200">

@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Menu, Search, Mail, ChevronDown, User, LogOut, ShieldCheck, ShieldAlert, Clock, X, Settings, MessageCircle } from 'lucide-react';
 import { ThemeToggle } from './ThemeToggle';
-import { NDCLogo } from './NDCLogo';
+import { SZMCLogo } from './SZMCLogo';
 import { NotificationDropdown } from './NotificationDropdown';
 import { useAuth } from '../context/AuthContext';
 import { loadVouchRequests } from '../utils/verificationService';
@@ -41,9 +41,9 @@ export const Header: React.FC<HeaderProps> = ({
         loadVouchRequests().filter((r) => r.status === 'pending').length
       );
     };
-    window.addEventListener('ndc_vouch_requests_updated', syncVouches);
+    window.addEventListener('szmc_vouch_requests_updated', syncVouches);
     return () => {
-      window.removeEventListener('ndc_vouch_requests_updated', syncVouches);
+      window.removeEventListener('szmc_vouch_requests_updated', syncVouches);
     };
   }, []);
 
@@ -81,7 +81,7 @@ export const Header: React.FC<HeaderProps> = ({
             title="SZMC Alumni Home"
           >
             <div className="w-9 h-9 rounded-xl bg-white dark:bg-slate-800 p-0.5 border border-slate-200/80 dark:border-slate-700/80 flex items-center justify-center shadow-xs overflow-hidden">
-              <NDCLogo className="w-full h-full" />
+              <SZMCLogo className="w-full h-full" />
             </div>
             <span className="hidden xl:inline font-bold text-sm tracking-tight text-slate-900 dark:text-white">
               SZMC Alumni

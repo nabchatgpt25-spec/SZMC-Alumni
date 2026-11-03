@@ -138,11 +138,11 @@ export const AutoPlayYouTubeEmbed: React.FC<AutoPlayYouTubeEmbedProps> = ({
     const handleGlobalPause = () => {
       pause();
     };
-    window.addEventListener('ndc-pause-all-media', handleGlobalPause);
+    window.addEventListener('szmc-pause-all-media', handleGlobalPause);
 
     return () => {
       observer.disconnect();
-      window.removeEventListener('ndc-pause-all-media', handleGlobalPause);
+      window.removeEventListener('szmc-pause-all-media', handleGlobalPause);
     };
   }, [autoPlayOnScroll]);
 

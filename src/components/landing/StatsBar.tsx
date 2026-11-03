@@ -14,9 +14,9 @@ import {
   MapPin,
   X
 } from 'lucide-react';
-import campusHeroImg from '../../assets/images/ndc_campus_hero_1790233370828.jpg';
-import reunionCelebrationImg from '../../assets/images/ndc_reunion_celebration_1790233384454.jpg';
-import mainGateImg from '../../assets/images/ndc_main_gate_1790748632254.jpg';
+import campusHeroImg from '../../assets/images/szmc_campus_hero.jpg';
+import reunionCelebrationImg from '../../assets/images/szmc_reunion_celebration.jpg';
+import mainGateImg from '../../assets/images/szmc_main_gate.jpg';
 
 interface NetworkNode {
   id: string;

@@ -154,9 +154,9 @@ export const NoticeBoardSection: React.FC<NoticeBoardSectionProps> = ({
 
             {/* Bottom Secretariat Info Note */}
             <div className="mt-6 pt-4 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400">
-              <span>All circulars issued under authority of General Secretary, NDCAA</span>
+              <span>All circulars issued under authority of General Secretary, SZMC Alumni Association</span>
               <span className="font-semibold text-blue-600 dark:text-blue-400 hover:underline cursor-pointer">
-                Archived Circulars (1985–2025)
+                Archived Circulars (1992–2026)
               </span>
             </div>
           </div>
@@ -228,12 +228,12 @@ export const NoticeBoardSection: React.FC<NoticeBoardSectionProps> = ({
                 <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800 flex items-center justify-between">
                   <div>
                     <div className="font-bold text-slate-900 dark:text-white">
-                      32nd Annual General Meeting (AGM)
+                      34th Annual General Meeting (AGM)
                     </div>
                     <div className="text-[10px] text-slate-500 dark:text-slate-400 flex items-center gap-2 mt-0.5">
                       <span>Nov 28, 2026</span>
                       <span>•</span>
-                      <span>Fr. Peixotto Auditorium</span>
+                      <span>SZMC Central Auditorium, Bogura</span>
                     </div>
                   </div>
                   <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300">
@@ -244,16 +244,16 @@ export const NoticeBoardSection: React.FC<NoticeBoardSectionProps> = ({
                 <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800 flex items-center justify-between">
                   <div>
                     <div className="font-bold text-slate-900 dark:text-white">
-                      NDC Science Club 70th Reunion
+                      SZMC Clinical &amp; Research Society Symposium
                     </div>
                     <div className="text-[10px] text-slate-500 dark:text-slate-400 flex items-center gap-2 mt-0.5">
                       <span>Oct 15, 2026</span>
                       <span>•</span>
-                      <span>Ganguly Building Labs</span>
+                      <span>SZMCH Academic Block, Silimpur</span>
                     </div>
                   </div>
                   <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900 text-emerald-700 dark:text-emerald-300">
-                    Club
+                    Academic
                   </span>
                 </div>
 

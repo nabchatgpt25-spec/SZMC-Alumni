@@ -751,29 +751,29 @@ body {
    ========================================================================== */
 
 /* 1. SZMC Medical Blue & Gold (Default Light) */
-html[data-theme="ndc-blue"] body {
+html[data-theme="szmc-blue"] body {
   background-color: #f8fafc;
 }
-html[data-theme="ndc-blue"] .bg-blue-600,
-html[data-theme="ndc-blue"] .bg-blue-500 {
+html[data-theme="szmc-blue"] .bg-blue-600,
+html[data-theme="szmc-blue"] .bg-blue-500 {
   background-color: #1d4ed8 !important;
 }
-html[data-theme="ndc-blue"] .hover\:bg-blue-700:hover,
-html[data-theme="ndc-blue"] .hover\:bg-blue-600:hover {
+html[data-theme="szmc-blue"] .hover\:bg-blue-700:hover,
+html[data-theme="szmc-blue"] .hover\:bg-blue-600:hover {
   background-color: #1e40af !important;
 }
-html[data-theme="ndc-blue"] .text-blue-600,
-html[data-theme="ndc-blue"] .text-blue-500 {
+html[data-theme="szmc-blue"] .text-blue-600,
+html[data-theme="szmc-blue"] .text-blue-500 {
   color: #1d4ed8 !important;
 }
-html[data-theme="ndc-blue"] .border-blue-500,
-html[data-theme="ndc-blue"] .border-blue-600 {
+html[data-theme="szmc-blue"] .border-blue-500,
+html[data-theme="szmc-blue"] .border-blue-600 {
   border-color: #1d4ed8 !important;
 }
-html[data-theme="ndc-blue"] .bg-blue-50 {
+html[data-theme="szmc-blue"] .bg-blue-50 {
   background-color: #eff6ff !important;
 }
-html[data-theme="ndc-blue"] .text-blue-700 {
+html[data-theme="szmc-blue"] .text-blue-700 {
   color: #1e40af !important;
 }
 
@@ -1226,7 +1226,7 @@ html[data-theme="vintage-parchment"] .text-blue-700 {
   box-sizing: border-box !important;
 }
 
-.ndc-leaflet-popup {
+.szmc-leaflet-popup {
   max-width: calc(100vw - 32px) !important;
 }
 

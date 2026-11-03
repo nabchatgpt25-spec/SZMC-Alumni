@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { X, Building2, Smartphone, Copy, Check, ShieldCheck, Heart, Info } from 'lucide-react';
 import { BANK_DONATION_INFO } from '../../data/noticesData';
-import { NDCLogo } from '../NDCLogo';
+import { SZMCLogo } from '../SZMCLogo';
 
 interface BankDonationModalProps {
   isOpen: boolean;
@@ -29,7 +29,7 @@ export const BankDonationModal: React.FC<BankDonationModalProps> = ({
         <div className="p-6 bg-gradient-to-r from-blue-900 to-indigo-950 text-white flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-white p-1 text-slate-900 flex items-center justify-center">
-              <NDCLogo className="w-full h-full" />
+              <SZMCLogo className="w-full h-full" />
             </div>
             <div>
               <h3 className="font-black text-base tracking-tight leading-tight">

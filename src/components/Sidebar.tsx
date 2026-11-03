@@ -27,7 +27,7 @@ import {
 import { PWAInstallButton } from './PWAInstallButton';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
-import { NDCLogo } from './NDCLogo';
+import { SZMCLogo } from './SZMCLogo';
 import { loadVouchRequests } from '../utils/verificationService';
 import { isUserSuperAdmin, isUserGeneralAdmin, isUserSubAdmin } from '../types';
 
@@ -199,7 +199,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             className="flex items-center gap-3 text-left cursor-pointer group min-w-0"
           >
             <div className="w-10 h-10 rounded-2xl bg-white dark:bg-slate-800 p-1 border border-blue-200/70 dark:border-blue-500/25 flex items-center justify-center shadow-xs group-hover:scale-105 transition-transform overflow-hidden shrink-0">
-              <NDCLogo className="w-full h-full" />
+              <SZMCLogo className="w-full h-full" />
             </div>
             <div className="min-w-0">
               <div className="font-black text-sm text-slate-900 dark:text-white tracking-tight leading-tight truncate">

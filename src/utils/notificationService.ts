@@ -6,7 +6,7 @@ import {
 import { formatFacebookTime } from './facebookTime';
 import { playSound } from './audio';
 
-export const PORTAL_NOTIFICATIONS_STORAGE_KEY = 'ndc_portal_notifications';
+export const PORTAL_NOTIFICATIONS_STORAGE_KEY = 'szmc_portal_notifications';
 
 export function getLocalNotifications(): NotificationItem[] {
   if (typeof window === 'undefined') return [];
@@ -29,7 +29,7 @@ export function saveLocalNotifications(notifications: NotificationItem[]): void 
       PORTAL_NOTIFICATIONS_STORAGE_KEY,
       JSON.stringify(notifications.slice(0, 100))
     );
-    window.dispatchEvent(new CustomEvent('ndc_notifications_updated'));
+    window.dispatchEvent(new CustomEvent('szmc_notifications_updated'));
   } catch (e) {
     console.warn('Failed to save notifications', e);
   }
@@ -37,7 +37,7 @@ export function saveLocalNotifications(notifications: NotificationItem[]): void 
 
 function getUserPreferences(): UserPreferences {
   try {
-    const raw = localStorage.getItem('ndc_user_prefs');
+    const raw = localStorage.getItem('szmc_user_prefs');
     if (raw) return JSON.parse(raw);
   } catch {}
   return {
@@ -81,7 +81,7 @@ export async function sendSocialNotification(params: {
   // Strict Rule 3: Respect user notification preferences from Settings
   if (typeof window !== 'undefined') {
     try {
-      const rawUser = localStorage.getItem('ndc_current_user');
+      const rawUser = localStorage.getItem('szmc_current_user');
       if (rawUser) {
         const u = JSON.parse(rawUser);
         const currentUid = Number(u.id || 0);
@@ -134,7 +134,7 @@ export async function sendSocialNotification(params: {
   // 2. Play Web Audio chime if recipient is the active user
   if (typeof window !== 'undefined') {
     try {
-      const rawUser = localStorage.getItem('ndc_current_user');
+      const rawUser = localStorage.getItem('szmc_current_user');
       if (rawUser) {
         const u = JSON.parse(rawUser);
         const currentUid = Number(u.id || 0);

@@ -100,7 +100,7 @@ export const PostLightboxModal: React.FC<PostLightboxProps> = ({
     if (!currentImg) return;
     const a = document.createElement('a');
     a.href = currentImg;
-    a.download = `ndc-media-${Date.now()}-${currentIndex + 1}.jpg`;
+    a.download = `szmc-media-${Date.now()}-${currentIndex + 1}.jpg`;
     a.target = '_blank';
     a.rel = 'noreferrer';
     document.body.appendChild(a);

@@ -101,7 +101,7 @@ import {
   pauseAutoVerification,
   resetAutoVerification7Days,
 } from '../../services/siteConfigService';
-import { NDCLogo } from '../NDCLogo';
+import { SZMCLogo } from '../SZMCLogo';
 import { compressImageFileToDataUrl } from '../../utils/mediaStorage';
 import { loadStoredAlumniProfiles } from '../../data/mockData';
 import { supabase } from '../../lib/supabase';
@@ -605,7 +605,7 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
         <div className="relative z-10 min-w-0">
           <div className="flex flex-wrap items-center gap-2.5 mb-1.5">
             <div className={`w-10 h-10 rounded-2xl ${isSuperAdmin ? 'bg-indigo-600 shadow-indigo-600/30' : 'bg-teal-600 shadow-teal-600/30'} text-white flex items-center justify-center shadow-md p-1.5`}>
-              <NDCLogo className="w-full h-full object-contain brightness-200" />
+              <SZMCLogo className="w-full h-full object-contain brightness-200" />
             </div>
             <div>
               <div className="flex items-center gap-2">
@@ -2093,7 +2093,7 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
                     </span>
 
                     <div className="w-24 h-24 rounded-2xl bg-white dark:bg-slate-800 p-2 border border-slate-200 dark:border-slate-700 shadow-xl flex items-center justify-center overflow-hidden">
-                      <NDCLogo className="w-full h-full object-contain" />
+                      <SZMCLogo className="w-full h-full object-contain" />
                     </div>
 
                     <div>
@@ -2401,7 +2401,7 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
 
                       <div className="relative z-10 space-y-2.5">
                         <div className="w-12 h-12 mx-auto rounded-xl bg-white/10 p-1 border border-white/20 backdrop-blur-sm">
-                          <NDCLogo className="w-full h-full object-contain" />
+                          <SZMCLogo className="w-full h-full object-contain" />
                         </div>
 
                         <div className="inline-block px-2.5 py-0.5 rounded-full bg-slate-900/80 border border-white/20 text-[9px] font-semibold text-emerald-400">

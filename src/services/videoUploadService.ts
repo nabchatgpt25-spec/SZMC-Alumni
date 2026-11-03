@@ -153,11 +153,34 @@ export async function uploadVideoToStorage(
     });
 
   if (videoError) {
+    onProgress?.(65);
+    try {
+      const uploadRes = await fetch('/api/upload-video', {
+        method: 'POST',
+        headers: {
+          'Content-Type': file.type || 'video/mp4',
+          'x-file-ext': fileExt,
+          'x-user-id': userId,
+        },
+        body: file,
+      });
+      if (uploadRes.ok) {
+        const uploadedJson = await uploadRes.json();
+        if (uploadedJson?.url) {
+          onProgress?.(100);
+          return {
+            videoUrl: uploadedJson.url,
+            posterUrl: metadata?.posterDataUrl,
+            duration: metadata?.duration || 0,
+          };
+        }
+      }
+    } catch {
+      // Fall through to persistent Data URL
+    }
+
     onProgress?.(85);
-    const fallbackUrl =
-      file.size <= 35 * 1024 * 1024
-        ? await fileToDataUrl(file).catch(() => URL.createObjectURL(file))
-        : URL.createObjectURL(file);
+    const fallbackUrl = await fileToDataUrl(file);
     onProgress?.(100);
     return {
       videoUrl: fallbackUrl,

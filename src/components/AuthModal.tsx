@@ -28,7 +28,7 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { BATCH_LIST } from '../data/mockData';
 import { WhatsAppIcon } from './SocialIcons';
-import { NDCLogo } from './NDCLogo';
+import { SZMCLogo } from './SZMCLogo';
 import { compressImageFileToDataUrl } from '../utils/mediaStorage';
 import { formatToE164Phone } from '../utils/phone';
 import { normalizeAcademicStreamAndGroup } from '../utils/academicGroupMapping';
@@ -97,7 +97,7 @@ const SCIENCE_GROUPS = Array.from({ length: 17 }, (_, i) =>
 const HUMANITIES_GROUPS = ['G', 'H', 'L', 'W'];
 const BUSINESS_GROUPS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
 
-const REGISTRATION_DRAFT_STORAGE_KEY = 'ndc_registration_form_draft_v1';
+const REGISTRATION_DRAFT_STORAGE_KEY = 'szmc_registration_form_draft_v1';
 
 interface RegistrationFormDraft {
   fullName?: string;
@@ -625,7 +625,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         <div className="relative px-4 sm:px-6 py-3.5 sm:py-5 border-b border-white/40 dark:border-white/10 bg-white/25 dark:bg-white/[0.04] backdrop-blur-xl flex items-center justify-between flex-shrink-0">
           <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
             <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-2xl bg-white/70 dark:bg-slate-800/60 backdrop-blur-md p-1 border border-white/70 dark:border-white/15 flex items-center justify-center shadow-md shadow-blue-600/10 overflow-hidden shrink-0">
-              <NDCLogo className="w-full h-full" />
+              <SZMCLogo className="w-full h-full" />
             </div>
             <div className="min-w-0">
               <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">

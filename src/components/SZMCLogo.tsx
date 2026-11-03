@@ -1,7 +1,7 @@
 import React from 'react';
 import { useSiteConfig } from '../services/siteConfigService';
 
-interface NDCLogoProps {
+interface SZMCLogoProps {
   className?: string;
   size?: number | string;
   alt?: string;
@@ -9,16 +9,16 @@ interface NDCLogoProps {
 }
 
 /**
- * Authentic Shaheed Ziaur Rahman Medical College (SZMC Bogura) Emblem Logo Component
+ * Authentic Shaheed Ziaur Rahman Medical College (SZMC Bogura, Estd. 1992) Emblem Logo Component
  * Reads live customizable logo from SiteConfig (Super Admin can change it anytime without code)
  */
-export const NDCLogo: React.FC<NDCLogoProps> = ({
+export const SZMCLogo: React.FC<SZMCLogoProps> = ({
   className = 'w-10 h-10',
   alt = 'SZMC Logo',
 }) => {
   const { config } = useSiteConfig();
   const currentLogo =
-    config.logoUrl && !config.logoUrl.includes('ndc-logo') && !config.logoUrl.includes('images__1__')
+    config.logoUrl && !config.logoUrl.includes('images__1__')
       ? config.logoUrl
       : '/szmc-logo.png';
 
@@ -32,5 +32,3 @@ export const NDCLogo: React.FC<NDCLogoProps> = ({
     />
   );
 };
-
-export const SZMCLogo = NDCLogo;

@@ -57,7 +57,7 @@ import {
 import { saveStoredAlumniProfiles } from '../data/mockData';
 import { BloodDonorRegistration } from './BloodDonorRegistration';
 import { getDonorProfileByUserId } from '../utils/bloodDonationService';
-import campusHeroImg from '../assets/images/ndc_campus_hero_1790233370828.jpg';
+import campusHeroImg from '../assets/images/szmc_campus_hero.jpg';
 import { compressImageFileToDataUrl } from '../utils/mediaStorage';
 
 interface ProfileViewProps {
@@ -85,7 +85,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const [allPosts, setAllPosts] = useState<PostItem[]>(() => {
     if (typeof window === 'undefined') return INITIAL_OFFLINE_SAVED_POSTS;
     try {
-      const raw = localStorage.getItem('ndc_alumni_posts');
+      const raw = localStorage.getItem('szmc_alumni_posts');
       if (raw) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed) && parsed.length > 0) return parsed;
@@ -208,7 +208,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     setAllPosts(updated);
     if (typeof window !== 'undefined') {
       try {
-        localStorage.setItem('ndc_alumni_posts', JSON.stringify(updated));
+        localStorage.setItem('szmc_alumni_posts', JSON.stringify(updated));
       } catch (e) {
         console.warn('Failed to save posts from ProfileView', e);
       }
@@ -442,7 +442,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const avatarFileInputRef = useRef<HTMLInputElement>(null);
   const coverFileInputRef = useRef<HTMLInputElement>(null);
 
-  const editDraftStorageKey = `ndc_profile_edit_draft_v1_${currentUser.id}`;
+  const editDraftStorageKey = `szmc_profile_edit_draft_v1_${currentUser.id}`;
 
   const loadEditDraft = () => {
     if (typeof window === 'undefined' || !isMine) return null;

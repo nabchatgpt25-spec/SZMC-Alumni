@@ -1,7 +1,7 @@
 import React from 'react';
 import { X, Download, Printer, Calendar, Tag, AlertCircle, FileText, CheckCircle2 } from 'lucide-react';
 import { OfficialNotice } from '../../data/noticesData';
-import { NDCLogo } from '../NDCLogo';
+import { SZMCLogo } from '../SZMCLogo';
 
 interface OfficialNoticeModalProps {
   notice: OfficialNotice | null;
@@ -52,7 +52,7 @@ export const OfficialNoticeModal: React.FC<OfficialNoticeModalProps> = ({
           {/* Institutional Letterhead */}
           <div className="text-center pb-6 border-b-2 border-double border-slate-200 dark:border-slate-800">
             <div className="w-16 h-16 mx-auto mb-2 p-1 rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-sm flex items-center justify-center">
-              <NDCLogo className="w-full h-full" />
+              <SZMCLogo className="w-full h-full" />
             </div>
             <h2 className="text-lg sm:text-xl font-black text-slate-900 dark:text-white uppercase tracking-tight">
               SHAHEED ZIAUR RAHMAN MEDICAL COLLEGE ALUMNI ASSOCIATION

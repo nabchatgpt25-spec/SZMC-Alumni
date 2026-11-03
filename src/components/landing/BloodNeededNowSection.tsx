@@ -48,9 +48,9 @@ export const BloodNeededNowSection: React.FC<BloodNeededNowSectionProps> = ({
       setIsDismissed(isBloodBannerDismissed());
     };
 
-    window.addEventListener('ndc_blood_network_updated', sync);
+    window.addEventListener('szmc_blood_network_updated', sync);
     window.addEventListener('blood_requests_changed', sync);
-    window.addEventListener('ndc_blood_banner_dismissed', sync);
+    window.addEventListener('szmc_blood_banner_dismissed', sync);
     window.addEventListener('storage', sync);
 
     const unsubscribeRealtime = realtimeManager.subscribeToBloodNetwork(() => {
@@ -58,9 +58,9 @@ export const BloodNeededNowSection: React.FC<BloodNeededNowSectionProps> = ({
     });
 
     return () => {
-      window.removeEventListener('ndc_blood_network_updated', sync);
+      window.removeEventListener('szmc_blood_network_updated', sync);
       window.removeEventListener('blood_requests_changed', sync);
-      window.removeEventListener('ndc_blood_banner_dismissed', sync);
+      window.removeEventListener('szmc_blood_banner_dismissed', sync);
       window.removeEventListener('storage', sync);
       unsubscribeRealtime();
     };

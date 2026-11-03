@@ -69,12 +69,12 @@ export const AdminVerificationView: React.FC<AdminVerificationViewProps> = ({
 
   useEffect(() => {
     refreshAll();
-    window.addEventListener('ndc_admin_docs_updated', refreshAll);
-    window.addEventListener('ndc_vouch_requests_updated', refreshAll);
+    window.addEventListener('szmc_admin_docs_updated', refreshAll);
+    window.addEventListener('szmc_vouch_requests_updated', refreshAll);
     window.addEventListener('storage', refreshAll);
     return () => {
-      window.removeEventListener('ndc_admin_docs_updated', refreshAll);
-      window.removeEventListener('ndc_vouch_requests_updated', refreshAll);
+      window.removeEventListener('szmc_admin_docs_updated', refreshAll);
+      window.removeEventListener('szmc_vouch_requests_updated', refreshAll);
       window.removeEventListener('storage', refreshAll);
     };
   }, []);
@@ -723,7 +723,7 @@ export const AdminVerificationView: React.FC<AdminVerificationViewProps> = ({
                   type="text"
                   value={adminNoteInput}
                   onChange={(e) => setAdminNoteInput(e.target.value)}
-                  placeholder="e.g. Verified NID & NDC Roll 118105 match against batch register..."
+                  placeholder="e.g. Verified NID & SZMC Roll SZMC-25-01 match against batch register..."
                   className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs text-slate-900 dark:text-white"
                 />
               </div>

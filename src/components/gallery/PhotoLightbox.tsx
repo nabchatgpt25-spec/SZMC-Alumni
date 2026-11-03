@@ -96,7 +96,7 @@ export const PhotoLightbox: React.FC<PhotoLightboxProps> = ({
   const handleDownload = () => {
     const link = document.createElement('a');
     link.href = currentPhoto.url;
-    link.download = `ndc-gallery-${currentPhoto.id}.jpg`;
+    link.download = `szmc-gallery-${currentPhoto.id}.jpg`;
     link.target = '_blank';
     link.rel = 'noreferrer';
     document.body.appendChild(link);

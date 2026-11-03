@@ -170,16 +170,10 @@ export async function getOrCreateSupabaseProfile(
       isInstantAutoVerificationActive() ||
       extraData?.verificationStatus === 'verified';
 
-    // New profiles start as verified if auto-verification is active (7-day rule), or if admin
+    // New profiles insert only columns permitted by GRANT INSERT on public.alumni_profiles,
+    // then apply verification_status / role / badges via GRANT UPDATE.
     const initialRecord: Record<string, any> = {
       auth_user_id: authUser.id,
-      role: resolvedRole,
-      verification_status: isAutoVerified ? 'verified' : 'unverified',
-      verification_method: isAutoVerified ? 'admin_instant' : (extraData?.verificationMethod || null),
-      vouches_count: isAutoVerified ? 2 : 0,
-      vouch_target_count: 2,
-      verified_at: isAutoVerified ? new Date().toISOString() : null,
-      badges: isAutoVerified ? ['Verified SZMC Doctor', 'SZMCian'] : ['SZMCian'],
       full_name:
         extraData?.fullName?.trim() ||
         (authUser.user_metadata as any)?.full_name ||
@@ -205,9 +199,9 @@ export async function getOrCreateSupabaseProfile(
       phone: extraData?.phone
         ? formatToE164Phone(extraData.phone)
         : ((authUser.user_metadata as any)?.phone ? formatToE164Phone((authUser.user_metadata as any).phone) : (authUser.phone ? formatToE164Phone(authUser.phone) : null)),
-      phone_ownership_verified: isSuperAdminEmail ? true : false,
       whatsapp: extraData?.whatsapp?.trim() || null,
       blood_group: extraData?.bloodGroup || null,
+      is_public: true,
     };
 
     let { data: inserted, error: insertErr } = await supabase
@@ -242,6 +236,26 @@ export async function getOrCreateSupabaseProfile(
       }
       console.warn('Failed to insert new alumni_profiles record:', insertErr.message);
       return null;
+    }
+
+    if (inserted && (isAutoVerified || resolvedRole !== 'member')) {
+      try {
+        const { data: updatedRow } = await supabase
+          .from('alumni_profiles')
+          .update({
+            role: resolvedRole,
+            verification_status: isAutoVerified ? 'verified' : 'unverified',
+            verification_method: isAutoVerified ? 'admin_instant' : (extraData?.verificationMethod || 'two_vouches'),
+            verified_at: isAutoVerified ? new Date().toISOString() : null,
+            badges: isAutoVerified ? ['Verified SZMC Doctor', 'SZMCian'] : ['SZMCian'],
+          })
+          .eq('id', (inserted as any).id)
+          .select(ALUMNI_PUBLIC_COLUMNS)
+          .maybeSingle();
+        if (updatedRow) {
+          inserted = updatedRow;
+        }
+      } catch {}
     }
 
     try {

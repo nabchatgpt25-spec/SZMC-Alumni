@@ -5,7 +5,7 @@ import {
   ScrollReveal,
   Tilt3DCard,
 } from '../motion/CinematicMotion';
-import campusArtworkImg from '../../assets/images/ndc_campus_artwork_1790748644859.jpg';
+import campusArtworkImg from '../../assets/images/szmc_campus_artwork.jpg';
 
 interface QuadFeedPreviewProps {
   onOpenLogin: () => void;

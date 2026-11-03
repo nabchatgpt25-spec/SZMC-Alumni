@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { BATCH_LIST, loadStoredAlumniProfiles } from '../data/mockData';
 import { BatchSummary, AlumniProfile, SPECIALTIES_LIST } from '../types';
-import { NDCLogo } from './NDCLogo';
+import { SZMCLogo } from './SZMCLogo';
 import { fetchBatchesFromDb, fetchBatchAlumniProfilesFromDb } from '../services/supabaseService';
 import { realtimeManager } from '../services/supabaseRealtimeService';
 
@@ -232,7 +232,7 @@ export const BatchesView: React.FC<BatchesViewProps> = ({ onSelectBatch, onViewP
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div>
           <div className="flex items-center gap-2 mb-1.5">
-            <NDCLogo className="w-5 h-5" />
+            <SZMCLogo className="w-5 h-5" />
             <span className="text-xs font-bold px-2.5 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300">
               SZMC Bogura • 35 MBBS Batches
             </span>

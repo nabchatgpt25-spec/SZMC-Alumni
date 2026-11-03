@@ -40,7 +40,7 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
 import { AlumniProfile, SPECIALTIES_LIST, DEGREES_LIST } from '../types';
-import { NDCLogo } from './NDCLogo';
+import { SZMCLogo } from './SZMCLogo';
 import { loadVouchRequests } from '../utils/verificationService';
 import { getDonorProfileByUserId } from '../utils/bloodDonationService';
 import { MessageSettingsModal } from './messenger/MessageSettingsModal';
@@ -1543,7 +1543,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       {[
                         { id: 'light', name: 'Clean Light', icon: Sun },
                         { id: 'dark', name: 'Deep Dark', icon: Moon },
-                        { id: 'ndc-blue', name: 'SZMC Blue', icon: Sparkles },
+                        { id: 'szmc-blue', name: 'SZMC Blue', icon: Sparkles },
                         { id: 'midnight', name: 'Midnight', icon: Moon },
                       ].map((t) => (
                         <button
@@ -1658,7 +1658,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     <div className="relative z-10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                       <div className="flex items-center gap-3.5">
                         <div className="w-12 h-12 rounded-2xl bg-white/10 backdrop-blur-md p-1 border border-white/20 flex items-center justify-center shrink-0">
-                          <NDCLogo className="w-full h-full" />
+                          <SZMCLogo className="w-full h-full" />
                         </div>
                         <div>
                           <div className="text-[10px] font-black tracking-widest uppercase text-blue-200">

@@ -1,4 +1,4 @@
-export type ThemeId = 'light' | 'dark' | 'ndc-blue' | 'midnight';
+export type ThemeId = 'light' | 'dark' | 'szmc-blue' | 'midnight';
 
 export type ThemeMode = 'light' | 'dark';
 

@@ -107,7 +107,7 @@ export const Video: React.FC<VideoProps> = ({
 
     // Broadcast event to notify YouTube/Facebook embeds to pause
     window.dispatchEvent(
-      new CustomEvent('ndc-pause-all-media', { detail: { except: videoEl } })
+      new CustomEvent('szmc-pause-all-media', { detail: { except: videoEl } })
     );
 
     const shouldMute = userExplicitlyMutedRef.current;
@@ -264,7 +264,7 @@ export const Video: React.FC<VideoProps> = ({
     document.addEventListener('scroll', handleScroll, { passive: true, capture: true });
     window.addEventListener('resize', handleScroll, { passive: true });
     document.addEventListener('visibilitychange', handleVisibilityChange);
-    window.addEventListener('ndc-pause-all-media', handleGlobalPause);
+    window.addEventListener('szmc-pause-all-media', handleGlobalPause);
 
     evaluateVisibility();
 
@@ -277,7 +277,7 @@ export const Video: React.FC<VideoProps> = ({
       window.removeEventListener('touchstart', handleUserGesture);
       window.removeEventListener('keydown', handleUserGesture);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
-      window.removeEventListener('ndc-pause-all-media', handleGlobalPause);
+      window.removeEventListener('szmc-pause-all-media', handleGlobalPause);
       if (rafId !== null) {
         window.cancelAnimationFrame(rafId);
       }

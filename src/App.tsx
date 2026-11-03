@@ -16,7 +16,7 @@ import { LandingPage } from './components/LandingPage';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { ensureVouchRequestFromUrlParams } from './utils/verificationService';
 import { CursorSpotlight } from './components/motion/CinematicMotion';
-import { NDCLogo } from './components/NDCLogo';
+import { SZMCLogo } from './components/SZMCLogo';
 import { OutstandingLoadingScreen } from './components/OutstandingLoadingScreen';
 
 // Code-split dynamic views for instant snappy initial page load
@@ -504,7 +504,7 @@ function AlumniAppContent() {
               <div className="w-full flex items-center justify-center gap-3 sm:gap-4 max-w-xl mb-3">
                 <div className="h-px flex-1 bg-gradient-to-r from-transparent via-amber-300/40 dark:via-amber-400/30 to-amber-400/70" />
                 <div className="w-8 h-8 rounded-xl bg-amber-500/10 dark:bg-amber-400/15 border border-amber-400/30 p-1 flex items-center justify-center shadow-xs">
-                  <NDCLogo className="w-full h-full" />
+                  <SZMCLogo className="w-full h-full" />
                 </div>
                 <div className="h-px flex-1 bg-gradient-to-l from-transparent via-amber-300/40 dark:via-amber-400/30 to-amber-400/70" />
               </div>

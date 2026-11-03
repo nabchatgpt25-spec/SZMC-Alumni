@@ -21,7 +21,7 @@ import {
   ChevronRight,
   MessageSquare
 } from 'lucide-react';
-import { NDCLogo } from './NDCLogo';
+import { SZMCLogo } from './SZMCLogo';
 import { BATCH_LIST, ALUMNI_PROFILES, loadStoredAlumniProfiles } from '../data/mockData';
 import { AlumniProfile, BatchSummary } from '../types';
 
@@ -163,7 +163,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
             onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
           >
             <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-white dark:bg-slate-800 p-1 border border-slate-200/90 dark:border-slate-700/90 flex items-center justify-center shadow-md shadow-blue-900/5 group-hover:scale-105 transition-transform overflow-hidden shrink-0">
-              <NDCLogo className="w-full h-full" />
+              <SZMCLogo className="w-full h-full" />
             </div>
             <div className="min-w-0">
               <div className="font-extrabold text-xs sm:text-[15px] tracking-tight text-slate-900 dark:text-white leading-tight font-serif">
@@ -305,7 +305,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
             {/* Left: Brand Identity */}
             <div className="flex items-center gap-3">
               <div className="w-8 h-8 rounded-lg bg-white dark:bg-slate-800 p-0.5 border border-slate-200/80 dark:border-slate-700/80 flex items-center justify-center overflow-hidden shrink-0 shadow-xs">
-                <NDCLogo className="w-full h-full" />
+                <SZMCLogo className="w-full h-full" />
               </div>
               <div>
                 <div className="font-bold text-sm tracking-tight text-slate-900 dark:text-white">

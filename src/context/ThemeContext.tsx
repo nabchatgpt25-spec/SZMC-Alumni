@@ -16,8 +16,8 @@ interface ThemeContextType {
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
-const THEME_STORAGE_KEY = 'ndc_alumni_theme_v2';
-const LEGACY_STORAGE_KEY = 'ndc_alumni_theme';
+const THEME_STORAGE_KEY = 'szmc_alumni_theme_v2';
+const LEGACY_STORAGE_KEY = 'szmc_alumni_theme';
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [themeId, setThemeId] = useState<ThemeId>(() => {
@@ -26,7 +26,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       if (stored === 'dark' || stored === 'midnight' || stored === 'cyber-neon' || stored === 'royal-prestige' || stored === 'crimson-pulse') {
         return 'dark';
       }
-      if (stored === 'light' || stored === 'ndc-blue' || stored === 'ocean-teal' || stored === 'nordic-glacier' || stored === 'vintage-parchment') {
+      if (stored === 'light' || stored === 'szmc-blue' || stored === 'ocean-teal' || stored === 'nordic-glacier' || stored === 'vintage-parchment') {
         return 'light';
       }
 

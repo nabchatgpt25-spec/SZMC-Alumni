@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import { AlumniProfile } from '../../types';
 import { AnimatedCounter } from './AnimatedCounter';
-import { NDCLogo } from '../NDCLogo';
+import { SZMCLogo } from '../SZMCLogo';
 import { useSiteConfig } from '../../services/siteConfigService';
 
 interface HeroSectionProps {
@@ -67,7 +67,7 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
           className="flex justify-center mb-4 sm:mb-5"
         >
           <div className="w-20 h-20 sm:w-24 sm:h-24 md:w-28 md:h-28 p-2 rounded-2xl bg-white/95 dark:bg-slate-800/95 backdrop-blur-md border border-white/30 dark:border-slate-700 shadow-2xl shadow-black/40 flex items-center justify-center">
-            <NDCLogo className="w-full h-full object-contain" />
+            <SZMCLogo className="w-full h-full object-contain" />
           </div>
         </motion.div>
 
@@ -83,7 +83,7 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
           }`}
         >
           <div className="w-4 h-4 rounded-full overflow-hidden shrink-0 flex items-center justify-center">
-            <NDCLogo className="w-full h-full object-contain" />
+            <SZMCLogo className="w-full h-full object-contain" />
           </div>
           <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0 inline-block animate-pulse" />
           <span className="text-[11px] sm:text-xs font-semibold tracking-tight">

@@ -1,3 +1,5 @@
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
+
 export interface SmallAdminPermissions {
   canVerifyAlumni: boolean;
   canDeletePosts: boolean;
@@ -19,6 +21,7 @@ export interface SmallAdminUser {
 }
 
 const STORAGE_KEY = 'portal_small_admins_list';
+const SUPABASE_SETTING_KEY = 'portal_small_admins';
 
 const DEFAULT_SMALL_ADMINS: SmallAdminUser[] = [
   {
@@ -55,9 +58,57 @@ const DEFAULT_SMALL_ADMINS: SmallAdminUser[] = [
   },
 ];
 
+let hydratedFromSupabase = false;
+
+async function syncSmallAdminsToSupabase(list: SmallAdminUser[]): Promise<void> {
+  if (!isSupabaseConfigured) return;
+  try {
+    await supabase.from('site_settings').upsert(
+      {
+        key: SUPABASE_SETTING_KEY,
+        value: {
+          admins: list,
+          updated_at: new Date().toISOString(),
+        },
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'key' }
+    );
+  } catch (err) {
+    console.warn('Failed to persist Sub-Admins list to Supabase site_settings:', err);
+  }
+}
+
+export async function fetchSmallAdminsFromSupabase(): Promise<SmallAdminUser[]> {
+  if (!isSupabaseConfigured) return getSmallAdminsList();
+  try {
+    const { data, error } = await supabase
+      .from('site_settings')
+      .select('value')
+      .eq('key', SUPABASE_SETTING_KEY)
+      .maybeSingle();
+
+    if (!error && data?.value && Array.isArray((data.value as any).admins)) {
+      const remoteList = (data.value as any).admins as SmallAdminUser[];
+      if (typeof window !== 'undefined') {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(remoteList));
+      }
+      hydratedFromSupabase = true;
+      return remoteList;
+    }
+  } catch (err) {
+    console.warn('Failed to fetch Sub-Admins from Supabase:', err);
+  }
+  return getSmallAdminsList();
+}
+
 export function getSmallAdminsList(): SmallAdminUser[] {
   try {
     if (typeof window === 'undefined') return DEFAULT_SMALL_ADMINS;
+    if (!hydratedFromSupabase && isSupabaseConfigured) {
+      hydratedFromSupabase = true;
+      void fetchSmallAdminsFromSupabase();
+    }
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(DEFAULT_SMALL_ADMINS));
@@ -82,6 +133,14 @@ export function appointSmallAdmin(admin: Omit<SmallAdminUser, 'id' | 'appointedA
   if (typeof window !== 'undefined') {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
   }
+  void syncSmallAdminsToSupabase(updated);
+  if (isSupabaseConfigured && admin.email?.trim()) {
+    void supabase
+      .from('alumni_profiles')
+      .update({ role: 'moderator' })
+      .ilike('full_name', `%${admin.fullName.split('(')[0].trim()}%`)
+      .then(() => {});
+  }
   return newAdmin;
 }
 
@@ -91,6 +150,7 @@ export function toggleSmallAdminStatus(id: string): boolean {
   if (typeof window !== 'undefined') {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
   }
+  void syncSmallAdminsToSupabase(updated);
   return true;
 }
 
@@ -100,5 +160,7 @@ export function removeSmallAdmin(id: string): boolean {
   if (typeof window !== 'undefined') {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
   }
+  void syncSmallAdminsToSupabase(updated);
   return true;
 }
+

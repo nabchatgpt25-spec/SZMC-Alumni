@@ -16,8 +16,8 @@ import {
   submitAdminDocSubmissionInDb,
 } from '../services/supabaseService';
 
-export const VOUCH_STORAGE_KEY = 'ndc_vouch_requests';
-export const ADMIN_DOCS_STORAGE_KEY = 'ndc_admin_doc_submissions';
+export const VOUCH_STORAGE_KEY = 'szmc_vouch_requests';
+export const ADMIN_DOCS_STORAGE_KEY = 'szmc_admin_doc_submissions';
 
 export const DOC_TYPE_LABELS: Record<VerificationDocType, string> = {
   id_card: 'SZMC Student Card / BMDC Certificate',
@@ -105,7 +105,7 @@ export const saveVouchRequests = (requests: VouchRequest[]) => {
   if (typeof window === 'undefined') return;
   try {
     localStorage.setItem(VOUCH_STORAGE_KEY, JSON.stringify(requests));
-    window.dispatchEvent(new CustomEvent('ndc_vouch_requests_updated'));
+    window.dispatchEvent(new CustomEvent('szmc_vouch_requests_updated'));
     window.dispatchEvent(new Event('storage'));
   } catch (e) {
     console.warn('Failed to save vouch requests to storage', e);
@@ -138,7 +138,7 @@ export const saveAdminDocSubmissions = (submissions: AdminDocSubmission[]) => {
   if (typeof window === 'undefined') return;
   try {
     localStorage.setItem(ADMIN_DOCS_STORAGE_KEY, JSON.stringify(submissions));
-    window.dispatchEvent(new CustomEvent('ndc_admin_docs_updated'));
+    window.dispatchEvent(new CustomEvent('szmc_admin_docs_updated'));
     window.dispatchEvent(new Event('storage'));
   } catch (e) {
     console.warn('Failed to save admin document submissions', e);
@@ -169,7 +169,7 @@ const syncProfileVerificationInStorage = (
     }
 
     // 2. Update registered accounts list
-    const rawAccounts = localStorage.getItem('ndc_registered_accounts');
+    const rawAccounts = localStorage.getItem('szmc_registered_accounts');
     if (rawAccounts) {
       const accounts = JSON.parse(rawAccounts);
       if (Array.isArray(accounts)) {
@@ -178,19 +178,19 @@ const syncProfileVerificationInStorage = (
             ? { ...acc, profile: { ...acc.profile, ...updates } }
             : acc
         );
-        localStorage.setItem('ndc_registered_accounts', JSON.stringify(updatedAccounts));
+        localStorage.setItem('szmc_registered_accounts', JSON.stringify(updatedAccounts));
       }
     }
 
     // 3. If this matches the currently logged in user in localStorage, update it and dispatch event
-    const rawCurrent = localStorage.getItem('ndc_alumni_current_user');
+    const rawCurrent = localStorage.getItem('szmc_alumni_current_user');
     if (rawCurrent) {
       const parsedCurrent = JSON.parse(rawCurrent);
       if (parsedCurrent && (parsedCurrent.id === userId || parsedCurrent.userId === userId)) {
         const merged = { ...parsedCurrent, ...updates };
-        localStorage.setItem('ndc_alumni_current_user', JSON.stringify(merged));
+        localStorage.setItem('szmc_alumni_current_user', JSON.stringify(merged));
         window.dispatchEvent(
-          new CustomEvent('ndc_current_user_updated', { detail: merged })
+          new CustomEvent('szmc_current_user_updated', { detail: merged })
         );
       }
     }
@@ -607,7 +607,7 @@ export const ensureVouchRequestFromUrlParams = (params?: {
     status: 'pending',
     targetVouches: 2,
     vouches: [],
-    message: `Shared verification link from ${(resolvedParams.name || 'Alumnus').trim()} (Roll: ${cleanRoll || 'NDC'}, Batch ${batchNum}). Please vouch if you recognize this classmate!`,
+    message: `Shared verification link from ${(resolvedParams.name || 'Alumnus').trim()} (Roll: ${cleanRoll || 'SZMC'}, Batch ${batchNum}). Please vouch if you recognize this classmate!`,
   };
   requests.unshift(created);
   saveVouchRequests(requests);

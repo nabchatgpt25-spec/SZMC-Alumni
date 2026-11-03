@@ -16,7 +16,7 @@ import {
   registerUserVouchRequest,
   submitDocumentForAdminReview,
 } from '../utils/verificationService';
-import campusHeroImg from '../assets/images/ndc_campus_hero_1790233370828.jpg';
+import campusHeroImg from '../assets/images/szmc_campus_hero.jpg';
 import { formatToE164Phone, normalizePhoneNumber } from '../utils/phone';
 import { isInstantAutoVerificationActive } from '../services/siteConfigService';
 
@@ -364,8 +364,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setCurrentUser(customEvent.detail);
       }
     };
-    window.addEventListener('ndc_current_user_updated', handleAdminUserUpdate);
-    return () => window.removeEventListener('ndc_current_user_updated', handleAdminUserUpdate);
+    window.addEventListener('szmc_current_user_updated', handleAdminUserUpdate);
+    return () => window.removeEventListener('szmc_current_user_updated', handleAdminUserUpdate);
   }, [currentUser.id]);
 
   const getAuthHeaders = async (): Promise<Record<string, string>> => {
@@ -950,12 +950,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 academic_group: null,
                 section: profile.section,
                 college_roll: profile.collegeRoll,
-                verification_status: isAutoActive ? 'verified' : 'unverified',
-                verification_method: isAutoActive ? 'admin_instant' : 'two_vouches',
-                vouches_count: isAutoActive ? 2 : 0,
-                vouch_target_count: 2,
-                verified_at: isAutoActive ? new Date().toISOString() : null,
-                badges: isAutoActive ? ['Verified SZMC Doctor', 'SZMCian'] : ['SZMCian'],
                 profession: profile.profession,
                 position: profile.position,
                 institution: profile.institution,
@@ -964,6 +958,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 email: profile.email,
                 phone: profile.phone,
                 whatsapp: profile.whatsapp,
+                is_public: true,
               },
               { onConflict: 'auth_user_id' }
             )
@@ -973,6 +968,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           if (upsertedRow?.id) {
             profile.id = Number(upsertedRow.id);
             profile.userId = Number(upsertedRow.id);
+            try {
+              await supabase
+                .from('alumni_profiles')
+                .update({
+                  verification_status: isAutoActive ? 'verified' : 'unverified',
+                  verification_method: isAutoActive ? 'admin_instant' : 'two_vouches',
+                  verified_at: isAutoActive ? new Date().toISOString() : null,
+                  badges: isAutoActive ? ['Verified SZMC Doctor', 'SZMCian'] : ['SZMCian'],
+                })
+                .eq('id', upsertedRow.id);
+            } catch {}
           }
           if (upsertErr) {
             console.warn('Note on direct alumni_profiles insert:', upsertErr);
@@ -1026,8 +1032,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         if (cleanPhone !== undefined) {
           updatePayload.phone = cleanPhone;
-          // Protect against identifier hijacking: changing phone clears verification
-          updatePayload.phone_ownership_verified = false;
         }
 
         const { error: updateErr } = await supabase
