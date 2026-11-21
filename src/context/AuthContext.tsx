@@ -66,9 +66,23 @@ function saveDirectAuthUser(profile: AlumniProfile) {
   }
 }
 
+function getDirectAuthToken(): string | null {
+  try {
+    if (typeof window !== 'undefined') {
+      const token = localStorage.getItem('szmc_direct_auth_token');
+      return token && token.trim() ? token.trim() : null;
+    }
+  } catch {}
+  return null;
+}
+
 function getDirectAuthUser(): AlumniProfile | null {
   try {
     if (typeof window !== 'undefined') {
+      // Never restore an unauthenticated cached profile unless a server-issued token exists
+      if (!getDirectAuthToken()) {
+        return null;
+      }
       const stored = localStorage.getItem(DIRECT_AUTH_STORAGE_KEY);
       if (stored) {
         return JSON.parse(stored) as AlumniProfile;
@@ -116,13 +130,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Synchronously restore direct authenticated alumni from localStorage so there is zero logout on page refresh
   const initialDirectUser = getDirectAuthUser();
 
-  const [isAdminUser, setIsAdminUser] = useState<boolean>(() => {
-    if (!initialDirectUser) return false;
-    return (
-      initialDirectUser.role === 'admin' ||
-      cleanEmailMatchAdmin(initialDirectUser.email)
-    );
-  });
+  // Never grant client-side admin UI solely from unverified localStorage on boot
+  const [isAdminUser, setIsAdminUser] = useState<boolean>(false);
 
   const [isAuthInitializing, setIsAuthInitializing] = useState(!initialDirectUser);
   const [authInitializationError, setAuthInitializationError] = useState<string | null>(null);
@@ -134,7 +143,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const [currentUser, setCurrentUser] = useState<AlumniProfile>(() => initialDirectUser || DEFAULT_BLANK_USER);
 
-  // Restore session; if email confirmation is disabled/bypassed, direct authenticated user is restored.
+  // Restore session; if a server-issued direct token exists without a Supabase session, verify it against the backend.
   useEffect(() => {
     let active = true;
     let authEventReceived = false;
@@ -143,30 +152,35 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!active || requestId !== authResolutionIdRef.current) return;
 
       if (!session?.user) {
-        const directUser = getDirectAuthUser();
-        if (directUser) {
-          const cleanEmail = directUser.email?.toLowerCase().trim();
-          const isSuperAdmin =
-            cleanEmail === 'nurulanambashir25@gmail.com' ||
-            cleanEmail === 'nurulanambashir20@gmail.com' ||
-            cleanEmail === 'admin@szmcalumni.net' ||
-            cleanEmail === 'firstaidnetworkbd@gmail.com' ||
-            directUser.role === 'admin' ||
-            SUPER_ADMIN_EMAILS.some((e) => e.toLowerCase() === cleanEmail);
+        const directToken = getDirectAuthToken();
+        const directUser = directToken ? getDirectAuthUser() : null;
+        if (directUser && directToken) {
+          let verifiedAdmin = false;
+          try {
+            const verifyRes = await fetch('/api/admin/verify-access', {
+              headers: { Authorization: `Bearer ${directToken}` },
+            });
+            verifiedAdmin = verifyRes.ok;
+          } catch {
+            verifiedAdmin = false;
+          }
+          if (!active || requestId !== authResolutionIdRef.current) return;
 
           resolvedAuthUserIdRef.current = directUser.authUserId || String(directUser.id);
           const effectiveProfile: AlumniProfile = {
             ...directUser,
-            role: isSuperAdmin ? 'admin' : (directUser.role || 'member'),
-            verificationStatus: isSuperAdmin ? 'verified' : (directUser.verificationStatus || 'unverified'),
+            role: verifiedAdmin ? 'admin' : 'member',
+            verificationStatus: verifiedAdmin ? 'verified' : (directUser.verificationStatus || 'unverified'),
           };
           setCurrentUser(effectiveProfile);
-          setIsAdminUser(isSuperAdmin);
+          setIsAdminUser(verifiedAdmin);
           setIsLoggedIn(true);
           setAuthInitializationError(null);
           setIsAuthInitializing(false);
           return;
         }
+
+        clearDirectAuthUser();
 
         // Only log out if there is NO stored directUser either
         resolvedAuthUserIdRef.current = null;

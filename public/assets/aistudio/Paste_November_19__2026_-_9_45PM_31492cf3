@@ -1,0 +1,4746 @@
+audit_snapshot
+"{
+    ""policies"": [
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""academic_stream_groups"",
+            ""using"": ""true"",
+            ""policy"": ""Stream Groups: Public Read"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""DELETE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""academic_stream_groups"",
+            ""using"": ""is_admin()"",
+            ""policy"": ""academic_stream_groups_delete_admin"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""academic_stream_groups"",
+            ""using"": null,
+            ""policy"": ""academic_stream_groups_insert_admin"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""is_admin()""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""anon"",
+                ""authenticated""
+            ],
+            ""table"": ""academic_stream_groups"",
+            ""using"": ""(is_active = true)"",
+            ""policy"": ""academic_stream_groups_select_all"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""UPDATE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""academic_stream_groups"",
+            ""using"": ""is_admin()"",
+            ""policy"": ""academic_stream_groups_update_admin"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""is_admin()""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""admin_doc_submissions"",
+            ""using"": ""((user_id = current_profile_id()) OR is_admin_or_mod())"",
+            ""policy"": ""Doc Submissions: Read"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""DELETE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""admin_doc_submissions"",
+            ""using"": ""is_admin()"",
+            ""policy"": ""admin_doc_submissions_delete_admin"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""admin_doc_submissions"",
+            ""using"": null,
+            ""policy"": ""admin_doc_submissions_insert_owner"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""((user_id = current_profile_id()) AND (status = 'pending'::request_review_status) AND (reviewed_by IS NULL))""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""admin_doc_submissions"",
+            ""using"": ""((user_id = current_profile_id()) OR is_admin_or_mod())"",
+            ""policy"": ""admin_doc_submissions_select_owner_or_mod"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""UPDATE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""admin_doc_submissions"",
+            ""using"": ""(is_admin_or_mod() AND (user_id <> current_profile_id()))"",
+            ""policy"": ""admin_doc_submissions_update_mod_no_self_approve"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""(is_admin_or_mod() AND (user_id <> current_profile_id()))""
+        },
+        {
+            ""cmd"": ""DELETE"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""alumni_profiles"",
+            ""using"": ""(is_admin() OR (auth_user_id = auth.uid()))"",
+            ""policy"": ""Profiles: Admin Delete"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""alumni_profiles"",
+            ""using"": null,
+            ""policy"": ""Profiles: Insert"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""((auth_user_id = auth.uid()) OR (auth_user_id IS NULL) OR is_admin())""
+        },
+        {
+            ""cmd"": ""UPDATE"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""alumni_profiles"",
+            ""using"": ""((auth_user_id = auth.uid()) OR is_admin())"",
+            ""policy"": ""Profiles: Owner Update"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""((auth_user_id = auth.uid()) OR is_admin())""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""alumni_profiles"",
+            ""using"": ""((is_public = true) OR (auth.uid() IS NOT NULL))"",
+            ""policy"": ""Profiles: Public View"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""alumni_profiles"",
+            ""using"": ""((is_public = true) AND (account_status = 'active'::text))"",
+            ""policy"": ""Public can view active profiles"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""UPDATE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""alumni_profiles"",
+            ""using"": ""(auth_user_id = auth.uid())"",
+            ""policy"": ""Users can update own profile"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""DELETE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""alumni_profiles"",
+            ""using"": ""is_admin()"",
+            ""policy"": ""alumni_profiles_delete_admin"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""alumni_profiles"",
+            ""using"": null,
+            ""policy"": ""alumni_profiles_insert_own"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""((auth_user_id = auth.uid()) AND (role = 'member'::user_role) AND (verification_status = 'unverified'::verification_status))""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""alumni_profiles"",
+            ""using"": ""((is_public = true) OR (auth.uid() = auth_user_id))"",
+            ""policy"": ""alumni_profiles_public_read"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""alumni_profiles"",
+            ""using"": ""((is_public = true) OR (auth_user_id = auth.uid()) OR is_admin_or_mod())"",
+            ""policy"": ""alumni_profiles_select_authenticated"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""UPDATE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""alumni_profiles"",
+            ""using"": ""((auth_user_id = auth.uid()) OR is_admin_or_mod())"",
+            ""policy"": ""alumni_profiles_update_own_or_admin"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""((auth_user_id = auth.uid()) OR is_admin_or_mod())""
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""app_feature_flags"",
+            ""using"": null,
+            ""policy"": ""feature_flags_insert_admin"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""is_admin_or_mod()""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""anon"",
+                ""authenticated""
+            ],
+            ""table"": ""app_feature_flags"",
+            ""using"": ""true"",
+            ""policy"": ""feature_flags_select_public"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""UPDATE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""app_feature_flags"",
+            ""using"": ""is_admin_or_mod()"",
+            ""policy"": ""feature_flags_update_admin"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""is_admin_or_mod()""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""audit_logs"",
+            ""using"": ""is_admin()"",
+            ""policy"": ""Audit Logs: Admin Read"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""audit_logs"",
+            ""using"": ""is_admin()"",
+            ""policy"": ""audit_logs_select_admin_only"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""batches"",
+            ""using"": ""true"",
+            ""policy"": ""Batches: Public Read"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""DELETE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""batches"",
+            ""using"": ""is_admin()"",
+            ""policy"": ""batches_delete_admin"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""batches"",
+            ""using"": null,
+            ""policy"": ""batches_insert_admin"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""is_admin()""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""batches"",
+            ""using"": ""true"",
+            ""policy"": ""batches_public_read"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""anon"",
+                ""authenticated""
+            ],
+            ""table"": ""batches"",
+            ""using"": ""true"",
+            ""policy"": ""batches_select_all"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""UPDATE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""batches"",
+            ""using"": ""is_admin()"",
+            ""policy"": ""batches_update_admin"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""is_admin()""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""blood_donors"",
+            ""using"": ""((is_registered_donor = true) OR (user_id = current_profile_id()) OR is_admin())"",
+            ""policy"": ""Blood Donors: Read"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""DELETE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""blood_donors"",
+            ""using"": ""((user_id = current_profile_id()) OR is_admin())"",
+            ""policy"": ""blood_donors_delete_own_or_admin"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""blood_donors"",
+            ""using"": null,
+            ""policy"": ""blood_donors_insert_own"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""(user_id = current_profile_id())""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""blood_donors"",
+            ""using"": ""((is_registered_donor = true) OR (user_id = current_profile_id()) OR is_admin_or_mod())"",
+            ""policy"": ""blood_donors_select_authenticated"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""UPDATE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""blood_donors"",
+            ""using"": ""((user_id = current_profile_id()) OR is_admin())"",
+            ""policy"": ""blood_donors_update_own_or_admin"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""((user_id = current_profile_id()) OR is_admin())""
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""blood_request_responses"",
+            ""using"": null,
+            ""policy"": ""Blood Responses: Insert"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""((donor_user_id = current_profile_id()) OR is_admin())""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""blood_request_responses"",
+            ""using"": ""((donor_user_id = current_profile_id()) OR is_admin())"",
+            ""policy"": ""Blood Responses: Read"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""DELETE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""blood_request_responses"",
+            ""using"": ""((donor_user_id = current_profile_id()) OR is_admin())"",
+            ""policy"": ""blood_responses_delete_donor_or_admin"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""blood_request_responses"",
+            ""using"": null,
+            ""policy"": ""blood_responses_insert_own"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""(donor_user_id = current_profile_id())""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""blood_request_responses"",
+            ""using"": ""true"",
+            ""policy"": ""blood_responses_select_authenticated"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""UPDATE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""blood_request_responses"",
+            ""using"": ""((donor_user_id = current_profile_id()) OR is_admin_or_mod() OR (EXISTS ( SELECT 1\n   FROM blood_requests br\n  WHERE ((br.id = blood_request_responses.request_id) AND (br.requester_id = current_profile_id())))))"",
+            ""policy"": ""blood_responses_update_donor_requester_or_mod"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""((donor_user_id = current_profile_id()) OR is_admin_or_mod() OR (EXISTS ( SELECT 1\n   FROM blood_requests br\n  WHERE ((br.id = blood_request_responses.request_id) AND (br.requester_id = current_profile_id())))))""
+        },
+        {
+            ""cmd"": ""UPDATE"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""blood_requests"",
+            ""using"": ""((requester_id = current_profile_id()) OR is_admin_or_mod())"",
+            ""policy"": ""Blood Requests: Author Or Admin Update"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""((requester_id = current_profile_id()) OR is_admin_or_mod())""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""blood_requests"",
+            ""using"": ""true"",
+            ""policy"": ""Blood Requests: Public Read"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""anon"",
+                ""authenticated""
+            ],
+            ""table"": ""blood_requests"",
+            ""using"": ""true"",
+            ""policy"": ""Blood Requests: Read Active"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""blood_requests"",
+            ""using"": ""true"",
+            ""policy"": ""Public view blood requests"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""DELETE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""blood_requests"",
+            ""using"": ""((requester_id = current_profile_id()) OR is_admin_or_mod())"",
+            ""policy"": ""blood_requests_delete_requester_or_mod"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""blood_requests"",
+            ""using"": null,
+            ""policy"": ""blood_requests_insert_own"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""(requester_id = current_profile_id())""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""blood_requests"",
+            ""using"": ""true"",
+            ""policy"": ""blood_requests_public_read"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""blood_requests"",
+            ""using"": ""true"",
+            ""policy"": ""blood_requests_select_authenticated"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""UPDATE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""blood_requests"",
+            ""using"": ""((requester_id = current_profile_id()) OR is_admin_or_mod())"",
+            ""policy"": ""blood_requests_update_requester_or_mod"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""((requester_id = current_profile_id()) OR is_admin_or_mod())""
+        },
+        {
+            ""cmd"": ""ALL"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""career_opportunities"",
+            ""using"": ""is_admin_or_mod()"",
+            ""policy"": ""career_opportunities_admin_write"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""is_admin_or_mod()""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""career_opportunities"",
+            ""using"": ""true"",
+            ""policy"": ""career_opportunities_read"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""ALL"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""connections"",
+            ""using"": ""is_admin_or_mod()"",
+            ""policy"": ""connections_admin_only"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""is_admin_or_mod()""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""contact_inquiries"",
+            ""using"": ""((sender_profile_id = current_profile_id()) OR is_admin())"",
+            ""policy"": ""Inquiries: Admin Or Sender Read"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""UPDATE"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""contact_inquiries"",
+            ""using"": ""is_admin()"",
+            ""policy"": ""Inquiries: Admin Update"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""is_admin()""
+        },
+        {
+            ""cmd"": ""DELETE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""contact_inquiries"",
+            ""using"": ""is_admin()"",
+            ""policy"": ""contact_inquiries_delete_admin"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""anon""
+            ],
+            ""table"": ""contact_inquiries"",
+            ""using"": null,
+            ""policy"": ""contact_inquiries_insert_anon"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""(((status)::text = 'new'::text) AND (handled_by IS NULL) AND (admin_notes IS NULL) AND (sender_profile_id IS NULL))""
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""contact_inquiries"",
+            ""using"": null,
+            ""policy"": ""contact_inquiries_insert_authenticated"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""(((status)::text = 'new'::text) AND (handled_by IS NULL) AND (admin_notes IS NULL) AND ((sender_profile_id IS NULL) OR (sender_profile_id = current_profile_id())))""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""contact_inquiries"",
+            ""using"": ""((sender_profile_id = current_profile_id()) OR is_admin_or_mod())"",
+            ""policy"": ""contact_inquiries_select_own_or_mod"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""UPDATE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""contact_inquiries"",
+            ""using"": ""is_admin_or_mod()"",
+            ""policy"": ""contact_inquiries_update_mod"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""is_admin_or_mod()""
+        },
+        {
+            ""cmd"": ""DELETE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""conversation_participants"",
+            ""using"": ""((profile_id = get_current_profile_id()) OR is_current_user_super_admin())"",
+            ""policy"": ""participants_delete_own"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""conversation_participants"",
+            ""using"": null,
+            ""policy"": ""participants_insert_own"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""((profile_id = get_current_profile_id()) OR (EXISTS ( SELECT 1\n   FROM conversations c\n  WHERE ((c.id = conversation_participants.conversation_id) AND (c.created_by = get_current_profile_id())))) OR is_current_user_super_admin())""
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""conversation_participants"",
+            ""using"": null,
+            ""policy"": ""participants_insert_participant"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""((profile_id = get_current_profile_id()) OR is_conversation_participant(conversation_id) OR (EXISTS ( SELECT 1\n   FROM conversations c\n  WHERE ((c.id = conversation_participants.conversation_id) AND (c.created_by = get_current_profile_id())))) OR is_current_user_super_admin())""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""conversation_participants"",
+            ""using"": ""((profile_id = ( SELECT profiles.id\n   FROM profiles\n  WHERE (profiles.user_id = auth.uid())\n LIMIT 1)) OR is_conversation_participant(conversation_id))"",
+            ""policy"": ""participants_select_in_conversation"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""UPDATE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""conversation_participants"",
+            ""using"": ""(profile_id = get_current_profile_id())"",
+            ""policy"": ""participants_update_own"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""conversations"",
+            ""using"": ""(EXISTS ( SELECT 1\n   FROM (conversation_participants cp\n     JOIN profiles p ON ((p.id = cp.profile_id)))\n  WHERE ((cp.conversation_id = conversations.id) AND (p.user_id = auth.uid()))))"",
+            ""policy"": ""Participants can view conversations"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""conversations"",
+            ""using"": null,
+            ""policy"": ""conversations_insert_authenticated"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""((created_by = get_current_profile_id()) OR is_current_user_super_admin())""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""conversations"",
+            ""using"": ""((created_by = ( SELECT profiles.id\n   FROM profiles\n  WHERE (profiles.user_id = auth.uid())\n LIMIT 1)) OR is_conversation_participant(id))"",
+            ""policy"": ""conversations_select_participant"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""featured_alumni"",
+            ""using"": ""true"",
+            ""policy"": ""Featured Alumni: Public Read"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""ALL"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""featured_alumni"",
+            ""using"": ""is_admin()"",
+            ""policy"": ""featured_alumni_admin_write"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""is_admin()""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""gallery_albums"",
+            ""using"": ""((is_published = true) OR is_admin())"",
+            ""policy"": ""Albums: Public Read"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""anon"",
+                ""authenticated""
+            ],
+            ""table"": ""gallery_albums"",
+            ""using"": ""true"",
+            ""policy"": ""Gallery: Read All"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""DELETE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""gallery_albums"",
+            ""using"": ""is_admin_or_mod()"",
+            ""policy"": ""gallery_albums_delete_mod"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""gallery_albums"",
+            ""using"": null,
+            ""policy"": ""gallery_albums_insert_verified_or_mod"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""((created_by_id = current_profile_id()) AND (is_verified_alumnus() OR is_admin_or_mod()))""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""gallery_albums"",
+            ""using"": ""true"",
+            ""policy"": ""gallery_albums_public_read"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""anon""
+            ],
+            ""table"": ""gallery_albums"",
+            ""using"": ""(is_published = true)"",
+            ""policy"": ""gallery_albums_select_anon"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""gallery_albums"",
+            ""using"": ""((is_published = true) OR (created_by_id = current_profile_id()) OR is_admin_or_mod())"",
+            ""policy"": ""gallery_albums_select_authenticated"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""UPDATE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""gallery_albums"",
+            ""using"": ""((created_by_id = current_profile_id()) OR is_admin_or_mod())"",
+            ""policy"": ""gallery_albums_update_creator_or_mod"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""((created_by_id = current_profile_id()) OR is_admin_or_mod())""
+        },
+        {
+            ""cmd"": ""DELETE"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""gallery_photos"",
+            ""using"": ""((uploader_id = current_profile_id()) OR is_admin())"",
+            ""policy"": ""Photos: Admin Delete"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""gallery_photos"",
+            ""using"": ""((is_approved = true) OR (uploader_id = current_profile_id()) OR is_admin())"",
+            ""policy"": ""Photos: Public Read"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""DELETE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""gallery_photos"",
+            ""using"": ""((uploader_id = current_profile_id()) OR is_admin_or_mod())"",
+            ""policy"": ""gallery_photos_delete_uploader_or_mod"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""gallery_photos"",
+            ""using"": null,
+            ""policy"": ""gallery_photos_insert_own"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""((uploader_id = current_profile_id()) AND (is_verified_alumnus() OR is_admin_or_mod()))""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""gallery_photos"",
+            ""using"": ""true"",
+            ""policy"": ""gallery_photos_public_read"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""anon""
+            ],
+            ""table"": ""gallery_photos"",
+            ""using"": ""(is_approved = true)"",
+            ""policy"": ""gallery_photos_select_anon"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""gallery_photos"",
+            ""using"": ""((is_approved = true) OR (uploader_id = current_profile_id()) OR is_admin_or_mod())"",
+            ""policy"": ""gallery_photos_select_authenticated"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""UPDATE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""gallery_photos"",
+            ""using"": ""((uploader_id = current_profile_id()) OR is_admin_or_mod())"",
+            ""policy"": ""gallery_photos_update_uploader_or_mod"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""((uploader_id = current_profile_id()) OR is_admin_or_mod())""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""hall_of_fame"",
+            ""using"": ""true"",
+            ""policy"": ""Hall of Fame: Public Read"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""ALL"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""hall_of_fame"",
+            ""using"": ""is_admin()"",
+            ""policy"": ""hall_of_fame_admin_write"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""is_admin()""
+        },
+        {
+            ""cmd"": ""ALL"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""mentor_offers"",
+            ""using"": ""is_admin_or_mod()"",
+            ""policy"": ""mentor_offers_admin_write"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""is_admin_or_mod()""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""mentor_offers"",
+            ""using"": ""true"",
+            ""policy"": ""mentor_offers_read"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""ALL"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""mentorship_requests"",
+            ""using"": ""is_admin_or_mod()"",
+            ""policy"": ""mentorship_requests_admin_write"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""is_admin_or_mod()""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""mentorship_requests"",
+            ""using"": ""true"",
+            ""policy"": ""mentorship_requests_read"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""messages"",
+            ""using"": null,
+            ""policy"": ""Participants can send messages"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""(EXISTS ( SELECT 1\n   FROM (conversation_participants cp\n     JOIN profiles p ON ((p.id = cp.profile_id)))\n  WHERE ((cp.conversation_id = messages.conversation_id) AND (p.user_id = auth.uid()))))""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""messages"",
+            ""using"": ""(EXISTS ( SELECT 1\n   FROM (conversation_participants cp\n     JOIN profiles p ON ((p.id = cp.profile_id)))\n  WHERE ((cp.conversation_id = messages.conversation_id) AND (p.user_id = auth.uid()))))"",
+            ""policy"": ""Participants can view messages"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""messages"",
+            ""using"": null,
+            ""policy"": ""messages_insert_sender"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""((sender_id = get_current_profile_id()) AND is_conversation_participant(conversation_id))""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""messages"",
+            ""using"": ""((EXISTS ( SELECT 1\n   FROM conversation_participants cp\n  WHERE ((cp.conversation_id = messages.conversation_id) AND (cp.profile_id = get_current_profile_id())))) OR is_current_user_super_admin())"",
+            ""policy"": ""messages_select_in_conversation"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""messages"",
+            ""using"": ""is_conversation_participant(conversation_id)"",
+            ""policy"": ""messages_select_participant"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""UPDATE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""messages"",
+            ""using"": ""((sender_id = get_current_profile_id()) AND (deleted_at IS NULL))"",
+            ""policy"": ""messages_update_sender"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""(sender_id = get_current_profile_id())""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""notifications"",
+            ""using"": ""(recipient_id = current_profile_id())"",
+            ""policy"": ""Notifications: Owner Read"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""UPDATE"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""notifications"",
+            ""using"": ""(recipient_id = current_profile_id())"",
+            ""policy"": ""Notifications: Owner Update"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""(recipient_id = current_profile_id())""
+        },
+        {
+            ""cmd"": ""DELETE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""notifications"",
+            ""using"": ""((recipient_id = current_profile_id()) OR is_admin())"",
+            ""policy"": ""notifications_delete_recipient_or_admin"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""notifications"",
+            ""using"": null,
+            ""policy"": ""notifications_insert_admin_only"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""is_admin_or_mod()""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""notifications"",
+            ""using"": ""(recipient_id = current_profile_id())"",
+            ""policy"": ""notifications_select_recipient"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""UPDATE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""notifications"",
+            ""using"": ""(recipient_id = current_profile_id())"",
+            ""policy"": ""notifications_update_recipient_read_state"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""(recipient_id = current_profile_id())""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""anon"",
+                ""authenticated""
+            ],
+            ""table"": ""official_notices"",
+            ""using"": ""((is_published = true) OR ((auth.uid() IS NOT NULL) AND is_admin_or_mod()))"",
+            ""policy"": ""Notices: Public Read"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""DELETE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""official_notices"",
+            ""using"": ""is_admin()"",
+            ""policy"": ""official_notices_delete_admin"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""official_notices"",
+            ""using"": null,
+            ""policy"": ""official_notices_insert_admin"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""is_admin()""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""official_notices"",
+            ""using"": ""true"",
+            ""policy"": ""official_notices_public_read"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""anon""
+            ],
+            ""table"": ""official_notices"",
+            ""using"": ""(is_published = true)"",
+            ""policy"": ""official_notices_select_anon"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""official_notices"",
+            ""using"": ""((is_published = true) OR is_admin_or_mod())"",
+            ""policy"": ""official_notices_select_authenticated"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""UPDATE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""official_notices"",
+            ""using"": ""is_admin()"",
+            ""policy"": ""official_notices_update_admin"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""is_admin()""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""peer_vouches"",
+            ""using"": ""((requester_id = current_profile_id()) OR (voucher_id = current_profile_id()) OR is_admin_or_mod())"",
+            ""policy"": ""Peer Vouches: Read"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""DELETE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""peer_vouches"",
+            ""using"": ""is_admin()"",
+            ""policy"": ""peer_vouches_delete_admin"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""peer_vouches"",
+            ""using"": null,
+            ""policy"": ""peer_vouches_insert_verified_peer"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""((voucher_id = current_profile_id()) AND (voucher_id <> requester_id) AND is_verified_alumnus())""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""peer_vouches"",
+            ""using"": ""((requester_id = current_profile_id()) OR (voucher_id = current_profile_id()) OR is_admin_or_mod() OR (is_verified_alumnus() AND (voucher_batch = current_user_batch_year())))"",
+            ""policy"": ""peer_vouches_select_authorized"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""post_comments"",
+            ""using"": null,
+            ""policy"": ""Comments: Authenticated Insert"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""((user_id = current_profile_id()) OR is_admin())""
+        },
+        {
+            ""cmd"": ""DELETE"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""post_comments"",
+            ""using"": ""((user_id = current_profile_id()) OR is_admin())"",
+            ""policy"": ""Comments: Author Or Admin Delete"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""post_comments"",
+            ""using"": ""((is_deleted = false) OR (user_id = current_profile_id()) OR is_admin())"",
+            ""policy"": ""Comments: Public Read"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""anon"",
+                ""authenticated""
+            ],
+            ""table"": ""post_comments"",
+            ""using"": ""(is_deleted = false)"",
+            ""policy"": ""comments_select"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""DELETE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""post_comments"",
+            ""using"": ""((user_id = current_profile_id()) OR is_admin_or_mod() OR (EXISTS ( SELECT 1\n   FROM posts p\n  WHERE ((p.id = post_comments.post_id) AND (p.author_id = current_profile_id())))))"",
+            ""policy"": ""post_comments_delete_own_or_mod"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""post_comments"",
+            ""using"": null,
+            ""policy"": ""post_comments_insert_own"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""((user_id = current_profile_id()) AND (is_deleted = false))""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""anon"",
+                ""authenticated""
+            ],
+            ""table"": ""post_comments"",
+            ""using"": ""((is_deleted = false) OR ((auth.uid() IS NOT NULL) AND ((user_id = current_profile_id()) OR is_admin_or_mod())))"",
+            ""policy"": ""post_comments_select_visible"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""UPDATE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""post_comments"",
+            ""using"": ""((user_id = current_profile_id()) OR is_admin_or_mod())"",
+            ""policy"": ""post_comments_update_own_or_mod"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""((user_id = current_profile_id()) OR is_admin_or_mod())""
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""post_likes"",
+            ""using"": null,
+            ""policy"": ""Likes: Authenticated Insert"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""((user_id = current_profile_id()) OR is_admin())""
+        },
+        {
+            ""cmd"": ""DELETE"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""post_likes"",
+            ""using"": ""((user_id = current_profile_id()) OR is_admin())"",
+            ""policy"": ""Likes: Author Delete"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""post_likes"",
+            ""using"": ""true"",
+            ""policy"": ""Likes: Public Read"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""anon"",
+                ""authenticated""
+            ],
+            ""table"": ""post_likes"",
+            ""using"": ""true"",
+            ""policy"": ""likes_select"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""DELETE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""post_likes"",
+            ""using"": ""(user_id = current_profile_id())"",
+            ""policy"": ""post_likes_delete_own"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""post_likes"",
+            ""using"": null,
+            ""policy"": ""post_likes_insert_own"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""(user_id = current_profile_id())""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""post_likes"",
+            ""using"": ""true"",
+            ""policy"": ""post_likes_select_authenticated"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""posts"",
+            ""using"": null,
+            ""policy"": ""Authenticated can create posts"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""true""
+        },
+        {
+            ""cmd"": ""UPDATE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""posts"",
+            ""using"": ""(author_id = ( SELECT alumni_profiles.id\n   FROM alumni_profiles\n  WHERE (alumni_profiles.auth_user_id = auth.uid())))"",
+            ""policy"": ""Authors can update their own posts"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""DELETE"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""posts"",
+            ""using"": ""((author_id = current_profile_id()) OR is_admin())"",
+            ""policy"": ""Posts: Author Or Admin Delete"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""UPDATE"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""posts"",
+            ""using"": ""((author_id = current_profile_id()) OR is_admin())"",
+            ""policy"": ""Posts: Author Or Admin Update"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""((author_id = current_profile_id()) OR is_admin())""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""posts"",
+            ""using"": ""((is_deleted = false) OR (author_id = current_profile_id()) OR is_admin())"",
+            ""policy"": ""Posts: Public Read"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""posts"",
+            ""using"": ""(is_deleted = false)"",
+            ""policy"": ""Public can view active posts"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""posts"",
+            ""using"": null,
+            ""policy"": ""Users can create posts"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""(author_id = ( SELECT ap.id\n   FROM alumni_profiles ap\n  WHERE (ap.auth_user_id = ( SELECT auth.uid() AS uid))))""
+        },
+        {
+            ""cmd"": ""DELETE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""posts"",
+            ""using"": ""((author_id = current_profile_id()) OR (author_id IN ( SELECT alumni_profiles.id\n   FROM alumni_profiles\n  WHERE (alumni_profiles.auth_user_id = auth.uid()))) OR (EXISTS ( SELECT 1\n   FROM alumni_profiles\n  WHERE ((alumni_profiles.auth_user_id = auth.uid()) AND (alumni_profiles.role = ANY (ARRAY['admin'::user_role, 'moderator'::user_role]))))))"",
+            ""policy"": ""posts_delete_own_or_mod"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""posts"",
+            ""using"": null,
+            ""policy"": ""posts_insert_own"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""((author_id = current_profile_id()) OR (EXISTS ( SELECT 1\n   FROM alumni_profiles ap\n  WHERE ((ap.id = posts.author_id) AND (ap.auth_user_id = auth.uid())))))""
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""posts"",
+            ""using"": null,
+            ""policy"": ""posts_insert_verified_author"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""((author_id = current_profile_id()) AND (is_verified_alumnus() OR is_admin_or_mod()))""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""posts"",
+            ""using"": ""(is_deleted = false)"",
+            ""policy"": ""posts_public_read"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""anon"",
+                ""authenticated""
+            ],
+            ""table"": ""posts"",
+            ""using"": ""true"",
+            ""policy"": ""posts_select_all"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""anon"",
+                ""authenticated""
+            ],
+            ""table"": ""posts"",
+            ""using"": ""((is_deleted = false) OR (auth.uid() IS NOT NULL))"",
+            ""policy"": ""posts_select_visible"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""UPDATE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""posts"",
+            ""using"": ""((author_id = current_profile_id()) OR (author_id IN ( SELECT alumni_profiles.id\n   FROM alumni_profiles\n  WHERE (alumni_profiles.auth_user_id = auth.uid()))) OR (EXISTS ( SELECT 1\n   FROM alumni_profiles\n  WHERE ((alumni_profiles.auth_user_id = auth.uid()) AND (alumni_profiles.role = ANY (ARRAY['admin'::user_role, 'moderator'::user_role]))))))"",
+            ""policy"": ""posts_update_own_or_mod"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""profiles"",
+            ""using"": null,
+            ""policy"": ""profiles_insert_own"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""(auth.uid() = user_id)""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""profiles"",
+            ""using"": ""true"",
+            ""policy"": ""profiles_select_authenticated"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""anon"",
+                ""authenticated""
+            ],
+            ""table"": ""profiles"",
+            ""using"": ""((COALESCE(is_public, true) = true) OR (auth.uid() = user_id))"",
+            ""policy"": ""profiles_select_public"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""UPDATE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""profiles"",
+            ""using"": ""(auth.uid() = user_id)"",
+            ""policy"": ""profiles_update_own"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""(auth.uid() = user_id)""
+        },
+        {
+            ""cmd"": ""DELETE"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""saved_posts"",
+            ""using"": ""((user_id = current_profile_id()) OR is_admin())"",
+            ""policy"": ""Saved Posts: Owner Delete"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""saved_posts"",
+            ""using"": null,
+            ""policy"": ""Saved Posts: Owner Insert"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""((user_id = current_profile_id()) OR is_admin())""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""saved_posts"",
+            ""using"": ""((user_id = current_profile_id()) OR is_admin())"",
+            ""policy"": ""Saved Posts: Owner Select"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""DELETE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""saved_posts"",
+            ""using"": ""(user_id = current_profile_id())"",
+            ""policy"": ""saved_posts_delete_own"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""saved_posts"",
+            ""using"": null,
+            ""policy"": ""saved_posts_insert_own"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""(user_id = current_profile_id())""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""saved_posts"",
+            ""using"": ""(user_id = current_profile_id())"",
+            ""policy"": ""saved_posts_select_own"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""site_settings"",
+            ""using"": ""true"",
+            ""policy"": ""Site Settings: Public Read"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""ALL"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""site_settings"",
+            ""using"": ""is_admin()"",
+            ""policy"": ""site_settings_admin_write"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""is_admin()""
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""user_message_settings"",
+            ""using"": null,
+            ""policy"": ""settings_insert_own"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""(profile_id = get_current_profile_id())""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""user_message_settings"",
+            ""using"": ""((profile_id = get_current_profile_id()) OR is_current_user_super_admin())"",
+            ""policy"": ""settings_select_own"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""UPDATE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""user_message_settings"",
+            ""using"": ""(profile_id = get_current_profile_id())"",
+            ""policy"": ""settings_update_own"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""user_message_settings"",
+            ""using"": null,
+            ""policy"": ""users_insert_own_message_settings"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""(profile_id IN ( SELECT ap.id\n   FROM alumni_profiles ap\n  WHERE (ap.auth_user_id = ( SELECT auth.uid() AS uid))))""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""user_message_settings"",
+            ""using"": ""(profile_id IN ( SELECT ap.id\n   FROM alumni_profiles ap\n  WHERE (ap.auth_user_id = ( SELECT auth.uid() AS uid))))"",
+            ""policy"": ""users_read_own_message_settings"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""UPDATE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""user_message_settings"",
+            ""using"": ""(profile_id IN ( SELECT ap.id\n   FROM alumni_profiles ap\n  WHERE (ap.auth_user_id = ( SELECT auth.uid() AS uid))))"",
+            ""policy"": ""users_update_own_message_settings"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""(profile_id IN ( SELECT ap.id\n   FROM alumni_profiles ap\n  WHERE (ap.auth_user_id = ( SELECT auth.uid() AS uid))))""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""verification_requests"",
+            ""using"": ""((requester_id = current_profile_id()) OR (batch_year = current_user_batch_year()) OR is_admin_or_mod())"",
+            ""policy"": ""Verifications: Read"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""DELETE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""verification_requests"",
+            ""using"": ""(((requester_id = current_profile_id()) AND (status = 'pending'::request_review_status)) OR is_admin())"",
+            ""policy"": ""verification_requests_delete_own_pending_or_admin"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""verification_requests"",
+            ""using"": null,
+            ""policy"": ""verification_requests_insert_own"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""((requester_id = current_profile_id()) AND (status = 'pending'::request_review_status) AND (current_vouches = 0) AND (NOT is_verified_alumnus()))""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""verification_requests"",
+            ""using"": ""((requester_id = current_profile_id()) OR is_admin_or_mod() OR (is_verified_alumnus() AND (batch_year = current_user_batch_year())))"",
+            ""policy"": ""verification_requests_select_authorized"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""UPDATE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""verification_requests"",
+            ""using"": ""(is_admin_or_mod() AND (requester_id <> current_profile_id()))"",
+            ""policy"": ""verification_requests_update_mod_no_self_approve"",
+            ""schema"": ""public"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""(is_admin_or_mod() AND (requester_id <> current_profile_id()))""
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""objects"",
+            ""using"": null,
+            ""policy"": ""Auth Upload Avatars"",
+            ""schema"": ""storage"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""(bucket_id = 'avatars'::text)""
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""objects"",
+            ""using"": null,
+            ""policy"": ""Auth Upload Gallery"",
+            ""schema"": ""storage"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""(bucket_id = 'gallery'::text)""
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""objects"",
+            ""using"": null,
+            ""policy"": ""Auth Upload Media"",
+            ""schema"": ""storage"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""(bucket_id = 'post-media'::text)""
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""objects"",
+            ""using"": null,
+            ""policy"": ""Authenticated Upload Post Media"",
+            ""schema"": ""storage"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""(bucket_id = ANY (ARRAY['avatars'::text, 'post-media'::text, 'gallery'::text]))""
+        },
+        {
+            ""cmd"": ""DELETE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""objects"",
+            ""using"": ""((bucket_id = 'avatars'::text) AND ((owner = auth.uid()) OR is_admin_or_mod()))"",
+            ""policy"": ""Avatars: Authenticated Delete"",
+            ""schema"": ""storage"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""UPDATE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""objects"",
+            ""using"": ""((bucket_id = 'avatars'::text) AND ((owner = auth.uid()) OR is_admin_or_mod()))"",
+            ""policy"": ""Avatars: Authenticated Update"",
+            ""schema"": ""storage"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""((bucket_id = 'avatars'::text) AND ((owner = auth.uid()) OR is_admin_or_mod()))""
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""objects"",
+            ""using"": null,
+            ""policy"": ""Avatars: Authenticated Upload"",
+            ""schema"": ""storage"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""((bucket_id = 'avatars'::text) AND (owner = auth.uid()))""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""objects"",
+            ""using"": ""(bucket_id = 'avatars'::text)"",
+            ""policy"": ""Avatars: Public Access"",
+            ""schema"": ""storage"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""UPDATE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""objects"",
+            ""using"": ""((bucket_id = 'gallery'::text) AND ((owner = auth.uid()) OR is_admin_or_mod()))"",
+            ""policy"": ""Gallery: Authenticated Update"",
+            ""schema"": ""storage"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""((bucket_id = 'gallery'::text) AND ((owner = auth.uid()) OR is_admin_or_mod()))""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""objects"",
+            ""using"": ""(bucket_id = 'gallery'::text)"",
+            ""policy"": ""Gallery: Public Access"",
+            ""schema"": ""storage"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""DELETE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""objects"",
+            ""using"": ""((bucket_id = 'post-media'::text) AND ((owner = auth.uid()) OR is_admin_or_mod()))"",
+            ""policy"": ""Post Media: Authenticated Delete"",
+            ""schema"": ""storage"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""UPDATE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""objects"",
+            ""using"": ""((bucket_id = 'post-media'::text) AND ((owner = auth.uid()) OR is_admin_or_mod()))"",
+            ""policy"": ""Post Media: Authenticated Update"",
+            ""schema"": ""storage"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""((bucket_id = 'post-media'::text) AND ((owner = auth.uid()) OR is_admin_or_mod()))""
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""objects"",
+            ""using"": null,
+            ""policy"": ""Post Media: Authenticated Upload"",
+            ""schema"": ""storage"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""((bucket_id = 'post-media'::text) AND (owner = auth.uid()))""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""objects"",
+            ""using"": ""(bucket_id = 'post-media'::text)"",
+            ""policy"": ""Post Media: Public Access"",
+            ""schema"": ""storage"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""objects"",
+            ""using"": null,
+            ""policy"": ""Private Upload Verification"",
+            ""schema"": ""storage"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""(bucket_id = 'verification-documents'::text)""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""objects"",
+            ""using"": ""(bucket_id = ANY (ARRAY['avatars'::text, 'post-media'::text, 'gallery'::text]))"",
+            ""policy"": ""Public Post Media Access"",
+            ""schema"": ""storage"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""objects"",
+            ""using"": ""(bucket_id = 'avatars'::text)"",
+            ""policy"": ""Public Read Avatars"",
+            ""schema"": ""storage"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""objects"",
+            ""using"": ""(bucket_id = 'gallery'::text)"",
+            ""policy"": ""Public Read Gallery"",
+            ""schema"": ""storage"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""objects"",
+            ""using"": ""(bucket_id = 'post-media'::text)"",
+            ""policy"": ""Public Read Media"",
+            ""schema"": ""storage"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""objects"",
+            ""using"": null,
+            ""policy"": ""Storage: Avatars Authenticated Insert"",
+            ""schema"": ""storage"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""(bucket_id = 'avatars'::text)""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""objects"",
+            ""using"": ""(bucket_id = 'avatars'::text)"",
+            ""policy"": ""Storage: Avatars Public Read"",
+            ""schema"": ""storage"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""objects"",
+            ""using"": null,
+            ""policy"": ""Storage: Gallery Authenticated Insert"",
+            ""schema"": ""storage"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""(bucket_id = 'gallery'::text)""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""objects"",
+            ""using"": ""(bucket_id = 'gallery'::text)"",
+            ""policy"": ""Storage: Gallery Public Read"",
+            ""schema"": ""storage"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""objects"",
+            ""using"": null,
+            ""policy"": ""Storage: Post Media Authenticated Insert"",
+            ""schema"": ""storage"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""(bucket_id = 'post-media'::text)""
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""objects"",
+            ""using"": ""(bucket_id = 'post-media'::text)"",
+            ""policy"": ""Storage: Post Media Public Read"",
+            ""schema"": ""storage"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""ALL"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""objects"",
+            ""using"": ""((bucket_id = 'verification-documents'::text) AND ((owner = auth.uid()) OR is_admin_or_mod()))"",
+            ""policy"": ""Storage: Verification Docs Private"",
+            ""schema"": ""storage"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""((bucket_id = 'verification-documents'::text) AND ((owner = auth.uid()) OR is_admin_or_mod()))""
+        },
+        {
+            ""cmd"": ""INSERT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""objects"",
+            ""using"": null,
+            ""policy"": ""Verification Documents: Authenticated Upload"",
+            ""schema"": ""storage"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""((bucket_id = 'verification-documents'::text) AND (owner = auth.uid()))""
+        },
+        {
+            ""cmd"": ""DELETE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""objects"",
+            ""using"": ""((bucket_id = 'verification-documents'::text) AND ((auth.uid() = owner) OR ((auth.uid() IS NOT NULL) AND ((auth.uid())::text = (storage.foldername(name))[1])) OR is_admin_or_mod()))"",
+            ""policy"": ""Verification Documents: Owner or Admin Delete"",
+            ""schema"": ""storage"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""objects"",
+            ""using"": ""((bucket_id = 'verification-documents'::text) AND ((auth.uid() = owner) OR ((auth.uid() IS NOT NULL) AND ((auth.uid())::text = (storage.foldername(name))[1])) OR is_admin_or_mod()))"",
+            ""policy"": ""Verification Documents: Owner or Admin Select"",
+            ""schema"": ""storage"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""UPDATE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""objects"",
+            ""using"": ""((bucket_id = 'verification-documents'::text) AND ((auth.uid() = owner) OR ((auth.uid() IS NOT NULL) AND ((auth.uid())::text = (storage.foldername(name))[1])) OR is_admin_or_mod()))"",
+            ""policy"": ""Verification Documents: Owner or Admin Update"",
+            ""schema"": ""storage"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": ""((bucket_id = 'verification-documents'::text) AND ((auth.uid() = owner) OR ((auth.uid() IS NOT NULL) AND ((auth.uid())::text = (storage.foldername(name))[1])) OR is_admin_or_mod()))""
+        },
+        {
+            ""cmd"": ""DELETE"",
+            ""roles"": [
+                ""authenticated""
+            ],
+            ""table"": ""objects"",
+            ""using"": ""((bucket_id = 'gallery'::text) AND is_admin_or_mod())"",
+            ""policy"": ""gallery_admin_delete"",
+            ""schema"": ""storage"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        },
+        {
+            ""cmd"": ""SELECT"",
+            ""roles"": [
+                ""public""
+            ],
+            ""table"": ""objects"",
+            ""using"": ""(bucket_id = ANY (ARRAY['gallery'::text, 'avatars'::text, 'posts'::text]))"",
+            ""policy"": ""public_read_gallery"",
+            ""schema"": ""storage"",
+            ""permissive"": ""PERMISSIVE"",
+            ""with_check"": null
+        }
+    ],
+    ""functions"": [
+        {
+            ""args"": ""announcement_text text"",
+            ""name"": ""broadcast_announcement"",
+            ""config"": [
+                ""search_path=public""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": ""p_key text, p_max_attempts integer, p_window_seconds integer"",
+            ""name"": ""check_and_increment_rate_limit"",
+            ""config"": [
+                ""search_path=public""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": ""p_phone text, p_exclude_profile_id bigint"",
+            ""name"": ""check_phone_available"",
+            ""config"": [
+                ""search_path=public, extensions""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": ""p_phone text"",
+            ""name"": ""check_phone_available"",
+            ""config"": [
+                ""search_path=public""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": """",
+            ""name"": ""current_profile_id"",
+            ""config"": [
+                ""search_path=\""\""""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": """",
+            ""name"": ""current_user_batch_year"",
+            ""config"": [
+                ""search_path=public, extensions""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": """",
+            ""name"": ""current_user_role"",
+            ""config"": [
+                ""search_path=public, extensions""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": ""p_auth_user_id uuid, p_email text, p_meta jsonb"",
+            ""name"": ""ensure_alumni_profile"",
+            ""config"": [
+                ""search_path=public, extensions""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": ""p_profile_id bigint"",
+            ""name"": ""get_alumni_contact_details"",
+            ""config"": [
+                ""search_path=public, extensions""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": """",
+            ""name"": ""get_current_profile_id"",
+            ""config"": [
+                ""search_path=public""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": """",
+            ""name"": ""get_database_diagnostics"",
+            ""config"": [
+                ""search_path=public, pg_catalog""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": ""p_user_id bigint, p_limit integer, p_offset integer"",
+            ""name"": ""get_feed"",
+            ""config"": null,
+            ""security_definer"": true
+        },
+        {
+            ""args"": """",
+            ""name"": ""guard_profile_role_insert"",
+            ""config"": [
+                ""search_path=public""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": """",
+            ""name"": ""guard_profile_role_security"",
+            ""config"": [
+                ""search_path=public""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": """",
+            ""name"": ""handle_admin_doc_submission_review"",
+            ""config"": [
+                ""search_path=public, extensions""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": """",
+            ""name"": ""handle_message_sent_update_conversation"",
+            ""config"": [
+                ""search_path=public""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": """",
+            ""name"": ""handle_new_alumni_profile"",
+            ""config"": [
+                ""search_path=public, extensions""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": """",
+            ""name"": ""handle_new_alumni_user"",
+            ""config"": [
+                ""search_path=public, extensions""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": """",
+            ""name"": ""handle_peer_vouch_insert"",
+            ""config"": [
+                ""search_path=public, extensions""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": """",
+            ""name"": ""handle_updated_at"",
+            ""config"": [
+                ""search_path=public, extensions""
+            ],
+            ""security_definer"": false
+        },
+        {
+            ""args"": """",
+            ""name"": ""handle_verification_request_mutation"",
+            ""config"": [
+                ""search_path=public, extensions""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": """",
+            ""name"": ""is_admin"",
+            ""config"": [
+                ""search_path=public, extensions""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": """",
+            ""name"": ""is_admin_or_mod"",
+            ""config"": [
+                ""search_path=public, extensions""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": ""p_conversation_id text"",
+            ""name"": ""is_conversation_participant"",
+            ""config"": [
+                ""search_path=public""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": """",
+            ""name"": ""is_current_user_super_admin"",
+            ""config"": [
+                ""search_path=public""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": """",
+            ""name"": ""is_internal_or_service_role"",
+            ""config"": [
+                ""search_path=public, extensions""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": """",
+            ""name"": ""is_verified_alumnus"",
+            ""config"": [
+                ""search_path=public, extensions""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": """",
+            ""name"": ""link_profile_by_email"",
+            ""config"": [
+                ""search_path=public, extensions""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": """",
+            ""name"": ""protect_blood_requests_columns"",
+            ""config"": [
+                ""search_path=public, extensions""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": """",
+            ""name"": ""protect_gallery_columns"",
+            ""config"": [
+                ""search_path=public, extensions""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": """",
+            ""name"": ""protect_phone_verification_columns"",
+            ""config"": [
+                ""search_path=public, extensions""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": """",
+            ""name"": ""protect_post_comments_columns"",
+            ""config"": [
+                ""search_path=public, extensions""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": """",
+            ""name"": ""protect_posts_columns"",
+            ""config"": [
+                ""search_path=public, extensions""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": """",
+            ""name"": ""protect_privileged_profile_columns"",
+            ""config"": [
+                ""search_path=public, extensions""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": """",
+            ""name"": ""rls_auto_enable"",
+            ""config"": [
+                ""search_path=pg_catalog""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": ""p_payload jsonb"",
+            ""name"": ""sanitize_audit_payload"",
+            ""config"": [
+                ""search_path=public, extensions""
+            ],
+            ""security_definer"": false
+        },
+        {
+            ""args"": ""target_profile_id bigint"",
+            ""name"": ""start_direct_conversation"",
+            ""config"": [
+                ""search_path=public""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": """",
+            ""name"": ""sync_batch_registered_count"",
+            ""config"": [
+                ""search_path=public, extensions""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": """",
+            ""name"": ""sync_gallery_album_photos_count"",
+            ""config"": [
+                ""search_path=public, extensions""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": """",
+            ""name"": ""sync_post_comments_count"",
+            ""config"": [
+                ""search_path=public, extensions""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": """",
+            ""name"": ""sync_post_counters"",
+            ""config"": null,
+            ""security_definer"": true
+        },
+        {
+            ""args"": """",
+            ""name"": ""sync_post_likes_count"",
+            ""config"": [
+                ""search_path=public, extensions""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": """",
+            ""name"": ""sync_user_posts_count"",
+            ""config"": [
+                ""search_path=public, extensions""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": ""p_paused boolean, p_reset_7_days boolean"",
+            ""name"": ""toggle_auto_verification"",
+            ""config"": [
+                ""search_path=public""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": ""p_user_id bigint"",
+            ""name"": ""unread_notifications"",
+            ""config"": null,
+            ""security_definer"": true
+        },
+        {
+            ""args"": """",
+            ""name"": ""unread_total"",
+            ""config"": [
+                ""search_path=public""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": ""p_profile_id bigint, p_caller_uid uuid, p_updates jsonb"",
+            ""name"": ""update_profile_atomic"",
+            ""config"": [
+                ""search_path=public""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": """",
+            ""name"": ""validate_stream_group_pair"",
+            ""config"": [
+                ""search_path=public, extensions""
+            ],
+            ""security_definer"": true
+        },
+        {
+            ""args"": ""p_action character varying, p_entity_table character varying, p_entity_id text, p_old_values jsonb, p_new_values jsonb, p_reason text"",
+            ""name"": ""write_audit_log"",
+            ""config"": [
+                ""search_path=public, extensions""
+            ],
+            ""security_definer"": true
+        }
+    ],
+    ""tables_rls"": [
+        {
+            ""table"": ""academic_stream_groups"",
+            ""rls_forced"": false,
+            ""rls_enabled"": true
+        },
+        {
+            ""table"": ""admin_doc_submissions"",
+            ""rls_forced"": false,
+            ""rls_enabled"": true
+        },
+        {
+            ""table"": ""alumni_profiles"",
+            ""rls_forced"": false,
+            ""rls_enabled"": true
+        },
+        {
+            ""table"": ""app_feature_flags"",
+            ""rls_forced"": false,
+            ""rls_enabled"": true
+        },
+        {
+            ""table"": ""audit_logs"",
+            ""rls_forced"": false,
+            ""rls_enabled"": true
+        },
+        {
+            ""table"": ""auth_rate_limits"",
+            ""rls_forced"": false,
+            ""rls_enabled"": true
+        },
+        {
+            ""table"": ""batches"",
+            ""rls_forced"": false,
+            ""rls_enabled"": true
+        },
+        {
+            ""table"": ""blood_donors"",
+            ""rls_forced"": false,
+            ""rls_enabled"": true
+        },
+        {
+            ""table"": ""blood_request_responses"",
+            ""rls_forced"": false,
+            ""rls_enabled"": true
+        },
+        {
+            ""table"": ""blood_requests"",
+            ""rls_forced"": false,
+            ""rls_enabled"": true
+        },
+        {
+            ""table"": ""career_opportunities"",
+            ""rls_forced"": false,
+            ""rls_enabled"": true
+        },
+        {
+            ""table"": ""connections"",
+            ""rls_forced"": false,
+            ""rls_enabled"": true
+        },
+        {
+            ""table"": ""contact_inquiries"",
+            ""rls_forced"": false,
+            ""rls_enabled"": true
+        },
+        {
+            ""table"": ""conversation_participants"",
+            ""rls_forced"": true,
+            ""rls_enabled"": true
+        },
+        {
+            ""table"": ""conversations"",
+            ""rls_forced"": true,
+            ""rls_enabled"": true
+        },
+        {
+            ""table"": ""event_registrations"",
+            ""rls_forced"": false,
+            ""rls_enabled"": true
+        },
+        {
+            ""table"": ""events"",
+            ""rls_forced"": false,
+            ""rls_enabled"": true
+        },
+        {
+            ""table"": ""featured_alumni"",
+            ""rls_forced"": false,
+            ""rls_enabled"": true
+        },
+        {
+            ""table"": ""gallery_albums"",
+            ""rls_forced"": false,
+            ""rls_enabled"": true
+        },
+        {
+            ""table"": ""gallery_photos"",
+            ""rls_forced"": false,
+            ""rls_enabled"": true
+        },
+        {
+            ""table"": ""hall_of_fame"",
+            ""rls_forced"": false,
+            ""rls_enabled"": true
+        },
+        {
+            ""table"": ""mentor_offers"",
+            ""rls_forced"": false,
+            ""rls_enabled"": true
+        },
+        {
+            ""table"": ""mentorship_requests"",
+            ""rls_forced"": false,
+            ""rls_enabled"": true
+        },
+        {
+            ""table"": ""messages"",
+            ""rls_forced"": true,
+            ""rls_enabled"": true
+        },
+        {
+            ""table"": ""notifications"",
+            ""rls_forced"": false,
+            ""rls_enabled"": true
+        },
+        {
+            ""table"": ""official_notices"",
+            ""rls_forced"": false,
+            ""rls_enabled"": true
+        },
+        {
+            ""table"": ""peer_vouches"",
+            ""rls_forced"": false,
+            ""rls_enabled"": true
+        },
+        {
+            ""table"": ""post_comments"",
+            ""rls_forced"": false,
+            ""rls_enabled"": true
+        },
+        {
+            ""table"": ""post_likes"",
+            ""rls_forced"": false,
+            ""rls_enabled"": true
+        },
+        {
+            ""table"": ""posts"",
+            ""rls_forced"": false,
+            ""rls_enabled"": true
+        },
+        {
+            ""table"": ""profiles"",
+            ""rls_forced"": true,
+            ""rls_enabled"": true
+        },
+        {
+            ""table"": ""saved_posts"",
+            ""rls_forced"": false,
+            ""rls_enabled"": true
+        },
+        {
+            ""table"": ""site_settings"",
+            ""rls_forced"": false,
+            ""rls_enabled"": true
+        },
+        {
+            ""table"": ""user_message_settings"",
+            ""rls_forced"": true,
+            ""rls_enabled"": true
+        },
+        {
+            ""table"": ""verification_requests"",
+            ""rls_forced"": false,
+            ""rls_enabled"": true
+        }
+    ],
+    ""client_grants"": [
+        {
+            ""role"": ""anon"",
+            ""table"": ""academic_stream_groups"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""academic_stream_groups"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""academic_stream_groups"",
+            ""privilege"": ""REFERENCES""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""academic_stream_groups"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""academic_stream_groups"",
+            ""privilege"": ""TRIGGER""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""academic_stream_groups"",
+            ""privilege"": ""TRUNCATE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""academic_stream_groups"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""academic_stream_groups"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""academic_stream_groups"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""academic_stream_groups"",
+            ""privilege"": ""REFERENCES""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""academic_stream_groups"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""academic_stream_groups"",
+            ""privilege"": ""TRIGGER""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""academic_stream_groups"",
+            ""privilege"": ""TRUNCATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""academic_stream_groups"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""admin_doc_submissions"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""admin_doc_submissions"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""admin_doc_submissions"",
+            ""privilege"": ""REFERENCES""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""admin_doc_submissions"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""admin_doc_submissions"",
+            ""privilege"": ""TRIGGER""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""admin_doc_submissions"",
+            ""privilege"": ""TRUNCATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""admin_doc_submissions"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""alumni_profiles"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""app_feature_flags"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""app_feature_flags"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""app_feature_flags"",
+            ""privilege"": ""REFERENCES""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""app_feature_flags"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""app_feature_flags"",
+            ""privilege"": ""TRIGGER""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""app_feature_flags"",
+            ""privilege"": ""TRUNCATE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""app_feature_flags"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""app_feature_flags"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""app_feature_flags"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""app_feature_flags"",
+            ""privilege"": ""REFERENCES""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""app_feature_flags"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""app_feature_flags"",
+            ""privilege"": ""TRIGGER""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""app_feature_flags"",
+            ""privilege"": ""TRUNCATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""app_feature_flags"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""audit_logs"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""batches"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""batches"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""batches"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""batches"",
+            ""privilege"": ""REFERENCES""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""batches"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""batches"",
+            ""privilege"": ""TRIGGER""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""batches"",
+            ""privilege"": ""TRUNCATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""batches"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""blood_donors"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""blood_donors"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""blood_donors"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""blood_donors"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""blood_donors"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""blood_donors"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""blood_donors"",
+            ""privilege"": ""REFERENCES""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""blood_donors"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""blood_donors"",
+            ""privilege"": ""TRIGGER""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""blood_donors"",
+            ""privilege"": ""TRUNCATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""blood_donors"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""blood_request_responses"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""blood_request_responses"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""blood_request_responses"",
+            ""privilege"": ""REFERENCES""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""blood_request_responses"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""blood_request_responses"",
+            ""privilege"": ""TRIGGER""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""blood_request_responses"",
+            ""privilege"": ""TRUNCATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""blood_request_responses"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""blood_requests"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""blood_requests"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""blood_requests"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""blood_requests"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""blood_requests"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""blood_requests"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""blood_requests"",
+            ""privilege"": ""REFERENCES""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""blood_requests"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""blood_requests"",
+            ""privilege"": ""TRIGGER""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""blood_requests"",
+            ""privilege"": ""TRUNCATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""blood_requests"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""career_opportunities"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""career_opportunities"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""career_opportunities"",
+            ""privilege"": ""REFERENCES""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""career_opportunities"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""career_opportunities"",
+            ""privilege"": ""TRIGGER""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""career_opportunities"",
+            ""privilege"": ""TRUNCATE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""career_opportunities"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""career_opportunities"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""career_opportunities"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""career_opportunities"",
+            ""privilege"": ""REFERENCES""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""career_opportunities"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""career_opportunities"",
+            ""privilege"": ""TRIGGER""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""career_opportunities"",
+            ""privilege"": ""TRUNCATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""career_opportunities"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""connections"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""connections"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""connections"",
+            ""privilege"": ""REFERENCES""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""connections"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""connections"",
+            ""privilege"": ""TRIGGER""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""connections"",
+            ""privilege"": ""TRUNCATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""connections"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""contact_inquiries"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""contact_inquiries"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""contact_inquiries"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""contact_inquiries"",
+            ""privilege"": ""REFERENCES""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""contact_inquiries"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""contact_inquiries"",
+            ""privilege"": ""TRIGGER""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""contact_inquiries"",
+            ""privilege"": ""TRUNCATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""contact_inquiries"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""conversation_participants"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""conversation_participants"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""conversation_participants"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""conversations"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""conversations"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""event_registrations"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""event_registrations"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""event_registrations"",
+            ""privilege"": ""REFERENCES""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""event_registrations"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""event_registrations"",
+            ""privilege"": ""TRIGGER""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""event_registrations"",
+            ""privilege"": ""TRUNCATE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""event_registrations"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""event_registrations"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""event_registrations"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""event_registrations"",
+            ""privilege"": ""REFERENCES""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""event_registrations"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""event_registrations"",
+            ""privilege"": ""TRIGGER""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""event_registrations"",
+            ""privilege"": ""TRUNCATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""event_registrations"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""events"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""events"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""events"",
+            ""privilege"": ""REFERENCES""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""events"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""events"",
+            ""privilege"": ""TRIGGER""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""events"",
+            ""privilege"": ""TRUNCATE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""events"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""events"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""events"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""events"",
+            ""privilege"": ""REFERENCES""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""events"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""events"",
+            ""privilege"": ""TRIGGER""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""events"",
+            ""privilege"": ""TRUNCATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""events"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""featured_alumni"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""featured_alumni"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""featured_alumni"",
+            ""privilege"": ""REFERENCES""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""featured_alumni"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""featured_alumni"",
+            ""privilege"": ""TRIGGER""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""featured_alumni"",
+            ""privilege"": ""TRUNCATE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""featured_alumni"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""featured_alumni"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""featured_alumni"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""featured_alumni"",
+            ""privilege"": ""REFERENCES""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""featured_alumni"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""featured_alumni"",
+            ""privilege"": ""TRIGGER""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""featured_alumni"",
+            ""privilege"": ""TRUNCATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""featured_alumni"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""gallery_albums"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""gallery_albums"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""gallery_albums"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""gallery_albums"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""gallery_albums"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""gallery_albums"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""gallery_albums"",
+            ""privilege"": ""REFERENCES""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""gallery_albums"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""gallery_albums"",
+            ""privilege"": ""TRIGGER""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""gallery_albums"",
+            ""privilege"": ""TRUNCATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""gallery_albums"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""gallery_photos"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""gallery_photos"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""gallery_photos"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""gallery_photos"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""gallery_photos"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""gallery_photos"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""gallery_photos"",
+            ""privilege"": ""REFERENCES""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""gallery_photos"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""gallery_photos"",
+            ""privilege"": ""TRIGGER""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""gallery_photos"",
+            ""privilege"": ""TRUNCATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""gallery_photos"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""hall_of_fame"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""hall_of_fame"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""hall_of_fame"",
+            ""privilege"": ""REFERENCES""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""hall_of_fame"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""hall_of_fame"",
+            ""privilege"": ""TRIGGER""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""hall_of_fame"",
+            ""privilege"": ""TRUNCATE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""hall_of_fame"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""hall_of_fame"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""hall_of_fame"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""hall_of_fame"",
+            ""privilege"": ""REFERENCES""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""hall_of_fame"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""hall_of_fame"",
+            ""privilege"": ""TRIGGER""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""hall_of_fame"",
+            ""privilege"": ""TRUNCATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""hall_of_fame"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""mentor_offers"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""mentor_offers"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""mentor_offers"",
+            ""privilege"": ""REFERENCES""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""mentor_offers"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""mentor_offers"",
+            ""privilege"": ""TRIGGER""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""mentor_offers"",
+            ""privilege"": ""TRUNCATE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""mentor_offers"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""mentor_offers"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""mentor_offers"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""mentor_offers"",
+            ""privilege"": ""REFERENCES""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""mentor_offers"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""mentor_offers"",
+            ""privilege"": ""TRIGGER""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""mentor_offers"",
+            ""privilege"": ""TRUNCATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""mentor_offers"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""mentorship_requests"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""mentorship_requests"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""mentorship_requests"",
+            ""privilege"": ""REFERENCES""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""mentorship_requests"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""mentorship_requests"",
+            ""privilege"": ""TRIGGER""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""mentorship_requests"",
+            ""privilege"": ""TRUNCATE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""mentorship_requests"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""mentorship_requests"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""mentorship_requests"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""mentorship_requests"",
+            ""privilege"": ""REFERENCES""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""mentorship_requests"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""mentorship_requests"",
+            ""privilege"": ""TRIGGER""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""mentorship_requests"",
+            ""privilege"": ""TRUNCATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""mentorship_requests"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""messages"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""messages"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""notifications"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""notifications"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""notifications"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""notifications"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""notifications"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""notifications"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""notifications"",
+            ""privilege"": ""REFERENCES""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""notifications"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""notifications"",
+            ""privilege"": ""TRIGGER""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""notifications"",
+            ""privilege"": ""TRUNCATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""notifications"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""official_notices"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""official_notices"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""official_notices"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""official_notices"",
+            ""privilege"": ""REFERENCES""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""official_notices"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""official_notices"",
+            ""privilege"": ""TRIGGER""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""official_notices"",
+            ""privilege"": ""TRUNCATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""official_notices"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""peer_vouches"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""peer_vouches"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""peer_vouches"",
+            ""privilege"": ""REFERENCES""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""peer_vouches"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""peer_vouches"",
+            ""privilege"": ""TRIGGER""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""peer_vouches"",
+            ""privilege"": ""TRUNCATE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""post_comments"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""post_comments"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""post_comments"",
+            ""privilege"": ""REFERENCES""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""post_comments"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""post_comments"",
+            ""privilege"": ""TRIGGER""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""post_comments"",
+            ""privilege"": ""TRUNCATE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""post_comments"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""post_comments"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""post_comments"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""post_comments"",
+            ""privilege"": ""REFERENCES""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""post_comments"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""post_comments"",
+            ""privilege"": ""TRIGGER""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""post_comments"",
+            ""privilege"": ""TRUNCATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""post_comments"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""post_likes"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""post_likes"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""post_likes"",
+            ""privilege"": ""REFERENCES""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""post_likes"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""post_likes"",
+            ""privilege"": ""TRIGGER""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""post_likes"",
+            ""privilege"": ""TRUNCATE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""post_likes"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""post_likes"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""post_likes"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""post_likes"",
+            ""privilege"": ""REFERENCES""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""post_likes"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""post_likes"",
+            ""privilege"": ""TRIGGER""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""post_likes"",
+            ""privilege"": ""TRUNCATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""post_likes"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""posts"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""posts"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""posts"",
+            ""privilege"": ""REFERENCES""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""posts"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""posts"",
+            ""privilege"": ""TRIGGER""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""posts"",
+            ""privilege"": ""TRUNCATE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""posts"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""posts"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""posts"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""posts"",
+            ""privilege"": ""REFERENCES""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""posts"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""posts"",
+            ""privilege"": ""TRIGGER""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""posts"",
+            ""privilege"": ""TRUNCATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""posts"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""profiles"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""profiles"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""profiles"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""public_alumni_directory"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""public_alumni_directory"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""public_alumni_directory"",
+            ""privilege"": ""REFERENCES""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""public_alumni_directory"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""public_alumni_directory"",
+            ""privilege"": ""TRIGGER""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""public_alumni_directory"",
+            ""privilege"": ""TRUNCATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""public_alumni_directory"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""saved_posts"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""saved_posts"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""saved_posts"",
+            ""privilege"": ""REFERENCES""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""saved_posts"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""saved_posts"",
+            ""privilege"": ""TRIGGER""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""saved_posts"",
+            ""privilege"": ""TRUNCATE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""saved_posts"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""saved_posts"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""saved_posts"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""saved_posts"",
+            ""privilege"": ""REFERENCES""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""saved_posts"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""saved_posts"",
+            ""privilege"": ""TRIGGER""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""saved_posts"",
+            ""privilege"": ""TRUNCATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""saved_posts"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""site_settings"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""site_settings"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""site_settings"",
+            ""privilege"": ""REFERENCES""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""site_settings"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""site_settings"",
+            ""privilege"": ""TRIGGER""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""site_settings"",
+            ""privilege"": ""TRUNCATE""
+        },
+        {
+            ""role"": ""anon"",
+            ""table"": ""site_settings"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""site_settings"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""site_settings"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""site_settings"",
+            ""privilege"": ""REFERENCES""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""site_settings"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""site_settings"",
+            ""privilege"": ""TRIGGER""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""site_settings"",
+            ""privilege"": ""TRUNCATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""site_settings"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""user_message_settings"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""user_message_settings"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""user_message_settings"",
+            ""privilege"": ""UPDATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""verification_requests"",
+            ""privilege"": ""DELETE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""verification_requests"",
+            ""privilege"": ""INSERT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""verification_requests"",
+            ""privilege"": ""REFERENCES""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""verification_requests"",
+            ""privilege"": ""SELECT""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""verification_requests"",
+            ""privilege"": ""TRIGGER""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""verification_requests"",
+            ""privilege"": ""TRUNCATE""
+        },
+        {
+            ""role"": ""authenticated"",
+            ""table"": ""verification_requests"",
+            ""privilege"": ""UPDATE""
+        }
+    ],
+    ""realtime_tables"": [
+        ""admin_doc_submissions"",
+        ""alumni_profiles"",
+        ""app_feature_flags"",
+        ""batches"",
+        ""blood_donors"",
+        ""blood_request_responses"",
+        ""blood_requests"",
+        ""career_opportunities"",
+        ""conversation_participants"",
+        ""conversations"",
+        ""event_registrations"",
+        ""events"",
+        ""featured_alumni"",
+        ""gallery_albums"",
+        ""gallery_photos"",
+        ""hall_of_fame"",
+        ""mentor_offers"",
+        ""mentorship_requests"",
+        ""messages"",
+        ""notifications"",
+        ""official_notices"",
+        ""peer_vouches"",
+        ""post_comments"",
+        ""post_likes"",
+        ""posts"",
+        ""saved_posts"",
+        ""site_settings"",
+        ""user_message_settings"",
+        ""verification_requests""
+    ],
+    ""storage_buckets"": [
+        {
+            ""id"": ""avatars"",
+            ""public"": true,
+            ""file_size_limit"": 5242880,
+            ""allowed_mime_types"": [
+                ""image/jpeg"",
+                ""image/png"",
+                ""image/webp"",
+                ""image/gif""
+            ]
+        },
+        {
+            ""id"": ""gallery"",
+            ""public"": true,
+            ""file_size_limit"": 20971520,
+            ""allowed_mime_types"": [
+                ""image/jpeg"",
+                ""image/png"",
+                ""image/webp"",
+                ""image/gif""
+            ]
+        },
+        {
+            ""id"": ""official-notices"",
+            ""public"": true,
+            ""file_size_limit"": 20971520,
+            ""allowed_mime_types"": [
+                ""application/pdf"",
+                ""image/jpeg"",
+                ""image/png""
+            ]
+        },
+        {
+            ""id"": ""post-media"",
+            ""public"": true,
+            ""file_size_limit"": 20971520,
+            ""allowed_mime_types"": [
+                ""image/jpeg"",
+                ""image/png"",
+                ""image/webp"",
+                ""image/gif"",
+                ""video/mp4"",
+                ""video/webm""
+            ]
+        },
+        {
+            ""id"": ""posts"",
+            ""public"": true,
+            ""file_size_limit"": null,
+            ""allowed_mime_types"": null
+        },
+        {
+            ""id"": ""verification-documents"",
+            ""public"": false,
+            ""file_size_limit"": 10485760,
+            ""allowed_mime_types"": [
+                ""image/jpeg"",
+                ""image/png"",
+                ""image/webp"",
+                ""application/pdf""
+            ]
+        }
+    ]
+}"

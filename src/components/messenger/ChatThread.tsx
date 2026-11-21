@@ -24,6 +24,7 @@ interface ChatThreadProps {
   conversation: ChatConversation;
   messages: ChatMessage[];
   myId: number;
+  isSuperAdmin?: boolean;
   loading: boolean;
   error: string | null;
   sending: boolean;
@@ -55,6 +56,7 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
   conversation,
   messages,
   myId,
+  isSuperAdmin = false,
   loading,
   error,
   sending,
@@ -349,9 +351,13 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
                           : message.body}
                       </div>
 
-                      {/* Message Actions (Edit / Delete) */}
-                      {mine && !deleted && !editing && (
-                        <div className="absolute top-1/2 -translate-y-1/2 -left-16 hidden group-hover/msg:flex items-center gap-1 bg-white dark:bg-slate-800 p-1 rounded-full shadow-md border border-slate-200 dark:border-slate-700">
+                      {/* Message Actions (Edit / Delete for sender or Super Admin) */}
+                      {(mine || isSuperAdmin) && !deleted && !editing && (
+                        <div
+                          className={`absolute top-1/2 -translate-y-1/2 ${
+                            mine ? '-left-16' : '-right-16'
+                          } hidden group-hover/msg:flex items-center gap-1 bg-white dark:bg-slate-800 p-1 rounded-full shadow-md border border-slate-200 dark:border-slate-700 z-10`}
+                        >
                           <button
                             type="button"
                             onClick={() => {

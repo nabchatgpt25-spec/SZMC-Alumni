@@ -1,4 +1,4 @@
-import { supabase } from '../lib/supabase';
+import { supabase, getClientAuthHeaders } from '../lib/supabase';
 
 export interface VideoMetadata {
   duration: number; // in seconds
@@ -15,7 +15,7 @@ const ALLOWED_VIDEO_TYPES = [
   'video/ogg',
 ];
 
-const MAX_VIDEO_SIZE_BYTES = 100 * 1024 * 1024; // 100 MB
+const MAX_VIDEO_SIZE_BYTES = 50 * 1024 * 1024; // 50 MB (matches post-media bucket limit)
 
 /**
  * Validates file type and size
@@ -34,7 +34,7 @@ export function validateVideoFile(file: File): { isValid: boolean; error?: strin
   if (file.size > MAX_VIDEO_SIZE_BYTES) {
     return {
       isValid: false,
-      error: `Video exceeds the 100 MB limit (${(file.size / (1024 * 1024)).toFixed(1)} MB).`,
+      error: `Video exceeds the 50 MB limit (${(file.size / (1024 * 1024)).toFixed(1)} MB).`,
     };
   }
 
@@ -155,9 +155,11 @@ export async function uploadVideoToStorage(
   if (videoError) {
     onProgress?.(65);
     try {
+      const authHeaders = await getClientAuthHeaders(false);
       const uploadRes = await fetch('/api/upload-video', {
         method: 'POST',
         headers: {
+          ...authHeaders,
           'Content-Type': file.type || 'video/mp4',
           'x-file-ext': fileExt,
           'x-user-id': userId,
@@ -176,17 +178,24 @@ export async function uploadVideoToStorage(
         }
       }
     } catch {
-      // Fall through to persistent Data URL
+      // Fall through to error handling below
     }
 
-    onProgress?.(85);
-    const fallbackUrl = await fileToDataUrl(file);
-    onProgress?.(100);
-    return {
-      videoUrl: fallbackUrl,
-      posterUrl: metadata?.posterDataUrl,
-      duration: metadata?.duration || 0,
-    };
+    // Only allow data URL fallback for tiny clips (< 2 MB) to avoid bloating Postgres JSON rows
+    if (file.size <= 2 * 1024 * 1024) {
+      onProgress?.(85);
+      const fallbackUrl = await fileToDataUrl(file);
+      onProgress?.(100);
+      return {
+        videoUrl: fallbackUrl,
+        posterUrl: metadata?.posterDataUrl,
+        duration: metadata?.duration || 0,
+      };
+    }
+
+    throw new Error(
+      videoError.message || 'Video upload failed. Please ensure you are signed in and the video is under 50 MB (MP4/WebM).'
+    );
   }
 
   onProgress?.(70);

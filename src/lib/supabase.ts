@@ -57,6 +57,44 @@ export const supabase: SupabaseClient = createClient(effectiveUrl, effectiveAnon
 export const supabaseAdmin: SupabaseClient = supabase;
 
 /**
+ * Returns HTTP headers with the active user's Bearer token (Supabase JWT or verified
+ * server-issued admin token) for authenticated calls to `/api/*` endpoints.
+ */
+export async function getClientAuthHeaders(
+  includeJsonContentType = true
+): Promise<Record<string, string>> {
+  const headers: Record<string, string> = {};
+  if (includeJsonContentType) {
+    headers['Content-Type'] = 'application/json';
+  }
+
+  if (isSupabaseConfigured) {
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (session?.access_token) {
+        headers.Authorization = `Bearer ${session.access_token}`;
+        return headers;
+      }
+    } catch {
+      // Fallback to direct auth token if present
+    }
+  }
+
+  if (typeof window !== 'undefined') {
+    try {
+      const directToken = localStorage.getItem('szmc_direct_auth_token');
+      if (directToken && directToken.trim()) {
+        headers.Authorization = `Bearer ${directToken.trim()}`;
+      }
+    } catch {}
+  }
+
+  return headers;
+}
+
+/**
  * Explicit non-sensitive column list granted to `authenticated` on `public.alumni_profiles`
  * in Migration 003.
  *

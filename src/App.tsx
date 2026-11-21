@@ -16,6 +16,9 @@ import { ensureVouchRequestFromUrlParams } from './utils/verificationService';
 import { CursorSpotlight } from './components/motion/CinematicMotion';
 import { SZMCLogo } from './components/SZMCLogo';
 import { OutstandingLoadingScreen } from './components/OutstandingLoadingScreen';
+import { AdminSettingsProvider } from './components/admin/AdminSettingsProvider';
+import { activityTracker } from './services/activityTracker';
+import './services/siteConfigService';
 
 // Code-split dynamic views for instant snappy initial page load
 const LandingPage = lazy(() => import('./components/LandingPage').then(m => ({ default: m.LandingPage })));
@@ -126,6 +129,50 @@ function AlumniAppContent() {
       setRoute('landing');
     }
   }, [isLoggedIn, route]);
+
+  // Privacy-safe Behavioral Telemetry Tracker (page views, dwell time, clicks, scroll, searches)
+  const searchTrackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    activityTracker.init(route, {
+      profileId: isLoggedIn ? currentUser.id : null,
+      userName: isLoggedIn ? currentUser.fullName : 'Guest Visitor',
+      userEmail: isLoggedIn ? currentUser.email || null : null,
+      batchYear: isLoggedIn ? currentUser.batchYear || null : null,
+      specialty:
+        isLoggedIn && Array.isArray(currentUser.specialty) && currentUser.specialty.length > 0
+          ? currentUser.specialty[0]
+          : null,
+      city: isLoggedIn ? currentUser.city || null : null,
+      country: isLoggedIn ? currentUser.country || null : null,
+    });
+  }, []);
+
+  useEffect(() => {
+    activityTracker.updateIdentity({
+      profileId: isLoggedIn ? currentUser.id : null,
+      userName: isLoggedIn ? currentUser.fullName : 'Guest Visitor',
+      userEmail: isLoggedIn ? currentUser.email || null : null,
+      batchYear: isLoggedIn ? currentUser.batchYear || null : null,
+      specialty:
+        isLoggedIn && Array.isArray(currentUser.specialty) && currentUser.specialty.length > 0
+          ? currentUser.specialty[0]
+          : null,
+      city: isLoggedIn ? currentUser.city || null : null,
+      country: isLoggedIn ? currentUser.country || null : null,
+    });
+  }, [
+    isLoggedIn,
+    currentUser.id,
+    currentUser.fullName,
+    currentUser.email,
+    currentUser.batchYear,
+    currentUser.city,
+    currentUser.country,
+  ]);
+
+  useEffect(() => {
+    activityTracker.setRoute(route);
+  }, [route]);
 
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [selectedProfileId, setSelectedProfileId] = useState<number>(currentUser.id);
@@ -240,6 +287,7 @@ function AlumniAppContent() {
   const handleViewProfile = (profileId: number) => {
     setPreviousRoute(route === 'profile' ? previousRoute : route);
     setSelectedProfileId(profileId);
+    activityTracker.trackProfileView(profileId);
     navigateTo('profile', true);
   };
 
@@ -254,6 +302,12 @@ function AlumniAppContent() {
 
   const handleGlobalSearchChange = (query: string) => {
     setGlobalSearch(query);
+    if (searchTrackTimerRef.current) clearTimeout(searchTrackTimerRef.current);
+    if (query.trim().length >= 2) {
+      searchTrackTimerRef.current = setTimeout(() => {
+        activityTracker.trackSearch(query.trim(), 'directory');
+      }, 900);
+    }
     if (query.trim() && route !== 'directory' && route !== 'find') {
       navigateTo('directory');
     }
@@ -700,9 +754,11 @@ function AlumniAppContent() {
 export default function App() {
   return (
     <ThemeProvider>
-      <AuthProvider>
-        <AlumniAppContent />
-      </AuthProvider>
+      <AdminSettingsProvider>
+        <AuthProvider>
+          <AlumniAppContent />
+        </AuthProvider>
+      </AdminSettingsProvider>
     </ThemeProvider>
   );
 }

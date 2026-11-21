@@ -1,4 +1,4 @@
-import { supabase, isSupabaseConfigured, ALUMNI_PUBLIC_COLUMNS } from '../lib/supabase';
+import { supabase, isSupabaseConfigured, ALUMNI_PUBLIC_COLUMNS, getClientAuthHeaders } from '../lib/supabase';
 import { mapSupabaseRowToAlumniProfile, getOrCreateSupabaseProfile } from '../lib/supabase-auth';
 import { realtimeManager } from './supabaseRealtimeService';
 export { realtimeManager };
@@ -607,9 +607,10 @@ export async function createFeedPostInDb(params: {
     if (insertError || !insertedRow) {
       console.warn('Direct Supabase insert failed, attempting /api/posts fallback:', insertError?.message);
       try {
+        const authHeaders = await getClientAuthHeaders();
         const apiRes = await fetch('/api/posts', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: authHeaders,
           body: JSON.stringify(insertPayload),
         });
         const apiJson = await apiRes.json();
@@ -619,7 +620,7 @@ export async function createFeedPostInDb(params: {
           // Broadcast real-time to all connected alumni
           void fetch('/api/feed/broadcast', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: authHeaders,
             body: JSON.stringify({ type: 'POST_CREATED', post: postItem, newRecord: serverPost }),
           }).catch(() => {});
           return { success: true, post: postItem };
@@ -650,11 +651,14 @@ export async function createFeedPostInDb(params: {
     }
 
     const postItem = mapRowToFeedPost({ ...insertedRow, author: profileRow }, realAuthorId);
-    void fetch('/api/feed/broadcast', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'POST_CREATED', post: postItem, newRecord: insertedRow }),
-    }).catch(() => {});
+    void (async () => {
+      const authHeaders = await getClientAuthHeaders();
+      fetch('/api/feed/broadcast', {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({ type: 'POST_CREATED', post: postItem, newRecord: insertedRow }),
+      }).catch(() => {});
+    })();
     return { success: true, post: postItem };
   } catch (err: any) {
     console.error('Failed to insert post in Supabase:', err);
@@ -668,9 +672,10 @@ export async function reactToPostInDb(
   reaction: string | null
 ): Promise<{ success: boolean; liked: boolean; reaction: string | null; likesCount: number; reactionsSummary?: any }> {
   try {
+    const authHeaders = await getClientAuthHeaders();
     const res = await fetch(`/api/posts/${postId}/react`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders,
       body: JSON.stringify({ userId, reaction }),
     });
     if (res.ok) {
@@ -710,9 +715,10 @@ export async function togglePostLikeInDb(
 
   // 1. Immediately trigger server-side realtime SSE broadcast to all active alumni
   try {
+    const authHeaders = await getClientAuthHeaders();
     const apiRes = await fetch(`/api/posts/${postId}/like`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders,
       body: JSON.stringify({ userId: targetUserId }),
     });
     if (apiRes.ok) {
@@ -865,9 +871,10 @@ export async function addPostCommentInDb(params: {
       ? `/api/posts/${params.postId}/reply`
       : `/api/posts/${params.postId}/comment`;
 
+    const authHeaders = await getClientAuthHeaders();
     const apiRes = await fetch(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders,
       body: JSON.stringify({
         userId: commentAuthorId,
         content: cleanContent,
@@ -1188,9 +1195,10 @@ export async function createBloodRequestInDb(params: {
 
   // Resilient backend proxy fallback
   try {
+    const authHeaders = await getClientAuthHeaders();
     const resp = await fetch('/api/blood/requests', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders,
       body: JSON.stringify(payload),
     });
     if (resp.ok) {
@@ -1240,9 +1248,10 @@ export async function registerBloodDonorInDb(params: {
 
   // Resilient backend proxy fallback
   try {
+    const authHeaders = await getClientAuthHeaders();
     const resp = await fetch('/api/blood/donors', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders,
       body: JSON.stringify(payload),
     });
     if (resp.ok) return true;
@@ -1669,9 +1678,10 @@ export async function createGalleryAlbumInDb(params: {
 
   // Resilient backend fallback
   try {
+    const authHeaders = await getClientAuthHeaders();
     const resp = await fetch('/api/gallery/albums', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders,
       body: JSON.stringify(payload),
     });
     if (resp.ok) {
@@ -1726,9 +1736,10 @@ export async function addPhotoToGalleryAlbumInDb(params: {
 
   // Resilient backend fallback
   try {
+    const authHeaders = await getClientAuthHeaders();
     const resp = await fetch('/api/gallery/photos', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders,
       body: JSON.stringify(payload),
     });
     if (resp.ok) {
@@ -1762,9 +1773,10 @@ export async function deleteGalleryAlbumInDb(
 
   // 2. Server API route
   try {
+    const authHeaders = await getClientAuthHeaders();
     const resp = await fetch(`/api/gallery/albums/${albumId}`, {
       method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders,
       body: JSON.stringify({ userId, isAdmin }),
     });
     if (resp.ok) {
@@ -1803,9 +1815,10 @@ export async function deleteGalleryPhotoInDb(
 
   // 2. Server API route
   try {
+    const authHeaders = await getClientAuthHeaders();
     const resp = await fetch(`/api/gallery/photos/${encodeURIComponent(photoId)}`, {
       method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders,
       body: JSON.stringify({ albumId, userId, isAdmin }),
     });
     if (resp.ok) {

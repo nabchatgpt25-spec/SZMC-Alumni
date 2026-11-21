@@ -1,5 +1,5 @@
 import { notifyCareerApplication } from '../utils/notificationService';
-import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { supabase, isSupabaseConfigured, getClientAuthHeaders } from '../lib/supabase';
 
 export type CareerType = 'job' | 'internship' | 'referral';
 
@@ -217,9 +217,10 @@ export const createCareerOpportunity = (
     }
 
     try {
+      const authHeaders = await getClientAuthHeaders();
       await fetch('/api/careers', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders,
         body: JSON.stringify(payload),
       });
     } catch (e) {
@@ -277,11 +278,18 @@ export const applyToCareerOpportunity = (
     applicantPhone: applicant.applicantPhone,
   };
 
-  fetch(`/api/careers/${encodeURIComponent(opportunityId)}/apply`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  }).catch((e) => console.warn('Backend proxy apply career notice:', e));
+  void (async () => {
+    try {
+      const authHeaders = await getClientAuthHeaders();
+      await fetch(`/api/careers/${encodeURIComponent(opportunityId)}/apply`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify(payload),
+      });
+    } catch (e) {
+      console.warn('Backend proxy apply career notice:', e);
+    }
+  })();
 
   if (target.posterId && target.posterId > 0) {
     notifyCareerApplication({
@@ -315,10 +323,18 @@ export const deleteCareerOpportunity = (
   const updatedList = currentList.filter((item) => item.id !== opportunityId);
   saveCareerOpportunities(updatedList);
 
-  // Persist deletion to Supabase
-  fetch(`/api/careers/${encodeURIComponent(opportunityId)}`, {
-    method: 'DELETE',
-  }).catch((e) => console.warn('Backend proxy delete career notice:', e));
+  // Persist deletion to Supabase & authenticated backend
+  void (async () => {
+    try {
+      const authHeaders = await getClientAuthHeaders();
+      await fetch(`/api/careers/${encodeURIComponent(opportunityId)}`, {
+        method: 'DELETE',
+        headers: authHeaders,
+      });
+    } catch (e) {
+      console.warn('Backend proxy delete career notice:', e);
+    }
+  })();
 
   return true;
 };

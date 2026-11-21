@@ -1,4 +1,4 @@
-import { supabase } from '../lib/supabase';
+import { supabase, getClientAuthHeaders } from '../lib/supabase';
 import { PostItem, PostComment, LinkMetadata } from '../types/post';
 
 /**
@@ -478,9 +478,10 @@ export async function createPost(params: {
     if (insertErr || !insertedRow) {
       console.warn('Direct Supabase client insert hit error, attempting /api/posts fallback:', insertErr?.message);
         try {
+          const authHeaders = await getClientAuthHeaders();
           const apiRes = await fetch('/api/posts', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: authHeaders,
             body: JSON.stringify({
               author_id: realAuthorId,
               content: safeContent,
@@ -603,11 +604,14 @@ export async function createPost(params: {
 export async function togglePostLike(postId: number, userId: number): Promise<boolean> {
   try {
     // 1. Trigger realtime broadcast to all alumni
-    void fetch(`/api/posts/${postId}/like`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId }),
-    }).catch(() => {});
+    void (async () => {
+      const authHeaders = await getClientAuthHeaders();
+      fetch(`/api/posts/${postId}/like`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({ userId }),
+      }).catch(() => {});
+    })();
 
     const { data: existing } = await supabase
       .from('post_likes')
@@ -704,19 +708,22 @@ export async function addComment(postId: number, userId: number, content: string
     }
 
     // Broadcast comment instantly to all online alumni (skip duplicate DB insert if already persisted)
-    void fetch(`/api/posts/${postId}/comment`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        userId,
-        content: cleanContent,
-        fullName,
-        avatarUrl,
-        skipDbInsert: Boolean(insertedId),
-        commentId: insertedId,
-        createdAt: insertedCreatedAt,
-      }),
-    }).catch(() => {});
+    void (async () => {
+      const authHeaders = await getClientAuthHeaders();
+      fetch(`/api/posts/${postId}/comment`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({
+          userId,
+          content: cleanContent,
+          fullName,
+          avatarUrl,
+          skipDbInsert: Boolean(insertedId),
+          commentId: insertedId,
+          createdAt: insertedCreatedAt,
+        }),
+      }).catch(() => {});
+    })();
 
     // Notify post author
     const { data: postData } = await supabase

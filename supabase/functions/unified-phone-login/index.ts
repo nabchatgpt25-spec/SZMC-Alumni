@@ -31,10 +31,12 @@ import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 
 // Primary live production domain
-const PRIMARY_LIVE_DOMAIN = "https://ndcbogura.alumniworld.xyz";
+const PRIMARY_LIVE_DOMAIN = "https://szmcalumni.net";
 
 // Explicit institutional allowed domains
 const ALLOWED_EXACT_ORIGINS = new Set([
+  "https://szmcalumni.net",
+  "https://www.szmcalumni.net",
   "https://ndcbogura.alumniworld.xyz",
   "https://alumniworld.xyz",
   "https://www.alumniworld.xyz",
@@ -58,8 +60,11 @@ function getValidatedOrigin(req: Request): string | null {
     return normalized;
   }
 
-  // 2. HTTPS subdomains of alumniworld.xyz
-  if (/^https:\/\/([a-zA-Z0-9-]+\.)*alumniworld\.xyz$/.test(normalized)) {
+  // 2. HTTPS subdomains of szmcalumni.net and alumniworld.xyz
+  if (
+    /^https:\/\/([a-zA-Z0-9-]+\.)*szmcalumni\.net$/.test(normalized) ||
+    /^https:\/\/([a-zA-Z0-9-]+\.)*alumniworld\.xyz$/.test(normalized)
+  ) {
     return normalized;
   }
 

@@ -513,6 +513,7 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
                 conversation={activeConversation}
                 messages={messages}
                 myId={myId}
+                isSuperAdmin={isSuperAdmin}
                 loading={threadLoading}
                 error={threadError}
                 sending={sending}

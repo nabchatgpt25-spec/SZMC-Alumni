@@ -4,10 +4,16 @@
 
 :root {
   --theme-color-primary: #1d4ed8;
+  --theme-color-primary-hover: #1e40af;
   --theme-color-accent: #d97706;
   --theme-color-bg: #f8fafc;
   --theme-color-surface: #ffffff;
+  --theme-color-surface-elevated: #f1f5f9;
   --theme-color-border: #e2e8f0;
+  --theme-color-text: #0f172a;
+  --theme-color-text-muted: #64748b;
+  --theme-glow: rgba(29, 78, 216, 0.16);
+  --theme-primary-soft: rgba(29, 78, 216, 0.1);
   transition: background-color 0.25s ease, color 0.25s ease;
 }
 
@@ -1229,6 +1235,310 @@ html[data-theme="vintage-parchment"] .text-blue-700 {
 .szmc-leaflet-popup {
   max-width: calc(100vw - 32px) !important;
 }
+
+/* ==========================================================================
+   SUPER ADMIN GLOBAL PORTAL TYPOGRAPHY, COLORS & TEXT STYLE ENGINE
+   Active only when enabled in site_settings -> master_site_config.portalTypography
+   ========================================================================== */
+html[data-portal-custom-typography="true"] {
+  font-size: calc(16px * var(--portal-font-scale, 1));
+  --portal-heading-color: var(--portal-heading-color-light, #0f172a);
+  --portal-body-color: var(--portal-body-color-light, #334155);
+  --portal-muted-color: var(--portal-muted-color-light, #64748b);
+  --portal-accent-color: var(--portal-accent-color-light, #1d4ed8);
+}
+
+html[data-portal-custom-typography="true"].dark {
+  --portal-heading-color: var(--portal-heading-color-dark, #f8fafc);
+  --portal-body-color: var(--portal-body-color-dark, #e2e8f0);
+  --portal-muted-color: var(--portal-muted-color-dark, #94a3b8);
+  --portal-accent-color: var(--portal-accent-color-dark, #60a5fa);
+}
+
+html[data-portal-custom-typography="true"] body {
+  font-family: var(--portal-font-body, 'Hind Siliguri', system-ui, sans-serif) !important;
+  font-weight: var(--portal-body-weight, 400);
+  line-height: var(--portal-body-line-height, 1.6);
+  color: var(--portal-body-color);
+}
+
+html[data-portal-custom-typography="true"] :where(h1, h2, h3, h4, h5, h6) {
+  font-family: var(--portal-font-heading, 'Hind Siliguri', system-ui, sans-serif) !important;
+  font-weight: var(--portal-heading-weight, 700);
+  letter-spacing: var(--portal-heading-tracking, 0em);
+  font-style: var(--portal-heading-style, normal);
+  text-transform: var(--portal-heading-transform, none);
+}
+
+html[data-portal-custom-typography="true"] :where(h1, h2, h3, h4, h5, h6):not(.text-white):not(.text-transparent):not([data-preserve-text-color]) {
+  color: var(--portal-heading-color);
+}
+
+html[data-portal-custom-typography="true"] :where(p, li, td, dd):not(.text-white):not(.text-slate-400):not(.text-slate-500):not(.text-emerald-600):not(.text-rose-600):not(.text-amber-600):not([data-preserve-text-color]) {
+  color: var(--portal-body-color);
+}
+
+html[data-portal-custom-typography="true"] :where(.text-slate-500, .text-gray-500):not([data-preserve-text-color]) {
+  color: var(--portal-muted-color);
+}
+
+html[data-portal-custom-typography="true"].dark :where(.dark\:text-slate-400, .dark\:text-gray-400):not([data-preserve-text-color]) {
+  color: var(--portal-muted-color);
+}
+
+html[data-portal-custom-typography="true"] :where(a):not(.text-white):not([class*="bg-"]):not([data-preserve-text-color]) {
+  color: var(--portal-accent-color);
+}
+
+/* ==========================================================================
+   ADMIN DASHBOARD MODE 1: NEON AURA COSMIC GLASS SHELL
+   Scoped strictly to .admin-neon-shell so Classic Mode & non-admin routes stay untouched
+   ========================================================================== */
+.admin-neon-shell {
+  background:
+    radial-gradient(ellipse 65% 45% at 12% 0%, rgba(34, 211, 238, 0.14), transparent 60%),
+    radial-gradient(ellipse 55% 40% at 88% 8%, rgba(168, 85, 247, 0.16), transparent 60%),
+    radial-gradient(ellipse 50% 40% at 50% 100%, rgba(16, 185, 129, 0.1), transparent 65%),
+    linear-gradient(180deg, #050a18 0%, #071024 45%, #060d1f 100%);
+  color: #e2e8f0;
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  box-shadow: 0 20px 60px -20px rgba(2, 6, 23, 0.85), inset 0 1px 0 rgba(125, 211, 252, 0.16);
+}
+
+.admin-neon-shell .bg-white,
+.admin-neon-shell .dark\:bg-slate-900 {
+  background-color: rgba(9, 19, 41, 0.82) !important;
+  backdrop-filter: blur(14px);
+}
+
+.admin-neon-shell .bg-slate-50,
+.admin-neon-shell .bg-slate-50\/70,
+.admin-neon-shell .bg-slate-100,
+.admin-neon-shell .dark\:bg-slate-800,
+.admin-neon-shell .dark\:bg-slate-800\/80,
+.admin-neon-shell .dark\:bg-slate-950,
+.admin-neon-shell .dark\:bg-slate-950\/60 {
+  background-color: rgba(6, 14, 32, 0.78) !important;
+}
+
+.admin-neon-shell .border-slate-200,
+.admin-neon-shell .border-slate-100,
+.admin-neon-shell .dark\:border-slate-800,
+.admin-neon-shell .dark\:border-slate-700 {
+  border-color: rgba(56, 189, 248, 0.18) !important;
+}
+
+.admin-neon-shell .divide-slate-200 > :not([hidden]) ~ :not([hidden]),
+.admin-neon-shell .divide-slate-100 > :not([hidden]) ~ :not([hidden]),
+.admin-neon-shell .dark\:divide-slate-800 > :not([hidden]) ~ :not([hidden]) {
+  border-color: rgba(56, 189, 248, 0.14) !important;
+}
+
+.admin-neon-shell .text-slate-900,
+.admin-neon-shell .text-slate-800,
+.admin-neon-shell .dark\:text-slate-100,
+.admin-neon-shell .dark\:text-white {
+  color: #f8fafc !important;
+}
+
+.admin-neon-shell .text-slate-700,
+.admin-neon-shell .text-slate-600,
+.admin-neon-shell .dark\:text-slate-200,
+.admin-neon-shell .dark\:text-slate-300 {
+  color: #cbd5e1 !important;
+}
+
+.admin-neon-shell .text-slate-500,
+.admin-neon-shell .text-slate-400,
+.admin-neon-shell .dark\:text-slate-400 {
+  color: #94a3b8 !important;
+}
+
+.admin-neon-shell input:not([type="checkbox"]):not([type="radio"]):not([type="color"]):not([type="range"]),
+.admin-neon-shell textarea,
+.admin-neon-shell select {
+  background-color: rgba(4, 10, 24, 0.85) !important;
+  border-color: rgba(56, 189, 248, 0.24) !important;
+  color: #f1f5f9 !important;
+}
+
+.admin-neon-shell input:not([type="checkbox"]):not([type="radio"]):not([type="color"]):not([type="range"]):focus,
+.admin-neon-shell textarea:focus,
+.admin-neon-shell select:focus {
+  border-color: rgba(34, 211, 238, 0.65) !important;
+  box-shadow: 0 0 0 2px rgba(34, 211, 238, 0.2) !important;
+  outline: none;
+}
+
+.admin-neon-shell .bg-slate-900 {
+  background-image: linear-gradient(95deg, #2563eb 0%, #7c3aed 55%, #06b6d4 100%) !important;
+  border-color: rgba(125, 211, 252, 0.35) !important;
+  box-shadow: 0 0 20px -4px rgba(56, 189, 248, 0.55);
+}
+
+.admin-neon-shell .hover\:bg-slate-50:hover,
+.admin-neon-shell .hover\:bg-slate-100:hover,
+.admin-neon-shell .dark\:hover\:bg-slate-800:hover,
+.admin-neon-shell .dark\:hover\:bg-slate-700:hover {
+  background-color: rgba(14, 30, 64, 0.9) !important;
+}
+
+/* ==========================================================================
+   GLOBAL THEME MANAGER — APPLICATION-WIDE CSS VARIABLE ENGINE
+   Driven by :root custom properties saved via Admin Settings (site_settings)
+   ========================================================================== */
+html[data-global-theme-active="true"],
+html[data-global-theme-active="true"] body {
+  background-color: var(--theme-color-bg);
+  color: var(--theme-color-text);
+}
+
+html[data-global-theme-active="true"] .nav-link-animated::after {
+  background-color: var(--theme-color-primary);
+}
+
+/* Primary action & brand accent variable wiring */
+html[data-global-theme-active="true"] .bg-blue-600,
+html[data-global-theme-active="true"] .bg-blue-500,
+html[data-global-theme-active="true"] .bg-indigo-600 {
+  background-color: var(--theme-color-primary);
+  box-shadow: 0 6px 20px -6px var(--theme-glow);
+}
+
+html[data-global-theme-active="true"] .hover\:bg-blue-700:hover,
+html[data-global-theme-active="true"] .hover\:bg-blue-600:hover,
+html[data-global-theme-active="true"] .hover\:bg-indigo-700:hover {
+  background-color: var(--theme-color-primary-hover);
+}
+
+html[data-global-theme-active="true"] .text-blue-600,
+html[data-global-theme-active="true"] .text-blue-500,
+html[data-global-theme-active="true"] .text-indigo-600,
+html[data-global-theme-active="true"].dark .dark\:text-blue-400,
+html[data-global-theme-active="true"].dark .dark\:text-indigo-400 {
+  color: var(--theme-color-primary);
+}
+
+html[data-global-theme-active="true"] .border-blue-500,
+html[data-global-theme-active="true"] .border-blue-600,
+html[data-global-theme-active="true"] .border-indigo-500 {
+  border-color: var(--theme-color-primary);
+}
+
+html[data-global-theme-active="true"] .bg-blue-50,
+html[data-global-theme-active="true"] .bg-indigo-50,
+html[data-global-theme-active="true"].dark .dark\:bg-blue-950\/40,
+html[data-global-theme-active="true"].dark .dark\:bg-blue-950\/50 {
+  background-color: var(--theme-primary-soft);
+}
+
+/* Light Global Theme surface & border variable binding */
+html[data-global-theme-active="true"][data-global-theme-mode="light"] .bg-slate-50 {
+  background-color: var(--theme-color-bg);
+}
+
+html[data-global-theme-active="true"][data-global-theme-mode="light"] .bg-white:not(.admin-neon-shell *) {
+  background-color: var(--theme-color-surface);
+}
+
+html[data-global-theme-active="true"][data-global-theme-mode="light"] .bg-slate-100:not(.admin-neon-shell *) {
+  background-color: var(--theme-color-surface-elevated);
+}
+
+html[data-global-theme-active="true"][data-global-theme-mode="light"] .border-slate-200:not(.admin-neon-shell *),
+html[data-global-theme-active="true"][data-global-theme-mode="light"] .border-slate-100:not(.admin-neon-shell *) {
+  border-color: var(--theme-color-border);
+}
+
+/* Dark Global Theme surface & border variable binding */
+html[data-global-theme-active="true"][data-global-theme-mode="dark"] .dark\:bg-slate-950,
+html[data-global-theme-active="true"][data-global-theme-mode="dark"] .bg-slate-950 {
+  background-color: var(--theme-color-bg);
+}
+
+html[data-global-theme-active="true"][data-global-theme-mode="dark"] .dark\:bg-slate-900:not(.admin-neon-shell *) {
+  background-color: var(--theme-color-surface);
+}
+
+html[data-global-theme-active="true"][data-global-theme-mode="dark"] .dark\:bg-slate-800:not(.admin-neon-shell *) {
+  background-color: var(--theme-color-surface-elevated);
+}
+
+html[data-global-theme-active="true"][data-global-theme-mode="dark"] .dark\:border-slate-800:not(.admin-neon-shell *),
+html[data-global-theme-active="true"][data-global-theme-mode="dark"] .dark\:border-slate-700:not(.admin-neon-shell *) {
+  border-color: var(--theme-color-border);
+}
+
+/* ==========================================================================
+   ADMIN CLASSIC CLEAN SHELL (Deep Navy Sidebar + Crisp #F4F6FA Workspace)
+   Scoped strictly to .admin-classic-shell so Neon Mode 1 stays untouched
+   ========================================================================== */
+.admin-classic-shell {
+  background-color: #f4f6fa;
+  color: #1e293b;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 10px 30px -14px rgba(15, 23, 42, 0.12);
+}
+
+.admin-classic-sidebar {
+  background: linear-gradient(180deg, #003366 0%, #002855 55%, #002247 100%);
+  color: #cbd5e1;
+}
+
+.admin-classic-main {
+  background-color: #f4f6fa;
+}
+
+.admin-classic-main .bg-white,
+.admin-classic-main .dark\:bg-slate-900 {
+  background-color: #ffffff;
+  border-color: #e6ecf3;
+}
+
+.admin-classic-main .dark\:bg-slate-950,
+.admin-classic-main .dark\:bg-slate-950\/60,
+.admin-classic-main .dark\:bg-slate-950\/50 {
+  background-color: #f8fafc;
+}
+
+.admin-classic-main .dark\:bg-slate-800,
+.admin-classic-main .dark\:bg-slate-800\/80 {
+  background-color: #f1f5f9;
+}
+
+.admin-classic-main .dark\:border-slate-800,
+.admin-classic-main .dark\:border-slate-700 {
+  border-color: #e2e8f0;
+}
+
+.admin-classic-main .dark\:text-white,
+.admin-classic-main .dark\:text-slate-100 {
+  color: #0f172a;
+}
+
+.admin-classic-main .dark\:text-slate-200,
+.admin-classic-main .dark\:text-slate-300 {
+  color: #334155;
+}
+
+.admin-classic-main .dark\:text-slate-400 {
+  color: #64748b;
+}
+
+.admin-classic-main .bg-slate-900,
+.admin-classic-main .dark\:bg-blue-600 {
+  background-color: #038fde;
+  color: #ffffff;
+}
+
+.admin-classic-main .bg-slate-900:hover,
+.admin-classic-main .dark\:bg-blue-600:hover {
+  background-color: #027bc0;
+}
+
+
+
+
 
 
 

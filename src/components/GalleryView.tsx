@@ -23,6 +23,7 @@ import { CreateAlbumModal } from './gallery/CreateAlbumModal';
 import { UploadPhotosModal } from './gallery/UploadPhotosModal';
 import { PhotoLightbox } from './gallery/PhotoLightbox';
 import { useAuth } from '../context/AuthContext';
+import { getClientAuthHeaders } from '../lib/supabase';
 import {
   fetchGalleryAlbumsFromDb,
   createGalleryAlbumInDb,
@@ -46,9 +47,12 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
 }) => {
   const { currentUser, isAdminUser } = useAuth();
 
+  const isSuperAdmin =
+    isAdminUser || currentUser?.role === 'admin' || (currentUser as any)?.role === 'super_admin';
+
   // Ownership & Administration permission helpers
   const canDeleteAlbum = (album: GalleryAlbum): boolean => {
-    if (isAdminUser || currentUser?.role === 'admin') return true;
+    if (isSuperAdmin) return true;
     if (!currentUser?.id) return false;
     if (album.createdById && Number(album.createdById) === Number(currentUser.id)) return true;
     if (
@@ -65,7 +69,7 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
   };
 
   const canDeletePhoto = (photo: GalleryPhoto, album?: GalleryAlbum): boolean => {
-    if (isAdminUser || currentUser?.role === 'admin') return true;
+    if (isSuperAdmin) return true;
     if (!currentUser?.id) return false;
     if (photo.uploaderId && Number(photo.uploaderId) === Number(currentUser.id)) return true;
     if (album?.createdById && Number(album.createdById) === Number(currentUser.id)) return true;
@@ -108,15 +112,8 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
     const loadAlbums = () => {
       fetchGalleryAlbumsFromDb()
         .then((dbAlbums) => {
-          if (isMounted && dbAlbums && dbAlbums.length > 0) {
-            setAlbums((prev) => {
-              const map = new Map<string | number, GalleryAlbum>();
-              dbAlbums.forEach((a) => map.set(a.id, a));
-              prev.forEach((a) => {
-                if (!map.has(a.id)) map.set(a.id, a);
-              });
-              return Array.from(map.values());
-            });
+          if (isMounted && Array.isArray(dbAlbums)) {
+            setAlbums(dbAlbums);
           }
         })
         .catch((err) => {
@@ -290,9 +287,10 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
 
       // A. Post to Express endpoint /api/posts for immediate availability to all users
       try {
+        const authHeaders = await getClientAuthHeaders();
         await fetch('/api/posts', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: authHeaders,
           body: JSON.stringify({
             author_id: currentUser?.id || 10002,
             content: postContent,

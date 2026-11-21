@@ -130,7 +130,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
   onNavigate,
 }) => {
   const isOnline = useOnlineStatus();
-  const { currentUser, updateProfile } = useAuth();
+  const { currentUser, updateProfile, isAdminUser } = useAuth();
   const [pendingVouchesCount, setPendingVouchesCount] = useState<number>(() => {
     try {
       return loadVouchRequests().filter((r) => r.status === 'pending').length;
@@ -1019,48 +1019,65 @@ export const FeedView: React.FC<FeedViewProps> = ({
   };
 
   // Save Post Changes
-  const handleSaveEdit = () => {
+  const handleSaveEdit = async () => {
     if (!editingPost) return;
     if (!editContent.trim() && editImages.length === 0 && editVideos.length === 0) {
       showToast('Post content, an image, or a video is required.');
       return;
     }
 
-    editFeedPostInDb({
-      postId: editingPost.id,
-      content: editContent.trim(),
-      category: editCategory,
-      images: editImages,
-      videos: editVideos,
-    }).catch(() => {});
+    const targetPost = editingPost;
+    const nextContent = editContent.trim();
+    const nextImages = [...editImages];
+    const nextVideos = [...editVideos];
+    const nextCategory = editCategory;
 
     setPosts((prev) =>
       prev.map((p) => {
-        if (p.id === editingPost.id) {
+        if (p.id === targetPost.id) {
           return {
             ...p,
-            content: editContent.trim(),
-            images: [...editImages],
-            videos: [...editVideos],
-            category: editCategory,
+            content: nextContent,
+            images: nextImages,
+            videos: nextVideos,
+            category: nextCategory,
             isEdited: true,
           };
         }
         return p;
       })
     );
-
     setEditingPost(null);
-    showToast('Your post has been updated!');
+
+    const saved = await editFeedPostInDb({
+      postId: targetPost.id,
+      content: nextContent,
+      category: nextCategory,
+      images: nextImages,
+      videos: nextVideos,
+    }).catch(() => false);
+
+    if (saved) {
+      showToast('Post updated and synced to Supabase in real time!');
+    } else {
+      showToast('Warning: Post edit could not be saved to Supabase. Please check your permissions.');
+    }
   };
 
   // Confirm and Execute Delete Post
-  const handleConfirmDelete = () => {
+  const handleConfirmDelete = async () => {
     if (!postToDelete) return;
-    deleteFeedPostInDb(postToDelete.id).catch(() => {});
-    setPosts((prev) => prev.filter((p) => p.id !== postToDelete.id));
+    const target = postToDelete;
+    setPosts((prev) => prev.filter((p) => p.id !== target.id));
     setPostToDelete(null);
-    showToast('Post has been deleted from your feed.');
+
+    const deleted = await deleteFeedPostInDb(target.id).catch(() => false);
+    if (deleted) {
+      showToast('Post deleted permanently from Supabase.');
+    } else {
+      setPosts((prev) => [target, ...prev]);
+      showToast('Could not delete post in Supabase. Please check your permissions.');
+    }
   };
 
   // Submit Report
@@ -1778,7 +1795,14 @@ export const FeedView: React.FC<FeedViewProps> = ({
           }
 
           return displayedPosts.filter(Boolean).map((post) => {
-            const isOwner = post.userId === currentUser.userId || (post as any).authorId === currentUser.id;
+            const isSuperAdmin =
+              isAdminUser ||
+              currentUser.role === 'admin' ||
+              (currentUser as any).role === 'super_admin';
+            const isOwner =
+              isSuperAdmin ||
+              post.userId === currentUser.userId ||
+              (post as any).authorId === currentUser.id;
             const postContent = typeof post.content === 'string' ? post.content : '';
             const extractedUrls = extractUrlsFromText(postContent);
             const rawVideos = Array.isArray(post.videos) ? post.videos.filter(Boolean) : [];

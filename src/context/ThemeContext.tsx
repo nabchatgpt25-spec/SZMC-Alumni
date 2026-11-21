@@ -48,6 +48,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const root = document.documentElement;
+    const isGlobalThemeManaged = root.getAttribute('data-global-theme-active') === 'true';
 
     // Apply data-theme attribute
     root.setAttribute('data-theme', isDark ? 'dark' : 'light');
@@ -61,12 +62,14 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       root.style.colorScheme = 'light';
     }
 
-    // Set CSS custom properties for instant dynamic highlights
-    root.style.setProperty('--theme-color-primary', currentThemeConfig.colors.primary);
-    root.style.setProperty('--theme-color-accent', currentThemeConfig.colors.accent);
-    root.style.setProperty('--theme-color-bg', currentThemeConfig.colors.background);
-    root.style.setProperty('--theme-color-surface', currentThemeConfig.colors.surface);
-    root.style.setProperty('--theme-color-border', currentThemeConfig.colors.border);
+    // Only write default ThemeContext CSS variables if Admin Global Theme Manager is not active
+    if (!isGlobalThemeManaged) {
+      root.style.setProperty('--theme-color-primary', currentThemeConfig.colors.primary);
+      root.style.setProperty('--theme-color-accent', currentThemeConfig.colors.accent);
+      root.style.setProperty('--theme-color-bg', currentThemeConfig.colors.background);
+      root.style.setProperty('--theme-color-surface', currentThemeConfig.colors.surface);
+      root.style.setProperty('--theme-color-border', currentThemeConfig.colors.border);
+    }
 
     try {
       localStorage.setItem(THEME_STORAGE_KEY, isDark ? 'dark' : 'light');

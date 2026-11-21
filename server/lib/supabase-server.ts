@@ -6,8 +6,6 @@ dotenv.config({ quiet: true });
 export const DEFAULT_SUPABASE_URL = 'https://hjuyiqyviohinbhzaipl.supabase.co';
 export const DEFAULT_SUPABASE_ANON_KEY =
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhqdXlpcXl2aW9oaW5iaHphaXBsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE2MjQ2NzIsImV4cCI6MjEwNzIwMDY3Mn0.fppNXVPWcsWGsUIBwvirhjEkdDyUCX-SyydNWExbwk8';
-export const DEFAULT_SUPABASE_SERVICE_ROLE_KEY =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhqdXlpcXl2aW9oaW5iaHphaXBsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc5MTYyNDY3MiwiZXhwIjoyMTA3MjAwNjcyfQ.ue8jWRc6WYUf6LBDk7hKk_00JFmHL18cLxkoXv4U5SY';
 
 const urlCandidates = [
   process.env.SUPABASE_URL,
@@ -22,10 +20,16 @@ const rawUrl = (
   ) || DEFAULT_SUPABASE_URL
 ).trim();
 
-// Prefer service_role key for administrative operations if provided, otherwise fallback to anon key
+// Strictly load service_role key from environment variables (never hardcode secrets in source)
+const envServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+if (!envServiceRoleKey) {
+  console.warn(
+    '[SupabaseServer] SUPABASE_SERVICE_ROLE_KEY is not set in environment; falling back to anon key (privileged admin writes will be subject to RLS).'
+  );
+}
+
 const keyCandidates = [
-  process.env.SUPABASE_SERVICE_ROLE_KEY,
-  DEFAULT_SUPABASE_SERVICE_ROLE_KEY,
+  envServiceRoleKey,
   process.env.SUPABASE_ANON_KEY,
   process.env.VITE_SUPABASE_URL && !process.env.VITE_SUPABASE_URL.startsWith('http')
     ? process.env.VITE_SUPABASE_URL
@@ -37,7 +41,7 @@ const rawKey = (
     (k) =>
       typeof k === 'string' &&
       (k.trim().startsWith('eyJ') || k.trim().startsWith('sb_') || k.trim().length > 30)
-  ) || DEFAULT_SUPABASE_SERVICE_ROLE_KEY
+  ) || DEFAULT_SUPABASE_ANON_KEY
 ).trim();
 
 export const isSupabaseServerConfigured = Boolean(

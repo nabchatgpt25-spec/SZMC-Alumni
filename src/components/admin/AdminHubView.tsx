@@ -100,6 +100,7 @@ import {
   getAutoVerificationRemainingTime,
   pauseAutoVerification,
   resetAutoVerification7Days,
+  uploadSiteAssetImage,
 } from '../../services/siteConfigService';
 import { SZMCLogo } from '../SZMCLogo';
 import { compressImageFileToDataUrl } from '../../utils/mediaStorage';
@@ -550,17 +551,18 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
     }
   };
 
-  // Logo file upload handler
+  // Logo file upload handler (uploads directly to Supabase Storage for instant cross-device sync)
   const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     try {
-      const dataUrl = await compressImageFileToDataUrl(file, 400, 0.9);
-      updateConfig({ logoUrl: dataUrl });
-      showToast('Site emblem logo updated across the whole website!', 'success');
+      const publicUrl = await uploadSiteAssetImage(file, 'logo', 600, 0.92);
+      updateConfig({ logoUrl: publicUrl });
+      showToast('Site emblem logo uploaded to Supabase and updated live!', 'success');
     } catch {
       showToast('Failed to process image file.', 'error');
     }
+    e.target.value = '';
   };
 
   // Filter Submissions
@@ -2224,18 +2226,17 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
                             type="file"
                             accept="image/*"
                             className="hidden"
-                            onChange={(e) => {
+                            onChange={async (e) => {
                               const file = e.target.files?.[0];
-                              if (file) {
-                                const reader = new FileReader();
-                                reader.onload = () => {
-                                  if (typeof reader.result === 'string') {
-                                    updateConfig({ heroBackgroundImageUrl: reader.result });
-                                    showToast('Background image uploaded successfully!', 'success');
-                                  }
-                                };
-                                reader.readAsDataURL(file);
+                              if (!file) return;
+                              try {
+                                const publicUrl = await uploadSiteAssetImage(file, 'hero', 1920, 0.88);
+                                updateConfig({ heroBackgroundImageUrl: publicUrl });
+                                showToast('Hero background uploaded to Supabase and updated live!', 'success');
+                              } catch {
+                                showToast('Failed to upload background image.', 'error');
                               }
+                              e.target.value = '';
                             }}
                           />
                         </label>
@@ -2563,13 +2564,13 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
                                   const file = e.target.files?.[0];
                                   if (!file) return;
                                   try {
-                                    const dataUrl = await compressImageFileToDataUrl(file, 600, 0.85);
+                                    const publicUrl = await uploadSiteAssetImage(file, 'hall-of-fame', 800, 0.88);
                                     const updated = [...config.featuredAlumni];
-                                    updated[idx] = { ...fa, avatarUrl: dataUrl };
+                                    updated[idx] = { ...fa, avatarUrl: publicUrl };
                                     updateConfig({ featuredAlumni: updated });
-                                    showToast(`Updated photo for ${fa.name}!`, 'success');
+                                    showToast(`Photo for ${fa.name} saved to Supabase!`, 'success');
                                   } catch {
-                                    showToast('Failed to process image file', 'error');
+                                    showToast('Failed to upload image file', 'error');
                                   }
                                   e.target.value = '';
                                 }}
@@ -2601,13 +2602,13 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
                                   const file = e.target.files?.[0];
                                   if (!file) return;
                                   try {
-                                    const dataUrl = await compressImageFileToDataUrl(file, 600, 0.85);
+                                    const publicUrl = await uploadSiteAssetImage(file, 'hall-of-fame', 800, 0.88);
                                     const updated = [...config.featuredAlumni];
-                                    updated[idx] = { ...fa, avatarUrl: dataUrl };
+                                    updated[idx] = { ...fa, avatarUrl: publicUrl };
                                     updateConfig({ featuredAlumni: updated });
-                                    showToast(`Updated photo for ${fa.name}!`, 'success');
+                                    showToast(`Photo for ${fa.name} saved to Supabase!`, 'success');
                                   } catch {
-                                    showToast('Failed to process image file', 'error');
+                                    showToast('Failed to upload image file', 'error');
                                   }
                                   e.target.value = '';
                                 }}
@@ -3646,13 +3647,13 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
                               const file = e.target.files?.[0];
                               if (!file) return;
                               try {
-                                const dataUrl = await compressImageFileToDataUrl(file, 600, 0.85);
+                                const publicUrl = await uploadSiteAssetImage(file, 'hall-of-fame', 800, 0.88);
                                 const updated = [...config.featuredAlumni];
-                                updated[idx] = { ...fa, avatarUrl: dataUrl };
+                                updated[idx] = { ...fa, avatarUrl: publicUrl };
                                 updateConfig({ featuredAlumni: updated });
-                                showToast(`Updated photo for ${fa.name}!`, 'success');
+                                showToast(`Photo for ${fa.name} saved to Supabase!`, 'success');
                               } catch {
-                                showToast('Failed to process image file', 'error');
+                                showToast('Failed to upload image file', 'error');
                               }
                               e.target.value = '';
                             }}
@@ -3683,13 +3684,13 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
                                 const file = e.target.files?.[0];
                                 if (!file) return;
                                 try {
-                                  const dataUrl = await compressImageFileToDataUrl(file, 600, 0.85);
+                                  const publicUrl = await uploadSiteAssetImage(file, 'hall-of-fame', 800, 0.88);
                                   const updated = [...config.featuredAlumni];
-                                  updated[idx] = { ...fa, avatarUrl: dataUrl };
+                                  updated[idx] = { ...fa, avatarUrl: publicUrl };
                                   updateConfig({ featuredAlumni: updated });
-                                  showToast(`Updated photo for ${fa.name}!`, 'success');
+                                  showToast(`Photo for ${fa.name} saved to Supabase!`, 'success');
                                 } catch {
-                                  showToast('Failed to process image file', 'error');
+                                  showToast('Failed to upload image file', 'error');
                                 }
                                 e.target.value = '';
                               }}

@@ -1,6 +1,6 @@
 import { MentorshipCategory, MentorshipRequest, MentorOffer, MentorshipAnswer } from '../types/mentorship';
 import { notifyMentorshipQuestion, notifyMentorshipAnswer } from '../utils/notificationService';
-import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { supabase, isSupabaseConfigured, getClientAuthHeaders } from '../lib/supabase';
 
 const REQUESTS_STORAGE_KEY = 'mentorship_requests_v1';
 const MENTORS_STORAGE_KEY = 'mentorship_mentors_v1';
@@ -258,19 +258,23 @@ export const createMentorshipRequest = (
           });
         if (error) throw error;
       } catch {
+        const authHeaders = await getClientAuthHeaders();
         fetch('/api/mentorship/requests', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: authHeaders,
           body: JSON.stringify(payload),
         }).catch((e) => console.warn('Backend proxy mentorship request fallback failed:', e));
       }
     })();
   } else {
-    fetch('/api/mentorship/requests', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    }).catch((e) => console.warn('Backend proxy mentorship request fallback failed:', e));
+    void (async () => {
+      const authHeaders = await getClientAuthHeaders();
+      fetch('/api/mentorship/requests', {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify(payload),
+      }).catch((e) => console.warn('Backend proxy mentorship request fallback failed:', e));
+    })();
   }
 
   if (!Number.isNaN(targetIdNum) && targetIdNum > 0) {
@@ -332,11 +336,18 @@ export const addMentorshipAnswer = (
     answerText: answerText.trim(),
   };
 
-  fetch(`/api/mentorship/requests/${encodeURIComponent(requestId)}/answers`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  }).catch((e) => console.warn('Backend proxy mentorship answer notice:', e));
+  void (async () => {
+    try {
+      const authHeaders = await getClientAuthHeaders();
+      await fetch(`/api/mentorship/requests/${encodeURIComponent(requestId)}/answers`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify(payload),
+      });
+    } catch (e) {
+      console.warn('Backend proxy mentorship answer notice:', e);
+    }
+  })();
 
   if (targetReq && targetReq.userId) {
     notifyMentorshipAnswer({
@@ -403,12 +414,19 @@ export const registerMentorOffer = (
 
   saveMentorOffers(updated);
 
-  // Persist to Supabase & Backend
-  fetch('/api/mentorship/mentors', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(newOffer),
-  }).catch((e) => console.warn('Backend proxy mentor offer notice:', e));
+  // Persist to Supabase & authenticated Backend
+  void (async () => {
+    try {
+      const authHeaders = await getClientAuthHeaders();
+      await fetch('/api/mentorship/mentors', {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify(newOffer),
+      });
+    } catch (e) {
+      console.warn('Backend proxy mentor offer notice:', e);
+    }
+  })();
 
   return newOffer;
 };

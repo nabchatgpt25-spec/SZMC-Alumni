@@ -33,10 +33,10 @@ export const SUPER_ADMIN_EMAILS = Array.from(new Set([
 
 import crypto from 'crypto';
 
-// Runtime-generated high-entropy fallback secret if ADMIN_SESSION_SECRET is not provided in environment
+// Cryptographically strong random per-process fallback secret if ADMIN_SESSION_SECRET is unset
 export const ADMIN_SESSION_SECRET =
-  process.env.ADMIN_SESSION_SECRET ||
-  crypto.createHash('sha256').update(`szmc_runtime_secret:${process.cwd()}`).digest('hex');
+  process.env.ADMIN_SESSION_SECRET?.trim() ||
+  crypto.randomBytes(32).toString('hex');
 
 const ADMIN_PHONE_SUFFIX_DIGEST = '752c91e0a1047c99f82ee8eff19f0234f12b2818db5fe0695ac961315b4f4bae';
 

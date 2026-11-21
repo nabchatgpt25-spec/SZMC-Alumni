@@ -64,12 +64,8 @@ class SupabaseRealtimeManager {
   private sseInitialized = false;
 
   constructor() {
-    if (typeof window !== 'undefined') {
-      this.ensureUnifiedSseStream();
-      if (isSupabaseConfigured) {
-        this.initSharedChannels();
-      }
-    }
+    // Channels and SSE stream initialize lazily on first subscriber so landing-page
+    // visitors do not multiply concurrent Realtime WebSocket connections.
   }
 
   public getStatus(): RealtimeStatus {
@@ -222,18 +218,35 @@ class SupabaseRealtimeManager {
   // ---------------------------------------------------------------------------
   public subscribeToHallOfFame(listener: (event: RealtimeHallOfFameEvent) => void): () => void {
     this.hallOfFameListeners.add(listener);
+    this.ensureUnifiedSseStream();
     this.ensureHallOfFameAndSiteChannel();
     return () => {
       this.hallOfFameListeners.delete(listener);
+      this.teardownHallOfFameIfIdle();
     };
   }
 
   public subscribeToSiteSettings(listener: (event: RealtimeSiteSettingsEvent) => void): () => void {
     this.siteSettingsListeners.add(listener);
+    this.ensureUnifiedSseStream();
     this.ensureHallOfFameAndSiteChannel();
     return () => {
       this.siteSettingsListeners.delete(listener);
+      this.teardownHallOfFameIfIdle();
     };
+  }
+
+  private teardownHallOfFameIfIdle() {
+    if (
+      this.hallOfFameListeners.size === 0 &&
+      this.siteSettingsListeners.size === 0 &&
+      this.hallOfFameChannel
+    ) {
+      try {
+        void supabase.removeChannel(this.hallOfFameChannel);
+      } catch {}
+      this.hallOfFameChannel = null;
+    }
   }
 
   public broadcastSiteConfigUpdate(config: any) {
@@ -379,6 +392,12 @@ class SupabaseRealtimeManager {
 
     return () => {
       this.feedListeners.delete(listener);
+      if (this.feedListeners.size === 0 && this.feedChannel) {
+        try {
+          void supabase.removeChannel(this.feedChannel);
+        } catch {}
+        this.feedChannel = null;
+      }
     };
   }
 
@@ -505,10 +524,17 @@ class SupabaseRealtimeManager {
   // ---------------------------------------------------------------------------
   public subscribeToBloodNetwork(listener: (event: RealtimeBloodEvent) => void): () => void {
     this.bloodListeners.add(listener);
+    this.ensureUnifiedSseStream();
     this.ensureBloodChannel();
 
     return () => {
       this.bloodListeners.delete(listener);
+      if (this.bloodListeners.size === 0 && this.bloodChannel) {
+        try {
+          void supabase.removeChannel(this.bloodChannel);
+        } catch {}
+        this.bloodChannel = null;
+      }
     };
   }
 
@@ -624,39 +650,16 @@ class SupabaseRealtimeManager {
   }
 
   // ---------------------------------------------------------------------------
-  // 4. ALUMNI PROFILES & DIRECTORY REALTIME CHANNEL
+  // 4. ALUMNI PROFILES & DIRECTORY REALTIME UPDATES (via safe SSE only;
+  //    alumni_profiles is removed from supabase_realtime to prevent PII leaks)
   // ---------------------------------------------------------------------------
   public subscribeToAlumni(listener: (event: RealtimeAlumniEvent) => void): () => void {
     this.alumniListeners.add(listener);
-    this.ensureAlumniChannel();
+    this.ensureUnifiedSseStream();
 
     return () => {
       this.alumniListeners.delete(listener);
     };
-  }
-
-  private ensureAlumniChannel() {
-    if (this.alumniChannel || !isSupabaseConfigured) return;
-
-    try {
-      this.alumniChannel = supabase
-        .channel('realtime:alumni_profiles')
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'alumni_profiles' },
-          (payload) => {
-            const event: RealtimeAlumniEvent = {
-              eventType: payload.eventType as any,
-              newRecord: payload.new,
-              oldRecord: payload.old,
-            };
-            this.alumniListeners.forEach((cb) => cb(event));
-          }
-        )
-        .subscribe();
-    } catch (err) {
-      console.warn('Realtime alumni subscription warning:', err);
-    }
   }
 
   // ---------------------------------------------------------------------------
@@ -664,10 +667,17 @@ class SupabaseRealtimeManager {
   // ---------------------------------------------------------------------------
   public subscribeToNotices(listener: (notice: any) => void): () => void {
     this.noticesListeners.add(listener);
+    this.ensureUnifiedSseStream();
     this.ensureNoticesChannel();
 
     return () => {
       this.noticesListeners.delete(listener);
+      if (this.noticesListeners.size === 0 && this.noticesChannel) {
+        try {
+          void supabase.removeChannel(this.noticesChannel);
+        } catch {}
+        this.noticesChannel = null;
+      }
     };
   }
 
@@ -793,15 +803,13 @@ class SupabaseRealtimeManager {
     }
     return () => {
       this.eventsListeners.delete(listener);
+      if (this.eventsListeners.size === 0 && this.eventsChannel) {
+        try {
+          void supabase.removeChannel(this.eventsChannel);
+        } catch {}
+        this.eventsChannel = null;
+      }
     };
-  }
-
-  private initSharedChannels() {
-    this.ensureHallOfFameAndSiteChannel();
-    this.ensureFeedChannel();
-    this.ensureBloodChannel();
-    this.ensureAlumniChannel();
-    this.ensureNoticesChannel();
   }
 }
 

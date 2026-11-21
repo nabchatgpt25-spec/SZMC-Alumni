@@ -64,6 +64,15 @@ import {
   setServerAutoVerifyConfig,
   bulkVerifyAllAlumniProfiles,
 } from './server/db/adminRepository.ts';
+import {
+  ingestTelemetryBatch,
+  getTelemetryOverview,
+  getUserTelemetryDossier,
+  createAdSegment,
+  deleteAdSegment,
+  clearTelemetryLogs,
+  listAdSegments,
+} from './server/db/telemetryRepository.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -75,14 +84,42 @@ const portFlagIdx = args.indexOf('--port');
 const cliPort = portFlagIdx !== -1 && args[portFlagIdx + 1] ? Number(args[portFlagIdx + 1]) : undefined;
 const PORT: number = cliPort || (process.env.APP_PORT ? Number(process.env.APP_PORT) : 3000);
 
-// 1. Security Headers & Custom Domain CORS Middleware for AI Studio & Preview
+// 1. Security Headers & Strict Domain CORS Allowlist Middleware
+const EXTRA_ALLOWED_ORIGINS = new Set(
+  (process.env.ALLOWED_ORIGINS || '')
+    .split(',')
+    .map((o) => o.trim().replace(/\/+$/, ''))
+    .filter(Boolean)
+);
+
+function isAllowedCorsOrigin(origin: string): boolean {
+  const normalized = origin.trim().replace(/\/+$/, '');
+  if (
+    normalized === 'https://szmcalumni.net' ||
+    normalized === 'https://www.szmcalumni.net' ||
+    normalized === 'https://ndcbogura.alumniworld.xyz' ||
+    normalized === 'https://alumniworld.xyz' ||
+    normalized === 'https://www.alumniworld.xyz' ||
+    EXTRA_ALLOWED_ORIGINS.has(normalized)
+  ) {
+    return true;
+  }
+  return (
+    /^https:\/\/([a-zA-Z0-9-]+\.)*szmcalumni\.net$/.test(normalized) ||
+    /^https:\/\/([a-zA-Z0-9-]+\.)*alumniworld\.xyz$/.test(normalized) ||
+    /^https:\/\/([a-zA-Z0-9-]+\.)*run\.app$/.test(normalized) ||
+    /^https:\/\/([a-zA-Z0-9-]+\.)*googleusercontent\.com$/.test(normalized) ||
+    /^https?:\/\/(localhost|127\.0\.0\.1)(:[0-9]+)?$/.test(normalized)
+  );
+}
+
 app.use((req: Request, res: Response, next: NextFunction) => {
   const origin = req.headers.origin;
-  if (origin) {
+  if (origin && isAllowedCorsOrigin(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Vary', 'Origin');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, x-admin-token, x-file-ext, x-user-id');
     res.setHeader('Access-Control-Allow-Credentials', 'true');
   }
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -160,8 +197,8 @@ function resolveActor(req: AuthRequest) {
 // API ROUTES
 // ---------------------------------------------------------------------------
 
-// Direct download route for the compiled production distribution package
-app.get(['/api/download-dist', '/download-dist', '/download/dist.zip', '/szmc-alumni-dist.zip'], (_req: Request, res: Response) => {
+// Admin-only download route for the compiled production distribution package
+app.get(['/api/download-dist', '/download-dist', '/download/dist.zip', '/szmc-alumni-dist.zip'], requireAdmin, (_req: AuthRequest, res: Response) => {
   const publicZip = path.resolve(__dirname, 'public', 'szmc-alumni-dist.zip');
   if (existsSync(publicZip)) {
     return res.download(publicZip, 'szmc-alumni-dist.zip');
@@ -792,6 +829,127 @@ app.post('/api/admin/bulk-verify-all', rateLimitGuard(15, 60_000), requireAdmin,
 });
 
 // ---------------------------------------------------------------------------
+// User Behavioral Telemetry & Super Admin Ad Intelligence Data Center Routes
+// ---------------------------------------------------------------------------
+
+// Ingest sanitized behavioral event batches (page views, dwell time, clicks, scroll, searches)
+app.post(
+  '/api/telemetry/batch',
+  rateLimitGuard(180, 60_000),
+  optionalAuth,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const body = req.body;
+      if (!body || typeof body !== 'object' || !body.session?.sessionId) {
+        return res.status(400).json({ error: 'Invalid telemetry payload.' });
+      }
+      const result = await ingestTelemetryBatch(body, req.dbUser || null);
+      return res.json({ ok: true, ...result });
+    } catch (err: any) {
+      return res.status(500).json({ error: err?.message || 'Failed to ingest telemetry batch.' });
+    }
+  }
+);
+
+// Super Admin: Full User Activity Overview (KPIs, Route Dwell, Click Hotspots, Users, Live Feed)
+app.get(
+  '/api/admin/telemetry/overview',
+  rateLimitGuard(120, 60_000),
+  requireAdmin,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const rawRange = Number(req.query.rangeHours);
+      const rangeHours = Number.isFinite(rawRange) && rawRange >= 0 && rawRange <= 8760 ? rawRange : 168;
+      const overview = await getTelemetryOverview(rangeHours);
+      return res.json(overview);
+    } catch (err: any) {
+      return res.status(500).json({ error: err?.message || 'Failed to load telemetry overview.' });
+    }
+  }
+);
+
+// Super Admin: Deep-Dive Behavioral Dossier for a Specific User
+app.get(
+  '/api/admin/telemetry/user/:userKey',
+  rateLimitGuard(120, 60_000),
+  requireAdmin,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const userKey = decodeURIComponent(String(req.params.userKey || '')).trim();
+      if (!userKey || userKey.length > 140) {
+        return res.status(400).json({ error: 'Invalid user identifier.' });
+      }
+      const dossier = await getUserTelemetryDossier(userKey);
+      if (!dossier) {
+        return res.status(404).json({ error: 'No behavioral telemetry found for this user.' });
+      }
+      return res.json(dossier);
+    } catch (err: any) {
+      return res.status(500).json({ error: err?.message || 'Failed to load user dossier.' });
+    }
+  }
+);
+
+// Super Admin: List, Create, and Delete Targeted Ad Audience Segments
+app.get(
+  '/api/admin/telemetry/segments',
+  rateLimitGuard(120, 60_000),
+  requireAdmin,
+  async (_req: AuthRequest, res: Response) => {
+    try {
+      const segments = await listAdSegments();
+      return res.json({ segments });
+    } catch (err: any) {
+      return res.status(500).json({ error: err?.message || 'Failed to list audience segments.' });
+    }
+  }
+);
+
+app.post(
+  '/api/admin/telemetry/segments',
+  rateLimitGuard(60, 60_000),
+  requireAdmin,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const actor = resolveActor(req);
+      const created = await createAdSegment(req.body || {}, actor.email || 'Super Admin');
+      return res.status(201).json({ success: true, segment: created });
+    } catch (err: any) {
+      return res.status(400).json({ error: err?.message || 'Failed to create audience segment.' });
+    }
+  }
+);
+
+app.delete(
+  '/api/admin/telemetry/segments/:id',
+  rateLimitGuard(60, 60_000),
+  requireAdmin,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const id = String(req.params.id || '').trim();
+      await deleteAdSegment(id);
+      return res.json({ success: true });
+    } catch (err: any) {
+      return res.status(500).json({ error: err?.message || 'Failed to delete audience segment.' });
+    }
+  }
+);
+
+app.post(
+  '/api/admin/telemetry/clear',
+  rateLimitGuard(10, 60_000),
+  requireAdmin,
+  async (_req: AuthRequest, res: Response) => {
+    try {
+      await clearTelemetryLogs();
+      return res.json({ success: true, message: 'Local telemetry session buffer cleared.' });
+    } catch (err: any) {
+      return res.status(500).json({ error: err?.message || 'Failed to clear telemetry logs.' });
+    }
+  }
+);
+
+// ---------------------------------------------------------------------------
 // Institutional Site Configuration Storage & Cross-Device Persistence Engine
 // ---------------------------------------------------------------------------
 let serverSiteConfigStore: any = null;
@@ -1016,11 +1174,13 @@ app.post('/api/admin/site-config', rateLimitGuard(120, 60_000), async (req: Auth
       });
     }
 
-    // Sync to Supabase site_settings asynchronously
+    // Sync to Supabase site_settings authoritatively so admin edits are guaranteed persisted
+    let supabaseSynced = false;
+    let supabaseSyncError: string | null = null;
     if (isSupabaseServerConfigured) {
       const nowIso = new Date().toISOString();
       const hofMembers = Array.isArray(updated.featuredAlumni) ? updated.featuredAlumni : [];
-      void Promise.allSettled([
+      const results = await Promise.allSettled([
         supabaseServer.from('site_settings').upsert({
           key: 'master_site_config',
           value: updated,
@@ -1034,12 +1194,25 @@ app.post('/api/admin/site-config', rateLimitGuard(120, 60_000), async (req: Auth
           },
           updated_at: nowIso,
         }, { onConflict: 'key' }),
-      ]).catch(() => {});
+      ]);
+      const errors = results
+        .map((r) => (r.status === 'rejected' ? r.reason?.message : r.value?.error?.message))
+        .filter(Boolean);
+      if (errors.length === 0) {
+        supabaseSynced = true;
+      } else {
+        supabaseSyncError = errors.join('; ');
+        console.warn('Supabase site_settings server sync error:', supabaseSyncError);
+      }
     }
 
     return res.json({
       success: true,
-      message: 'Site configuration & Hall of Fame saved and broadcast live across all devices!',
+      supabaseSynced,
+      supabaseSyncError,
+      message: supabaseSynced
+        ? 'Site configuration & Hall of Fame saved to Supabase and broadcast live across all devices!'
+        : 'Site configuration broadcast live (check SUPABASE_SERVICE_ROLE_KEY for server-side Supabase sync).',
       savedAt: updated.updatedAt,
       config: updated,
     });
@@ -1354,11 +1527,21 @@ function broadcastFeedEvent(event: any) {
   }
 }
 
-app.post('/api/feed/broadcast', rateLimitGuard(60, 60_000), (req: Request, res: Response) => {
+app.post('/api/feed/broadcast', rateLimitGuard(60, 60_000), requireAuth, (req: AuthRequest, res: Response) => {
   const payload = req.body;
-  if (payload) {
-    broadcastFeedEvent(payload);
+  if (!payload || typeof payload !== 'object') {
+    return res.status(400).json({ error: 'Invalid broadcast payload' });
   }
+  const eventType = String(payload.type || '');
+  const isAdminActor = req.dbUser?.role === 'admin' || req.dbUser?.role === 'super_admin' || req.dbUser?.role === 'moderator';
+  // Only verified admins can broadcast global site/config/notice events
+  if (
+    (eventType === 'SITE_CONFIG_UPDATED' || eventType === 'HALL_OF_FAME_UPDATED' || eventType === 'NOTICE_UPDATED') &&
+    !isAdminActor
+  ) {
+    return res.status(403).json({ error: 'Forbidden: Only administrators can broadcast system configuration events.' });
+  }
+  broadcastFeedEvent(payload);
   res.json({ success: true });
 });
 
@@ -1471,10 +1654,12 @@ app.get('/api/posts', rateLimitGuard(120, 60_000), async (req: Request, res: Res
   }
 });
 
-app.post('/api/posts', rateLimitGuard(40, 60_000), async (req: Request, res: Response) => {
+app.post('/api/posts', rateLimitGuard(40, 60_000), requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     invalidatePostsCache();
-    const authorId = Number(req.body.author_id || req.body.authorId || 1);
+    const isAdminActor = req.dbUser?.role === 'admin' || req.dbUser?.role === 'super_admin';
+    const requestedAuthorId = Number(req.body.author_id || req.body.authorId || 0);
+    const authorId = isAdminActor && requestedAuthorId > 0 ? requestedAuthorId : Number(req.dbUser?.id || 1);
     const content = String(req.body.content || '').trim();
     const category = req.body.category || 'General Update';
     const images = Array.isArray(req.body.images) ? req.body.images : [];
@@ -1676,10 +1861,10 @@ app.post('/api/posts', rateLimitGuard(40, 60_000), async (req: Request, res: Res
 });
 
 // Post Likes & Reactions - High Performance Realtime Supabase & In-Memory Storage
-app.post('/api/posts/:id/react', rateLimitGuard(120, 60_000), async (req: Request, res: Response) => {
+app.post('/api/posts/:id/react', rateLimitGuard(120, 60_000), requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const postId = Number(req.params.id);
-    const userId = Number(req.body.userId || req.body.user_id || 1);
+    const userId = Number(req.dbUser?.id || 1);
     const reaction = req.body.reaction ? String(req.body.reaction) : null; // 'like' | 'love' | 'care' | 'haha' | 'wow' | 'sad' | 'angry' | null
 
     let likesCount = 0;
@@ -1755,10 +1940,10 @@ app.post('/api/posts/:id/react', rateLimitGuard(120, 60_000), async (req: Reques
 });
 
 // Post Likes - High Performance Supabase Storage
-app.post('/api/posts/:id/like', rateLimitGuard(120, 60_000), async (req: Request, res: Response) => {
+app.post('/api/posts/:id/like', rateLimitGuard(120, 60_000), requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const postId = Number(req.params.id);
-    const userId = Number(req.body.userId || req.body.user_id || 1);
+    const userId = Number(req.dbUser?.id || 1);
 
     let liked = false;
     let likesCount = 0;
@@ -1822,10 +2007,10 @@ app.post('/api/posts/:id/like', rateLimitGuard(120, 60_000), async (req: Request
 });
 
 // Post Comments - Realtime Cross-Alumni Broadcast with Full Author Details
-app.post('/api/posts/:id/comment', rateLimitGuard(90, 60_000), async (req: Request, res: Response) => {
+app.post('/api/posts/:id/comment', rateLimitGuard(90, 60_000), requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const postId = Number(req.params.id);
-    const userId = Number(req.body.userId || req.body.user_id || req.body.author_id || 1);
+    const userId = Number(req.dbUser?.id || 1);
     const content = String(req.body.content || '').trim();
     let fullName = String(req.body.fullName || req.body.authorName || '').trim();
     let avatarUrl = String(req.body.avatarUrl || req.body.authorAvatar || '').trim();
@@ -1944,11 +2129,11 @@ app.post('/api/posts/:id/comment', rateLimitGuard(90, 60_000), async (req: Reque
 });
 
 // Post Comment Replies - Realtime Cross-Alumni Broadcast + Supabase Persistence
-app.post('/api/posts/:id/reply', rateLimitGuard(90, 60_000), async (req: Request, res: Response) => {
+app.post('/api/posts/:id/reply', rateLimitGuard(90, 60_000), requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const postId = Number(req.params.id);
     const parentCommentId = Number(req.body.parentCommentId);
-    const userId = Number(req.body.userId || 1);
+    const userId = Number(req.dbUser?.id || 1);
     const content = String(req.body.content || '').trim();
     const fullName = String(req.body.fullName || 'SZMC Colleague').trim();
     const avatarUrl = String(req.body.avatarUrl || '/assets/aistudio/images__1__2778177d.png').trim();
@@ -2076,9 +2261,10 @@ app.get('/api/gallery/albums', rateLimitGuard(60, 60_000), async (_req: Request,
   }
 });
 
-app.post('/api/gallery/albums', rateLimitGuard(30, 60_000), async (req: Request, res: Response) => {
+app.post('/api/gallery/albums', rateLimitGuard(30, 60_000), requireAuth, async (req: AuthRequest, res: Response) => {
   try {
-    const { title, description, category, eventDateLabel, location, batchYear, coverUrl, createdById, createdBy } = req.body;
+    const { title, description, category, eventDateLabel, location, batchYear, coverUrl, createdBy } = req.body;
+    const createdById = Number(req.dbUser?.id || 0);
     if (!title || !title.trim()) {
       return res.status(400).json({ error: 'Album title is required' });
     }
@@ -2162,9 +2348,10 @@ app.post('/api/gallery/albums', rateLimitGuard(30, 60_000), async (req: Request,
   }
 });
 
-app.post('/api/gallery/photos', rateLimitGuard(60, 60_000), async (req: Request, res: Response) => {
+app.post('/api/gallery/photos', rateLimitGuard(60, 60_000), requireAuth, async (req: AuthRequest, res: Response) => {
   try {
-    const { albumId, url, photoUrl, caption, batchYear, tags, mediaType, fileSize, uploaderId, uploaderName } = req.body;
+    const { albumId, url, photoUrl, caption, batchYear, tags, mediaType, fileSize, uploaderName } = req.body;
+    const uploaderId = Number(req.dbUser?.id || 0);
     const finalUrl = url || photoUrl;
     if (!albumId || !finalUrl) {
       return res.status(400).json({ error: 'albumId and url are required' });
@@ -2230,15 +2417,15 @@ app.post('/api/gallery/photos', rateLimitGuard(60, 60_000), async (req: Request,
 });
 
 // Delete Album Endpoint: Creator can delete own album, Admin can delete any album
-const handleGalleryAlbumDelete = async (req: Request, res: Response) => {
+const handleGalleryAlbumDelete = async (req: AuthRequest, res: Response) => {
   try {
     const albumId = Number(req.params.id);
     if (!albumId) {
       return res.status(400).json({ error: 'Album ID is required' });
     }
 
-    const requesterUserId = Number(req.body.userId || req.query.userId || 0);
-    const requesterIsAdmin = Boolean(req.body.isAdmin || req.query.isAdmin === 'true' || (req as any).user?.role === 'admin');
+    const requesterUserId = Number(req.dbUser?.id || 0);
+    const requesterIsAdmin = req.dbUser?.role === 'admin' || req.dbUser?.role === 'super_admin' || req.dbUser?.role === 'moderator';
 
     if (isSupabaseServerConfigured) {
       try {
@@ -2276,16 +2463,16 @@ const handleGalleryAlbumDelete = async (req: Request, res: Response) => {
   }
 };
 
-app.delete('/api/gallery/albums/:id', rateLimitGuard(40, 60_000), handleGalleryAlbumDelete);
-app.post('/api/gallery/albums/:id/delete', rateLimitGuard(40, 60_000), handleGalleryAlbumDelete);
+app.delete('/api/gallery/albums/:id', rateLimitGuard(40, 60_000), requireAuth, handleGalleryAlbumDelete);
+app.post('/api/gallery/albums/:id/delete', rateLimitGuard(40, 60_000), requireAuth, handleGalleryAlbumDelete);
 
 // Delete Photo Endpoint: Uploader or Album Creator can delete own photo, Admin can delete any photo
-const handleGalleryPhotoDelete = async (req: Request, res: Response) => {
+const handleGalleryPhotoDelete = async (req: AuthRequest, res: Response) => {
   try {
     const photoId = String(req.params.id);
     const albumId = req.body.albumId || req.query.albumId ? Number(req.body.albumId || req.query.albumId) : null;
-    const requesterUserId = Number(req.body.userId || req.query.userId || 0);
-    const requesterIsAdmin = Boolean(req.body.isAdmin || req.query.isAdmin === 'true' || (req as any).user?.role === 'admin');
+    const requesterUserId = Number(req.dbUser?.id || 0);
+    const requesterIsAdmin = req.dbUser?.role === 'admin' || req.dbUser?.role === 'super_admin' || req.dbUser?.role === 'moderator';
 
     if (isSupabaseServerConfigured) {
       try {
@@ -2349,8 +2536,8 @@ const handleGalleryPhotoDelete = async (req: Request, res: Response) => {
   }
 };
 
-app.delete('/api/gallery/photos/:id', rateLimitGuard(60, 60_000), handleGalleryPhotoDelete);
-app.post('/api/gallery/photos/:id/delete', rateLimitGuard(60, 60_000), handleGalleryPhotoDelete);
+app.delete('/api/gallery/photos/:id', rateLimitGuard(60, 60_000), requireAuth, handleGalleryPhotoDelete);
+app.post('/api/gallery/photos/:id/delete', rateLimitGuard(60, 60_000), requireAuth, handleGalleryPhotoDelete);
 
 // Blood Network - High Resilient Supabase Storage
 const memoryBloodRequests: any[] = [];
@@ -2417,10 +2604,9 @@ app.get('/api/blood/requests', rateLimitGuard(60, 60_000), async (_req: Request,
   }
 });
 
-app.post('/api/blood/requests', rateLimitGuard(30, 60_000), async (req: Request, res: Response) => {
+app.post('/api/blood/requests', rateLimitGuard(30, 60_000), requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const {
-      requesterId,
       bloodGroup,
       unitsRequired,
       hospitalName,
@@ -2433,13 +2619,14 @@ app.post('/api/blood/requests', rateLimitGuard(30, 60_000), async (req: Request,
       description,
       patientRelation,
     } = req.body;
+    const requesterId = Number(req.dbUser?.id || 1);
 
     let insertedId: string | null = null;
 
     if (isSupabaseServerConfigured) {
       try {
         const payload: any = {
-          requester_id: Number(requesterId) || 1,
+          requester_id: requesterId,
           blood_group: bloodGroup,
           units_required: Number(unitsRequired) || 1,
           units_needed: Number(unitsRequired) || 1,
@@ -2511,10 +2698,10 @@ app.post('/api/blood/requests', rateLimitGuard(30, 60_000), async (req: Request,
   }
 });
 
-app.post('/api/blood/donors', rateLimitGuard(30, 60_000), async (req: Request, res: Response) => {
+app.post('/api/blood/donors', rateLimitGuard(30, 60_000), requireAuth, async (req: AuthRequest, res: Response) => {
   try {
-    const { userId, bloodGroup, isRegisteredDonor, availability, preferredArea, city, lastDonationDate, emergencyAlertPreference } = req.body;
-    const donorUserId = Number(userId || 1);
+    const { bloodGroup, isRegisteredDonor, availability, preferredArea, city, lastDonationDate, emergencyAlertPreference } = req.body;
+    const donorUserId = Number(req.dbUser?.id || 1);
 
     if (isSupabaseServerConfigured) {
       try {
@@ -2604,9 +2791,10 @@ app.get('/api/mentorship/requests', rateLimitGuard(60, 60_000), async (_req: Req
   }
 });
 
-app.post('/api/mentorship/requests', rateLimitGuard(30, 60_000), async (req: Request, res: Response) => {
+app.post('/api/mentorship/requests', rateLimitGuard(30, 60_000), requireAuth, async (req: AuthRequest, res: Response) => {
   try {
-    const { id, userId, userName, userBatch, userAvatar, topic, question, contactInfo, targetMentorId, targetMentorName } = req.body;
+    const { id, userName, userBatch, userAvatar, topic, question, contactInfo, targetMentorId, targetMentorName } = req.body;
+    const userId = Number(req.dbUser?.id || 0);
     if (!question || !question.trim()) {
       return res.status(400).json({ error: 'Question text is required' });
     }
@@ -2654,10 +2842,11 @@ app.post('/api/mentorship/requests', rateLimitGuard(30, 60_000), async (req: Req
   }
 });
 
-app.post('/api/mentorship/requests/:id/answers', rateLimitGuard(30, 60_000), async (req: Request, res: Response) => {
+app.post('/api/mentorship/requests/:id/answers', rateLimitGuard(30, 60_000), requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const reqId = req.params.id;
-    const { mentorId, mentorName, mentorBatch, mentorAvatar, mentorProfession, answerText } = req.body;
+    const { mentorName, mentorBatch, mentorAvatar, mentorProfession, answerText } = req.body;
+    const mentorId = Number(req.dbUser?.id || 1);
 
     if (!answerText || !answerText.trim()) {
       return res.status(400).json({ error: 'Answer text is required' });
@@ -2738,9 +2927,10 @@ app.get('/api/mentorship/mentors', rateLimitGuard(60, 60_000), async (_req: Requ
   }
 });
 
-app.post('/api/mentorship/mentors', rateLimitGuard(30, 60_000), async (req: Request, res: Response) => {
+app.post('/api/mentorship/mentors', rateLimitGuard(30, 60_000), requireAuth, async (req: AuthRequest, res: Response) => {
   try {
-    const { id, userId, fullName, batchYear, avatarUrl, category, expertise, shortDescription, institution, position, contactPreference } = req.body;
+    const { id, fullName, batchYear, avatarUrl, category, expertise, shortDescription, institution, position, contactPreference } = req.body;
+    const userId = Number(req.dbUser?.id || 0);
     if (!fullName || !expertise) {
       return res.status(400).json({ error: 'Full name and expertise are required' });
     }
@@ -2836,9 +3026,10 @@ app.get('/api/careers', rateLimitGuard(60, 60_000), async (_req: Request, res: R
   }
 });
 
-app.post('/api/careers', rateLimitGuard(30, 60_000), async (req: Request, res: Response) => {
+app.post('/api/careers', rateLimitGuard(30, 60_000), requireAuth, async (req: AuthRequest, res: Response) => {
   try {
-    const { id, title, company, location, type, description, posterId, posterName, posterBatch, posterAvatar, posterEmail } = req.body;
+    const { id, title, company, location, type, description, posterName, posterBatch, posterAvatar, posterEmail } = req.body;
+    const posterId = Number(req.dbUser?.id || 0);
     if (!title || !company) {
       return res.status(400).json({ error: 'Title and company/institution are required' });
     }
@@ -2894,18 +3085,19 @@ app.post('/api/careers', rateLimitGuard(30, 60_000), async (req: Request, res: R
   }
 });
 
-app.post('/api/careers/:id/apply', rateLimitGuard(30, 60_000), async (req: Request, res: Response) => {
+app.post('/api/careers/:id/apply', rateLimitGuard(30, 60_000), requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const oppId = req.params.id;
-    const { applicantId, applicantName, applicantBatch, applicantAvatar, applicantEmail, applicantPhone } = req.body;
+    const { applicantName, applicantBatch, applicantAvatar, applicantEmail, applicantPhone } = req.body;
+    const applicantId = Number(req.dbUser?.id || 1);
 
     const newApp = {
       id: `app-${Date.now()}`,
-      applicantId: Number(applicantId) || 1,
-      applicantName: applicantName || 'SZMC Applicant',
+      applicantId,
+      applicantName: applicantName || req.dbUser?.fullName || 'SZMC Applicant',
       applicantBatch: applicantBatch || '',
       applicantAvatar: applicantAvatar || '/assets/aistudio/images__1__2778177d.png',
-      applicantEmail: applicantEmail || '',
+      applicantEmail: applicantEmail || req.dbUser?.email || '',
       applicantPhone: applicantPhone || '',
       appliedAt: new Date().toISOString(),
     };
@@ -2939,18 +3131,36 @@ app.post('/api/careers/:id/apply', rateLimitGuard(30, 60_000), async (req: Reque
   }
 });
 
-app.delete('/api/careers/:id', rateLimitGuard(30, 60_000), async (req: Request, res: Response) => {
+app.delete('/api/careers/:id', rateLimitGuard(30, 60_000), requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const oppId = req.params.id;
+    const requesterId = Number(req.dbUser?.id || 0);
+    const isAdminActor = req.dbUser?.role === 'admin' || req.dbUser?.role === 'super_admin' || req.dbUser?.role === 'moderator';
+
     if (isSupabaseServerConfigured) {
       try {
+        const { data: opp } = await supabaseServer
+          .from('career_opportunities')
+          .select('id, poster_id')
+          .eq('id', oppId)
+          .maybeSingle();
+
+        if (opp && !isAdminActor && Number(opp.poster_id) !== requesterId) {
+          return res.status(403).json({ error: 'Forbidden: Only the poster or an administrator can delete this opportunity.' });
+        }
+
         await supabaseServer.from('career_opportunities').delete().eq('id', oppId);
       } catch (err) {
         console.warn('Supabase delete career notice:', err);
       }
     }
     const idx = memoryCareerOpportunities.findIndex((o) => o.id === oppId);
-    if (idx >= 0) memoryCareerOpportunities.splice(idx, 1);
+    if (idx >= 0) {
+      if (!isAdminActor && Number(memoryCareerOpportunities[idx].posterId) !== requesterId) {
+        return res.status(403).json({ error: 'Forbidden: Only the poster or an administrator can delete this opportunity.' });
+      }
+      memoryCareerOpportunities.splice(idx, 1);
+    }
 
     return res.json({ success: true, message: 'Career opportunity deleted successfully' });
   } catch (err: any) {
@@ -2993,12 +3203,13 @@ app.get(
 app.post(
   '/api/alumni/register',
   rateLimitGuard(20, 60_000),
-  optionalAuth,
+  requireAuth,
   async (req: AuthRequest, res: Response) => {
     try {
       const user = req.user as any;
+      const isAdminCaller = req.dbUser?.role === 'admin' || req.dbUser?.role === 'super_admin';
       const created = await createOrRegisterAlumniProfile({
-        userUid: user?.uid || user?.id || req.body.userUid,
+        userUid: isAdminCaller ? (req.body.userUid || user?.uid || user?.id) : (user?.uid || user?.id),
         fullName: req.body.fullName,
         avatarUrl: req.body.avatarUrl,
         batchYear: Number(req.body.batchYear) || 68,
@@ -3016,7 +3227,7 @@ app.post(
         country: req.body.country,
         phone: req.body.phone,
         whatsapp: req.body.whatsapp,
-        email: req.body.email,
+        email: isAdminCaller ? req.body.email : (user?.email || req.dbUser?.email || req.body.email),
         bloodGroup: req.body.bloodGroup,
         isRegisteredDonor: Boolean(req.body.isRegisteredDonor),
       });
@@ -3028,29 +3239,31 @@ app.post(
   }
 );
 
-// Update own Alumnus Profile in Database & Memory (with privilege column sanitization)
+// Update own Alumnus Profile in Database & Memory (with strict auth + ownership + privilege sanitization)
 app.post(
   '/api/profile/update',
   rateLimitGuard(40, 60_000),
-  optionalAuth,
+  requireAuth,
   async (req: AuthRequest, res: Response) => {
     try {
       const user = req.user as any;
-      const callerEmail = user?.email || req.dbUser?.email || req.body.email;
-      const callerAuthId = user?.uid || user?.id || req.dbUser?.auth_user_id || req.body.authUserId;
-      let targetProfileId = Number(req.dbUser?.id || req.body.id);
+      const isAdminCaller = req.dbUser?.role === 'admin' || req.dbUser?.role === 'super_admin';
+      const callerEmail = user?.email || req.dbUser?.email;
+      let targetProfileId = Number(req.dbUser?.id || 0);
 
-      if (!targetProfileId && callerEmail) {
+      if (isAdminCaller && req.body.id && Number(req.body.id) > 0) {
+        targetProfileId = Number(req.body.id);
+      } else if (!targetProfileId && callerEmail) {
         const found = await findAlumniByCredential(callerEmail);
-        if (found) targetProfileId = found.id;
-      }
-      if (!targetProfileId && req.body.phone) {
-        const found = await findAlumniByCredential(req.body.phone);
         if (found) targetProfileId = found.id;
       }
 
       if (!targetProfileId) {
         return res.status(400).json({ error: 'Could not identify target profile to update.' });
+      }
+
+      if (!isAdminCaller && req.body.id && Number(req.body.id) !== targetProfileId) {
+        return res.status(403).json({ error: 'Forbidden: You can only update your own profile.' });
       }
 
       const updates: Record<string, any> = {};
@@ -3341,7 +3554,7 @@ app.get(
   }
 );
 
-// Direct download route for the production deployment dist archive
+// Admin-only download route for the production deployment dist archive
 app.get([
   '/download/szmc-alumni-dist.zip',
   '/szmc-alumni-dist.zip',
@@ -3349,7 +3562,7 @@ app.get([
   '/dist.zip',
   '/api/download-dist',
   '/download-dist',
-], (_req: Request, res: Response) => {
+], requireAdmin, (_req: AuthRequest, res: Response) => {
   const candidates = [
     path.resolve(__dirname, 'public', 'szmc-alumni-dist.zip'),
     path.resolve(__dirname, 'szmc-alumni-dist.zip'),
@@ -3366,7 +3579,7 @@ app.get([
   return res.status(404).send('Production dist archive not found. Please build first.');
 });
 
-app.get(['/download/szmc-alumni-dist.tar.gz', '/szmc-alumni-dist.tar.gz'], (_req: Request, res: Response) => {
+app.get(['/download/szmc-alumni-dist.tar.gz', '/szmc-alumni-dist.tar.gz'], requireAdmin, (_req: AuthRequest, res: Response) => {
   const candidates = [
     path.resolve(__dirname, 'public', 'szmc-alumni-dist.tar.gz'),
     path.resolve(__dirname, 'szmc-alumni-dist.tar.gz'),
@@ -3379,16 +3592,20 @@ app.get(['/download/szmc-alumni-dist.tar.gz', '/szmc-alumni-dist.tar.gz'], (_req
   return res.status(404).send('Production dist tar.gz archive not found.');
 });
 
-// Persistent Video Upload Route (uploads to Supabase Storage post-media bucket via service_role or stores locally)
+// Persistent Video Upload Route (authenticated + strict video extension allowlist + 50MB limit)
+const ALLOWED_VIDEO_EXTENSIONS = new Set(['mp4', 'webm', 'mov', 'ogg']);
 app.post(
   '/api/upload-video',
-  express.raw({ type: ['video/*', 'application/octet-stream'], limit: '100mb' }),
-  async (req: Request, res: Response) => {
+  rateLimitGuard(20, 60_000),
+  requireAuth,
+  express.raw({ type: ['video/*', 'application/octet-stream'], limit: '50mb' }),
+  async (req: AuthRequest, res: Response) => {
     try {
-      const extHeader = String(req.headers['x-file-ext'] || 'mp4')
+      const rawExt = String(req.headers['x-file-ext'] || 'mp4')
         .replace(/[^a-zA-Z0-9]/g, '')
-        .toLowerCase() || 'mp4';
-      const userIdHeader = String(req.headers['x-user-id'] || 'alumni').replace(/[^a-zA-Z0-9_-]/g, '');
+        .toLowerCase();
+      const extHeader = ALLOWED_VIDEO_EXTENSIONS.has(rawExt) ? rawExt : 'mp4';
+      const userIdHeader = String(req.dbUser?.id || 'alumni').replace(/[^a-zA-Z0-9_-]/g, '');
       const fileName = `video_${userIdHeader}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.${extHeader}`;
 
       let buffer: Buffer | null = null;

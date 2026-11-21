@@ -1,4 +1,9 @@
 import { useState, useEffect } from 'react';
+import {
+  DEFAULT_GLOBAL_THEME_CONFIG,
+  applyGlobalThemeToDom,
+  type GlobalThemeConfig,
+} from '../data/globalThemePresets';
 
 export interface SiteNotice {
   id: string;
@@ -43,6 +48,68 @@ export interface BatchMetadata {
   estimatedClassSize: number;
   specialNote?: string;
 }
+
+export interface PortalTypographyConfig {
+  enabled: boolean;
+  headingFont: string;
+  bodyFont: string;
+  headingColorLight: string;
+  bodyColorLight: string;
+  mutedColorLight: string;
+  accentColorLight: string;
+  headingColorDark: string;
+  bodyColorDark: string;
+  mutedColorDark: string;
+  accentColorDark: string;
+  baseScale: number; // 0.85 to 1.25
+  headingWeight: '500' | '600' | '700' | '800';
+  bodyWeight: '400' | '500' | '600';
+  headingTracking: 'tight' | 'normal' | 'wide';
+  bodyLineHeight: 'compact' | 'normal' | 'relaxed';
+  headingStyle: 'normal' | 'italic';
+  headingTransform: 'none' | 'capitalize' | 'uppercase';
+}
+
+export interface PortalFontOption {
+  name: string;
+  label: string;
+  category: 'Sans-Serif' | 'Serif' | 'Monospace';
+  googleFamilyQuery: string;
+}
+
+export const PORTAL_FONT_OPTIONS: PortalFontOption[] = [
+  { name: 'Hind Siliguri', label: 'Hind Siliguri (Default · EN & বাংলা)', category: 'Sans-Serif', googleFamilyQuery: 'Hind+Siliguri:wght@300;400;500;600;700' },
+  { name: 'Plus Jakarta Sans', label: 'Plus Jakarta Sans', category: 'Sans-Serif', googleFamilyQuery: 'Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400;1,600' },
+  { name: 'DM Sans', label: 'DM Sans', category: 'Sans-Serif', googleFamilyQuery: 'DM+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400;1,600' },
+  { name: 'Outfit', label: 'Outfit', category: 'Sans-Serif', googleFamilyQuery: 'Outfit:wght@400;500;600;700;800' },
+  { name: 'Manrope', label: 'Manrope', category: 'Sans-Serif', googleFamilyQuery: 'Manrope:wght@400;500;600;700;800' },
+  { name: 'Playfair Display', label: 'Playfair Display', category: 'Serif', googleFamilyQuery: 'Playfair+Display:ital,wght@0,500;0,600;0,700;0,800;1,500;1,700' },
+  { name: 'Fraunces', label: 'Fraunces', category: 'Serif', googleFamilyQuery: 'Fraunces:ital,wght@0,500;0,600;0,700;0,800;1,500;1,700' },
+  { name: 'Lora', label: 'Lora', category: 'Serif', googleFamilyQuery: 'Lora:ital,wght@0,400;0,500;0,600;0,700;1,400;1,600' },
+  { name: 'Merriweather', label: 'Merriweather', category: 'Serif', googleFamilyQuery: 'Merriweather:ital,wght@0,400;0,700;1,400;1,700' },
+  { name: 'JetBrains Mono', label: 'JetBrains Mono', category: 'Monospace', googleFamilyQuery: 'JetBrains+Mono:wght@400;500;600;700' },
+];
+
+export const DEFAULT_PORTAL_TYPOGRAPHY: PortalTypographyConfig = {
+  enabled: false,
+  headingFont: 'Hind Siliguri',
+  bodyFont: 'Hind Siliguri',
+  headingColorLight: '#0f172a',
+  bodyColorLight: '#334155',
+  mutedColorLight: '#64748b',
+  accentColorLight: '#1d4ed8',
+  headingColorDark: '#f8fafc',
+  bodyColorDark: '#e2e8f0',
+  mutedColorDark: '#94a3b8',
+  accentColorDark: '#60a5fa',
+  baseScale: 1,
+  headingWeight: '700',
+  bodyWeight: '400',
+  headingTracking: 'normal',
+  bodyLineHeight: 'normal',
+  headingStyle: 'normal',
+  headingTransform: 'none',
+};
 
 export interface SiteConfig {
   // 1. Branding & Identity
@@ -133,6 +200,12 @@ export interface SiteConfig {
 
   // 10. Batch Governance
   batchMetadataList: BatchMetadata[];
+
+  // 11. Global Portal Typography, Colors & Text Styles (Super Admin controlled)
+  portalTypography?: PortalTypographyConfig;
+
+  // 12. Global Theme Manager Presets & :root CSS Variables (Admin Settings controlled)
+  globalTheme?: GlobalThemeConfig;
 }
 
 export const FACTORY_DEFAULT_SITE_CONFIG: SiteConfig = {
@@ -292,7 +365,116 @@ export const FACTORY_DEFAULT_SITE_CONFIG: SiteConfig = {
       specialNote: batchNum === 34 ? 'Pacesetter Batch 34 • Portal Architecture' : `MBBS Batch ${batchNum} Alumni Group`,
     };
   }),
+
+  portalTypography: DEFAULT_PORTAL_TYPOGRAPHY,
 };
+
+const loadedGoogleFonts = new Set<string>(['Hind Siliguri']);
+
+export function loadGoogleFontIfNeeded(fontName?: string | null): void {
+  if (typeof document === 'undefined' || !fontName) return;
+  const trimmed = fontName.trim();
+  if (!trimmed || loadedGoogleFonts.has(trimmed)) return;
+  const matched = PORTAL_FONT_OPTIONS.find((f) => f.name === trimmed);
+  const query = matched
+    ? matched.googleFamilyQuery
+    : `${encodeURIComponent(trimmed).replace(/%20/g, '+')}:ital,wght@0,400;0,500;0,600;0,700;1,400;1,600`;
+  const linkId = `szmc-google-font-${trimmed.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+  if (document.getElementById(linkId)) {
+    loadedGoogleFonts.add(trimmed);
+    return;
+  }
+  const link = document.createElement('link');
+  link.id = linkId;
+  link.rel = 'stylesheet';
+  link.href = `https://fonts.googleapis.com/css2?family=${query}&display=swap`;
+  document.head.appendChild(link);
+  loadedGoogleFonts.add(trimmed);
+}
+
+export function applyPortalTypographyToDom(config?: SiteConfig | null): void {
+  if (typeof document === 'undefined') return;
+  const root = document.documentElement;
+  const typo: PortalTypographyConfig = {
+    ...DEFAULT_PORTAL_TYPOGRAPHY,
+    ...(config?.portalTypography || {}),
+  };
+
+  if (!typo.enabled) {
+    root.removeAttribute('data-portal-custom-typography');
+    const props = [
+      '--portal-font-heading',
+      '--portal-font-body',
+      '--portal-heading-color-light',
+      '--portal-body-color-light',
+      '--portal-muted-color-light',
+      '--portal-accent-color-light',
+      '--portal-heading-color-dark',
+      '--portal-body-color-dark',
+      '--portal-muted-color-dark',
+      '--portal-accent-color-dark',
+      '--portal-font-scale',
+      '--portal-heading-weight',
+      '--portal-body-weight',
+      '--portal-heading-tracking',
+      '--portal-body-line-height',
+      '--portal-heading-style',
+      '--portal-heading-transform',
+    ];
+    props.forEach((p) => root.style.removeProperty(p));
+    return;
+  }
+
+  loadGoogleFontIfNeeded(typo.headingFont);
+  loadGoogleFontIfNeeded(typo.bodyFont);
+
+  const headingFallback =
+    PORTAL_FONT_OPTIONS.find((f) => f.name === typo.headingFont)?.category === 'Serif'
+      ? 'Georgia, serif'
+      : PORTAL_FONT_OPTIONS.find((f) => f.name === typo.headingFont)?.category === 'Monospace'
+      ? 'ui-monospace, monospace'
+      : 'system-ui, -apple-system, sans-serif';
+
+  const bodyFallback =
+    PORTAL_FONT_OPTIONS.find((f) => f.name === typo.bodyFont)?.category === 'Serif'
+      ? 'Georgia, serif'
+      : PORTAL_FONT_OPTIONS.find((f) => f.name === typo.bodyFont)?.category === 'Monospace'
+      ? 'ui-monospace, monospace'
+      : 'system-ui, -apple-system, sans-serif';
+
+  const trackingMap: Record<PortalTypographyConfig['headingTracking'], string> = {
+    tight: '-0.025em',
+    normal: '0em',
+    wide: '0.03em',
+  };
+
+  const lineHeightMap: Record<PortalTypographyConfig['bodyLineHeight'], string> = {
+    compact: '1.4',
+    normal: '1.6',
+    relaxed: '1.8',
+  };
+
+  const clampedScale = Math.min(1.25, Math.max(0.85, Number(typo.baseScale) || 1));
+
+  root.setAttribute('data-portal-custom-typography', 'true');
+  root.style.setProperty('--portal-font-heading', `'${typo.headingFont}', ${headingFallback}`);
+  root.style.setProperty('--portal-font-body', `'${typo.bodyFont}', ${bodyFallback}`);
+  root.style.setProperty('--portal-heading-color-light', typo.headingColorLight);
+  root.style.setProperty('--portal-body-color-light', typo.bodyColorLight);
+  root.style.setProperty('--portal-muted-color-light', typo.mutedColorLight);
+  root.style.setProperty('--portal-accent-color-light', typo.accentColorLight);
+  root.style.setProperty('--portal-heading-color-dark', typo.headingColorDark);
+  root.style.setProperty('--portal-body-color-dark', typo.bodyColorDark);
+  root.style.setProperty('--portal-muted-color-dark', typo.mutedColorDark);
+  root.style.setProperty('--portal-accent-color-dark', typo.accentColorDark);
+  root.style.setProperty('--portal-font-scale', String(clampedScale));
+  root.style.setProperty('--portal-heading-weight', typo.headingWeight);
+  root.style.setProperty('--portal-body-weight', typo.bodyWeight);
+  root.style.setProperty('--portal-heading-tracking', trackingMap[typo.headingTracking] || '0em');
+  root.style.setProperty('--portal-body-line-height', lineHeightMap[typo.bodyLineHeight] || '1.6');
+  root.style.setProperty('--portal-heading-style', typo.headingStyle);
+  root.style.setProperty('--portal-heading-transform', typo.headingTransform);
+}
 
 const SITE_CONFIG_STORAGE_KEY = 'szmc_institutional_site_config_v2';
 const SITE_CONFIG_UPDATE_EVENT = 'szmc_site_config_updated';
@@ -307,6 +489,8 @@ try {
           const current = getSiteConfig();
           const merged: SiteConfig = { ...current, ...evt.data.config };
           localStorage.setItem(SITE_CONFIG_STORAGE_KEY, JSON.stringify(merged));
+          applyPortalTypographyToDom(merged);
+          applyGlobalThemeToDom(merged.globalTheme);
           window.dispatchEvent(new CustomEvent(SITE_CONFIG_UPDATE_EVENT, { detail: merged }));
         } catch {}
       }
@@ -328,8 +512,7 @@ function ensureRealtimeSiteConfigStream() {
     const mergedPatch = { ...remoteCfg };
     if (
       Array.isArray(localCurrent.featuredAlumni) &&
-      localCurrent.featuredAlumni.length > 0 &&
-      (!Array.isArray(mergedPatch.featuredAlumni) || mergedPatch.featuredAlumni.length === 0)
+      !Array.isArray(mergedPatch.featuredAlumni)
     ) {
       mergedPatch.featuredAlumni = localCurrent.featuredAlumni;
     }
@@ -337,6 +520,8 @@ function ensureRealtimeSiteConfigStream() {
     try {
       localStorage.setItem(SITE_CONFIG_STORAGE_KEY, JSON.stringify(merged));
     } catch {}
+    applyPortalTypographyToDom(merged);
+    applyGlobalThemeToDom(merged.globalTheme);
     window.dispatchEvent(new CustomEvent(SITE_CONFIG_UPDATE_EVENT, { detail: merged }));
   };
 
@@ -394,6 +579,8 @@ export function saveSiteConfig(newConfig: Partial<SiteConfig>): SiteConfig {
     const merged: SiteConfig = { ...current, ...newConfig };
     if (typeof window !== 'undefined') {
       localStorage.setItem(SITE_CONFIG_STORAGE_KEY, JSON.stringify(merged));
+      applyPortalTypographyToDom(merged);
+      applyGlobalThemeToDom(merged.globalTheme);
       window.dispatchEvent(new CustomEvent(SITE_CONFIG_UPDATE_EVENT, { detail: merged }));
       try {
         siteConfigBroadcastChannel?.postMessage({ type: 'SITE_CONFIG_UPDATED', config: merged });
@@ -410,6 +597,8 @@ export function resetSiteConfigToFactory(): SiteConfig {
   try {
     if (typeof window !== 'undefined') {
       localStorage.setItem(SITE_CONFIG_STORAGE_KEY, JSON.stringify(FACTORY_DEFAULT_SITE_CONFIG));
+      applyPortalTypographyToDom(FACTORY_DEFAULT_SITE_CONFIG);
+      applyGlobalThemeToDom(DEFAULT_GLOBAL_THEME_CONFIG);
       window.dispatchEvent(new CustomEvent(SITE_CONFIG_UPDATE_EVENT, { detail: FACTORY_DEFAULT_SITE_CONFIG }));
       try {
         siteConfigBroadcastChannel?.postMessage({ type: 'SITE_CONFIG_UPDATED', config: FACTORY_DEFAULT_SITE_CONFIG });
@@ -441,6 +630,92 @@ export function importSiteConfigJson(jsonString: string): { success: boolean; er
 }
 
 let autoSaveTimeoutId: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Optimizes an image file and uploads it directly to Supabase Storage (`gallery` bucket under `site-assets/`),
+ * returning a permanent public CDN URL so Landing Page & Hall of Fame photos persist in Supabase and sync
+ * across all devices in real time without bloating JSONB or localStorage.
+ */
+export async function uploadSiteAssetImage(
+  file: File,
+  folder: 'hero' | 'logo' | 'hall-of-fame' | 'banner' | 'general' = 'general',
+  maxDimension = 1920,
+  quality = 0.88
+): Promise<string> {
+  // Compress large images onto a canvas to keep uploads crisp and fast
+  const blobToUpload = await new Promise<{ blob: Blob; ext: string; contentType: string; dataUrl: string }>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const rawDataUrl = String(reader.result || '');
+      const img = new Image();
+      img.onload = () => {
+        let w = img.width;
+        let h = img.height;
+        if (w > maxDimension || h > maxDimension) {
+          if (w >= h) {
+            h = Math.round((h * maxDimension) / w);
+            w = maxDimension;
+          } else {
+            w = Math.round((w * maxDimension) / h);
+            h = maxDimension;
+          }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve({ blob: file, ext: 'jpg', contentType: file.type || 'image/jpeg', dataUrl: rawDataUrl });
+          return;
+        }
+        ctx.drawImage(img, 0, 0, w, h);
+        const isPng = file.type === 'image/png' || file.name.toLowerCase().endsWith('.png');
+        const mime = isPng ? 'image/png' : 'image/jpeg';
+        const ext = isPng ? 'png' : 'jpg';
+        const outDataUrl = canvas.toDataURL(mime, isPng ? undefined : quality);
+        canvas.toBlob(
+          (b) => {
+            resolve({ blob: b || file, ext, contentType: mime, dataUrl: outDataUrl });
+          },
+          mime,
+          isPng ? undefined : quality
+        );
+      };
+      img.onerror = () => resolve({ blob: file, ext: 'jpg', contentType: file.type || 'image/jpeg', dataUrl: rawDataUrl });
+      img.src = rawDataUrl;
+    };
+    reader.onerror = () => reject(new Error('Failed to read image file'));
+    reader.readAsDataURL(file);
+  });
+
+  try {
+    const { supabase, isSupabaseConfigured } = await import('../lib/supabase');
+    if (isSupabaseConfigured && supabase) {
+      const uniqueName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${blobToUpload.ext}`;
+      const storagePath = `site-assets/${folder}/${uniqueName}`;
+      const { error } = await supabase.storage
+        .from('gallery')
+        .upload(storagePath, blobToUpload.blob, {
+          contentType: blobToUpload.contentType,
+          cacheControl: '31536000',
+          upsert: true,
+        });
+
+      if (!error) {
+        const { data: pubData } = supabase.storage.from('gallery').getPublicUrl(storagePath);
+        if (pubData?.publicUrl) {
+          return pubData.publicUrl;
+        }
+      } else {
+        console.warn('[SiteConfig] Supabase Storage upload fallback to compressed data URL:', error.message);
+      }
+    }
+  } catch (err) {
+    console.warn('[SiteConfig] Storage upload exception:', err);
+  }
+
+  return blobToUpload.dataUrl;
+}
 
 export async function saveSiteConfigToServer(configPatch: Partial<SiteConfig>): Promise<{ success: boolean; message?: string; error?: string }> {
   const fullConfig = saveSiteConfig(configPatch);
@@ -522,6 +797,9 @@ export async function saveSiteConfigToServer(configPatch: Partial<SiteConfig>): 
       const data = await res.json();
       if (res.ok && data?.success) {
         serverSuccess = true;
+        if (data?.supabaseSynced) {
+          supabaseSuccess = true;
+        }
       } else {
         serverErrorMsg = data?.error || 'Server save rejected';
       }
@@ -529,7 +807,7 @@ export async function saveSiteConfigToServer(configPatch: Partial<SiteConfig>): 
       serverErrorMsg = fetchErr?.message || 'Server connection failed';
     }
 
-    // Strict error propagation: fail if Supabase is configured and failed to write
+    // Strict error propagation: fail if Supabase is configured and NEITHER direct client nor server confirmed Supabase persistence
     let isSupaActive = false;
     try {
       const supaModule = await import('../lib/supabase');
@@ -537,7 +815,7 @@ export async function saveSiteConfigToServer(configPatch: Partial<SiteConfig>): 
     } catch {}
 
     if (isSupaActive && !supabaseSuccess) {
-      const errMsg = supabaseErrorMsg || 'Supabase rejected the site settings write (check admin permissions or RLS policies on public.site_settings).';
+      const errMsg = supabaseErrorMsg || serverErrorMsg || 'Supabase rejected the site settings write (check admin permissions or RLS policies on public.site_settings).';
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('szmc-site-config-error', { detail: errMsg }));
       }
@@ -595,7 +873,7 @@ export function useSiteConfig() {
             const hofRow = data.find((r) => r.key === 'hall_of_fame');
             const patch: Partial<SiteConfig> = (masterRow?.value as any) || {};
             const hofMembers = hofRow?.value?.members || hofRow?.value;
-            if (Array.isArray(hofMembers) && hofMembers.length > 0) {
+            if (Array.isArray(hofMembers)) {
               patch.featuredAlumni = hofMembers;
             }
             if (Object.keys(patch).length > 0) {
@@ -815,19 +1093,35 @@ export function resetAutoVerification7Days(): SiteConfig {
   return updated;
 }
 
-// Automatically sync latest site_settings from Supabase on client initialization
+// Automatically apply cached typography & global theme & sync latest site_settings from Supabase on client initialization
 if (typeof window !== 'undefined') {
+  const initialCfg = getSiteConfig();
+  applyPortalTypographyToDom(initialCfg);
+  applyGlobalThemeToDom(initialCfg.globalTheme);
+  ensureRealtimeSiteConfigStream();
   import('../lib/supabase').then(({ supabase, isSupabaseConfigured }) => {
     if (isSupabaseConfigured) {
       supabase
         .from('site_settings')
-        .select('value')
-        .eq('key', 'auto_verification')
-        .maybeSingle()
+        .select('key, value')
+        .in('key', ['auto_verification', 'master_site_config', 'global_theme_config'])
         .then(
           ({ data }) => {
-            if (data?.value) {
-              const v = data.value;
+            if (!Array.isArray(data)) return;
+            const masterRow = data.find((r) => r.key === 'master_site_config');
+            const themeRow = data.find((r) => r.key === 'global_theme_config');
+            if (masterRow?.value && typeof masterRow.value === 'object') {
+              const patch: Partial<SiteConfig> = { ...(masterRow.value as Partial<SiteConfig>) };
+              if (themeRow?.value && typeof themeRow.value === 'object') {
+                patch.globalTheme = themeRow.value as GlobalThemeConfig;
+              }
+              saveSiteConfig(patch);
+            } else if (themeRow?.value && typeof themeRow.value === 'object') {
+              saveSiteConfig({ globalTheme: themeRow.value as GlobalThemeConfig });
+            }
+            const autoRow = data.find((r) => r.key === 'auto_verification');
+            if (autoRow?.value) {
+              const v = autoRow.value;
               saveSiteConfig({
                 autoVerificationEnabled: v.enabled !== false,
                 autoVerificationPaused: Boolean(v.paused),

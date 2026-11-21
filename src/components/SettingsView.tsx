@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Settings,
   User,
@@ -44,6 +44,14 @@ import { SZMCLogo } from './SZMCLogo';
 import { loadVouchRequests } from '../utils/verificationService';
 import { getDonorProfileByUserId } from '../utils/bloodDonationService';
 import { MessageSettingsModal } from './messenger/MessageSettingsModal';
+import {
+  PROFILE_DISPLAY_MODES,
+  getProfileDisplayModePreference,
+  saveProfileDisplayModePreference,
+  type ProfileDisplayModeId,
+  type ProfileDisplayModePreference,
+  type ProfileDisplayModeScope,
+} from '../data/profileDisplayModes';
 
 interface SettingsViewProps {
   onNavigate: (route: string) => void;
@@ -125,8 +133,8 @@ const SETTINGS_SECTIONS: SettingsSectionMeta[] = [
     title: 'Theme, Language & Display',
     shortTitle: 'Theme & display',
     icon: Globe,
-    description: 'Customize light/dark theme, language, and layout density.',
-    keywords: ['theme', 'dark mode', 'light', 'language', 'bangla', 'english', 'display'],
+    description: 'Customize light/dark theme, language, and your alumni profile display mode (Present Mode, Glass Mode).',
+    keywords: ['theme', 'dark mode', 'light', 'language', 'bangla', 'english', 'display', 'present mode', 'glass mode', 'profile mode', 'mood'],
   },
   {
     id: 'data',
@@ -241,6 +249,32 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       return 'en';
     }
   });
+
+  const [profileDisplayPref, setProfileDisplayPref] = useState<ProfileDisplayModePreference>(() =>
+    getProfileDisplayModePreference(currentUser.id)
+  );
+
+  useEffect(() => {
+    setProfileDisplayPref(getProfileDisplayModePreference(currentUser.id));
+  }, [currentUser.id]);
+
+  const handleSelectProfileDisplayMode = (modeId: ProfileDisplayModeId, modeName: string) => {
+    const saved = saveProfileDisplayModePreference(currentUser.id, { modeId });
+    setProfileDisplayPref(saved);
+    showToast(`Profile display mode saved: ${modeName}`);
+  };
+
+  const handleSelectProfileDisplayScope = (visitorScope: ProfileDisplayModeScope) => {
+    const saved = saveProfileDisplayModePreference(currentUser.id, { visitorScope });
+    setProfileDisplayPref(saved);
+    const scopeLabel =
+      visitorScope === 'everyone'
+        ? 'Everyone viewing your profile'
+        : visitorScope === 'alumni_only'
+        ? 'Verified SZMC Alumni only'
+        : 'Only you';
+    showToast(`Profile mode visibility updated: ${scopeLabel}`);
+  };
 
   const [isCardExporting, setIsCardExporting] = useState(false);
   const [isMessageSettingsOpen, setIsMessageSettingsOpen] = useState(false);
@@ -1609,6 +1643,147 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                         <div className="text-xs font-bold text-slate-900 dark:text-white">বাংলা (Bengali)</div>
                         <div className="text-[11px] text-slate-500 dark:text-slate-400">শহীদ জিয়াউর রহমান মেডিকেল কলেজ</div>
                       </button>
+                    </div>
+                  </div>
+
+                  {/* Profile Display Mode System (Present Mode, Glass Mode & Extensible Moods) */}
+                  <div className="pt-5 border-t border-slate-100 dark:border-slate-800 space-y-4">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div>
+                        <div className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                          <Sliders className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                          <span>Profile Display Mode</span>
+                        </div>
+                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                          Choose the visual mood used to display your entire alumni profile. Additional moods will be added here over time.
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Available Active Modes */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                      {PROFILE_DISPLAY_MODES.filter((m) => m.status === 'available').map((mode) => {
+                        const isSelected = profileDisplayPref.modeId === mode.id;
+                        return (
+                          <button
+                            key={mode.id}
+                            type="button"
+                            onClick={() => handleSelectProfileDisplayMode(mode.id, mode.name)}
+                            className={`text-left rounded-2xl border p-4 transition-all cursor-pointer ${
+                              isSelected
+                                ? 'border-blue-600 bg-blue-50/70 dark:bg-blue-950/30 ring-1 ring-blue-600/30'
+                                : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800/60'
+                            }`}
+                          >
+                            {/* Visual Mini-Preview */}
+                            <div
+                              className={`h-20 rounded-xl p-2.5 mb-3 border border-slate-200/70 dark:border-slate-700/60 flex flex-col justify-between overflow-hidden ${mode.previewBgClass}`}
+                            >
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                  <div className={`w-6 h-6 rounded-full ${mode.previewAccentClass}`} />
+                                  <div className="space-y-1">
+                                    <div className="w-16 h-1.5 rounded-full bg-slate-900/20 dark:bg-white/25" />
+                                    <div className="w-10 h-1 rounded-full bg-slate-900/10 dark:bg-white/15" />
+                                  </div>
+                                </div>
+                                <span className="text-[10px] font-medium text-slate-600 dark:text-slate-300">
+                                  {mode.shortLabel}
+                                </span>
+                              </div>
+                              <div className={`h-7 rounded-lg border px-2 flex items-center gap-1.5 ${mode.previewCardClass}`}>
+                                <div className="w-12 h-1.5 rounded-full bg-slate-900/15 dark:bg-white/20" />
+                                <div className="w-8 h-1.5 rounded-full bg-slate-900/10 dark:bg-white/10" />
+                              </div>
+                            </div>
+
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-xs font-bold text-slate-900 dark:text-white">
+                                {mode.name}
+                              </span>
+                              {isSelected && (
+                                <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-blue-600 dark:text-blue-400">
+                                  <Check className="w-3.5 h-3.5" />
+                                  <span>Active</span>
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 leading-relaxed">
+                              {mode.description}
+                            </p>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {/* Who Sees This Profile Mode */}
+                    <div className="p-4 rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/30 space-y-2.5">
+                      <div className="text-xs font-bold text-slate-900 dark:text-white">
+                        Who sees your profile in this mode
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        {(
+                          [
+                            { id: 'everyone', label: 'Everyone', note: 'All visitors & alumni' },
+                            { id: 'alumni_only', label: 'Verified Alumni', note: 'Logged-in SZMC members' },
+                            { id: 'self_only', label: 'Only Me', note: 'Personal view only' },
+                          ] as const
+                        ).map((opt) => {
+                          const active = profileDisplayPref.visitorScope === opt.id;
+                          return (
+                            <button
+                              key={opt.id}
+                              type="button"
+                              onClick={() => handleSelectProfileDisplayScope(opt.id)}
+                              className={`px-3 py-2.5 rounded-xl border text-left transition-colors cursor-pointer ${
+                                active
+                                  ? 'border-blue-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-white'
+                                  : 'border-slate-200 dark:border-slate-700/80 bg-white/70 dark:bg-slate-900/50 text-slate-600 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-900'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between gap-1">
+                                <span className="text-xs font-semibold">{opt.label}</span>
+                                {active && <Check className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400 shrink-0" />}
+                              </div>
+                              <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                                {opt.note}
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Extensible Upcoming Moods Registry Preview */}
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-semibold text-slate-700 dark:text-slate-300">
+                          More Profile Moods
+                        </span>
+                        <span className="text-[11px] text-slate-400 dark:text-slate-500">
+                          Expandable mood system
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                        {PROFILE_DISPLAY_MODES.filter((m) => m.status === 'coming_soon').map((mood) => (
+                          <div
+                            key={mood.id}
+                            className="rounded-xl border border-dashed border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/40 p-3 opacity-80"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                                {mood.name}
+                              </span>
+                              <span className="text-[10px] font-medium text-slate-400 dark:text-slate-500">
+                                Coming Soon
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 line-clamp-2">
+                              {mood.description}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   </div>
 
