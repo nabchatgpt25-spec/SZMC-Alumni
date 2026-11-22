@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   MessageCircle,
   Sliders,
@@ -10,32 +10,40 @@ import {
   CheckCircle2,
   AlertTriangle,
   Database,
+  WifiOff,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useMessagingProfileId } from '../../hooks/useMessagingProfileId';
-import { isUserSuperAdmin } from '../../types';
+import { SUPABASE_API_URL } from '../../lib/supabase';
 import {
   checkMessagingHealth,
   type MessagingHealth,
-} from '../../services/messagingService';
-import {
   deleteMessage,
   editMessage,
   findOrCreateDirectConversation,
   listConversations,
-  listMessages,
+  listMessagesPage,
   markConversationRead,
   sendMessage,
   subscribeToMessageChanges,
   subscribeToTypingStatus,
   sendTypingIndicator,
   subscribeToRealtimeConnectionStatus,
+  subscribeToRealtimeReconnect,
   subscribeToConversationChanges,
+  subscribeToReadReceipts,
+  subscribeToOnlinePresence,
+  forceReconnectMessagingRealtime,
   getRealtimeChannelStatus,
   getUserMessageSettings,
-  broadcastMessageEvent,
+  publishOfficialAnnouncement,
 } from '../../services/messagingService';
-import type { ChatConversation, ChatMessage } from '../../types/messaging';
+import type {
+  ChatConversation,
+  ChatMessage,
+  OnlinePresenceUser,
+  UserMessageSettings,
+} from '../../types/messaging';
 import { playSound } from '../../utils/audio';
 import { ConversationList } from './ConversationList';
 import { ChatThread } from './ChatThread';
@@ -66,6 +74,8 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
 
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [hasMoreMessages, setHasMoreMessages] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const [threadLoading, setThreadLoading] = useState(false);
   const [threadError, setThreadError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
@@ -73,6 +83,15 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
   const [realtimeStatus, setRealtimeStatus] = useState<'SUBSCRIBED' | 'CONNECTING' | 'CLOSED' | 'OFFLINE'>(
     getRealtimeChannelStatus()
   );
+  const [onlineUsers, setOnlineUsers] = useState<OnlinePresenceUser[]>([]);
+  const onlineProfileIds = useMemo(
+    () => new Set(onlineUsers.map((u) => u.profileId)),
+    [onlineUsers]
+  );
+  const [userSettings, setUserSettings] = useState<UserMessageSettings | null>(null);
+  const userSettingsRef = useRef<UserMessageSettings | null>(null);
+  userSettingsRef.current = userSettings;
+
   const [activeTypingText, setActiveTypingText] = useState<string | null>(null);
   const [incomingToast, setIncomingToast] = useState<{
     conversationId: string;
@@ -87,10 +106,14 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
   const [adminBroadcastText, setAdminBroadcastText] = useState('');
   const [adminBroadcastSending, setAdminBroadcastSending] = useState(false);
   const [adminBroadcastSuccess, setAdminBroadcastSuccess] = useState(false);
+  const [adminBroadcastError, setAdminBroadcastError] = useState<string | null>(null);
 
   const activeIdRef = useRef<string | null>(null);
   activeIdRef.current = activeId;
+  const conversationsRef = useRef<ChatConversation[]>([]);
+  conversationsRef.current = conversations;
   const lastTypingSentRef = useRef<number>(0);
+  const refreshDebounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refreshConversations = useCallback(async () => {
     try {
@@ -125,10 +148,38 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
     }
   }, [refreshConversations]);
 
-  // Load conversations on mount
+  const scheduleRefreshConversations = useCallback(() => {
+    if (refreshDebounceTimerRef.current) {
+      clearTimeout(refreshDebounceTimerRef.current);
+    }
+    refreshDebounceTimerRef.current = setTimeout(() => {
+      refreshDebounceTimerRef.current = null;
+      void refreshConversations();
+    }, 250);
+  }, [refreshConversations]);
+
+  useEffect(() => {
+    return () => {
+      if (refreshDebounceTimerRef.current) {
+        clearTimeout(refreshDebounceTimerRef.current);
+      }
+    };
+  }, []);
+
+  const loadSettings = useCallback(async () => {
+    try {
+      const settings = await getUserMessageSettings(myId);
+      setUserSettings(settings);
+    } catch {
+      /* fallback defaults */
+    }
+  }, [myId]);
+
+  // Load conversations and user settings on mount
   useEffect(() => {
     void refreshConversations();
-  }, [refreshConversations]);
+    void loadSettings();
+  }, [refreshConversations, loadSettings]);
 
   // Auto-open direct conversation when targeted from a profile
   useEffect(() => {
@@ -159,19 +210,85 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
     });
   }, []);
 
-  // 1b. Refresh the inbox whenever the user's chat memberships change in Postgres
-  //     (e.g. a peer starts a new conversation with them).
+  // 1a. Subscribe to real Supabase Realtime Presence (live online colleagues)
+  useEffect(() => {
+    if (!myId) return;
+    return subscribeToOnlinePresence(
+      {
+        profileId: myId,
+        fullName: currentUser.fullName || 'SZMC Alumnus',
+        avatarUrl: currentUser.avatarUrl || '/szmc-logo.png',
+        batchYear: currentUser.batchYear || 20,
+      },
+      (users) => {
+        setOnlineUsers(users);
+      }
+    );
+  }, [myId, currentUser.fullName, currentUser.avatarUrl, currentUser.batchYear]);
+
+  // 1b. Refresh the inbox (debounced) whenever chat memberships/metadata change in Postgres
   useEffect(() => {
     return subscribeToConversationChanges(() => {
+      scheduleRefreshConversations();
+    });
+  }, [scheduleRefreshConversations]);
+
+  // 1c. Live read receipts: update peerLastReadAt directly in conversations without full refetch
+  useEffect(() => {
+    return subscribeToReadReceipts((receipt) => {
+      if (receipt.profileId === myId) return;
+      setConversations((prev) =>
+        prev.map((c) => {
+          if (c.id !== receipt.conversationId) return c;
+          if (c.peerLastReadAt && c.peerLastReadAt >= receipt.lastReadAt) return c;
+          return { ...c, peerLastReadAt: receipt.lastReadAt };
+        })
+      );
+    });
+  }, [myId]);
+
+  // 1d. Reconcile missed conversations & active thread messages on Realtime reconnect or tab wake
+  useEffect(() => {
+    return subscribeToRealtimeReconnect(() => {
       void refreshConversations();
+      const currentActiveId = activeIdRef.current;
+      if (!currentActiveId) return;
+      void listMessagesPage(currentActiveId, { limit: 50 }).then(({ messages: latestPage }) => {
+        if (activeIdRef.current !== currentActiveId) return;
+        setMessages((prev) => {
+          const map = new Map<string, ChatMessage>();
+          prev.forEach((m) => {
+            if (!m.clientTempId || m.status === 'failed' || m.status === 'sending') {
+              map.set(m.id, m);
+            }
+          });
+          latestPage.forEach((m) => map.set(m.id, m));
+          return Array.from(map.values()).sort((a, b) =>
+            a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0
+          );
+        });
+      }).catch(() => {});
     });
   }, [refreshConversations]);
 
-  // 2. Subscribe to Supabase Realtime typing events
+  // 1e. Refresh conversations whenever blocked accounts change anywhere in the app
   useEffect(() => {
+    const onBlocksUpdated = () => {
+      void refreshConversations();
+    };
+    window.addEventListener('szmc_blocks_updated', onBlocksUpdated);
+    return () => window.removeEventListener('szmc_blocks_updated', onBlocksUpdated);
+  }, [refreshConversations]);
+
+  // 2. Subscribe to per-conversation scoped Supabase Realtime typing events ONLY for activeId
+  useEffect(() => {
+    if (!activeId) {
+      setActiveTypingText(null);
+      return;
+    }
     let clearTimer: any = null;
-    const unsub = subscribeToTypingStatus((data) => {
-      if (data.conversationId === activeIdRef.current && data.profileId !== myId) {
+    const unsub = subscribeToTypingStatus(activeId, (data) => {
+      if (data.conversationId === activeId && data.profileId !== myId) {
         setActiveTypingText(`${data.fullName || 'Colleague'} is typing...`);
         clearTimeout(clearTimer);
         clearTimer = setTimeout(() => {
@@ -184,25 +301,32 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
       unsub();
       clearTimeout(clearTimer);
     };
-  }, [myId]);
+  }, [activeId, myId]);
 
-  // 3. Load active conversation messages when selection changes
+  // 3. Load active conversation messages (cursor-paginated first page) when selection changes
   useEffect(() => {
     if (!activeId) {
       setMessages([]);
+      setHasMoreMessages(false);
       setActiveTypingText(null);
       return;
     }
     let cancelled = false;
     setThreadLoading(true);
     setThreadError(null);
+    setHasMoreMessages(false);
     (async () => {
       try {
-        const rows = await listMessages(activeId);
+        const { messages: rows, hasMore } = await listMessagesPage(activeId, { limit: 50 });
         if (cancelled) return;
         setMessages(rows);
+        setHasMoreMessages(hasMore);
         await markConversationRead(activeId, myId);
-        if (!cancelled) void refreshConversations();
+        if (!cancelled) {
+          setConversations((prev) =>
+            prev.map((c) => (c.id === activeId ? { ...c, unreadCount: 0 } : c))
+          );
+        }
       } catch (err) {
         if (!cancelled) setThreadError(err instanceof Error ? err.message : 'Could not load this conversation.');
       } finally {
@@ -212,76 +336,128 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [activeId, myId, refreshConversations]);
+  }, [activeId, myId]);
 
-  // 4. Primary Supabase Real-Time incoming message subscription
+  const handleLoadOlder = useCallback(async () => {
+    if (!activeId || loadingOlder || !hasMoreMessages) return;
+    const oldestConfirmed = messages.find((m) => !m.clientTempId);
+    if (!oldestConfirmed) return;
+    setLoadingOlder(true);
+    try {
+      const { messages: older, hasMore } = await listMessagesPage(activeId, {
+        limit: 50,
+        beforeCreatedAt: oldestConfirmed.createdAt,
+      });
+      setHasMoreMessages(hasMore);
+      if (older.length > 0) {
+        setMessages((prev) => {
+          const existingIds = new Set(prev.map((m) => m.id));
+          const uniqueOlder = older.filter((m) => !existingIds.has(m.id));
+          return [...uniqueOlder, ...prev];
+        });
+      }
+    } catch (err) {
+      setThreadError(err instanceof Error ? err.message : 'Could not load older messages.');
+    } finally {
+      setLoadingOlder(false);
+    }
+  }, [activeId, loadingOlder, hasMoreMessages, messages]);
+
+  // 4. Primary Supabase Real-Time incoming message subscription (INSERT vs UPDATE/DELETE aware)
   useEffect(() => {
-    return subscribeToMessageChanges((message) => {
-      // Clear peer typing indicator once message arrives
-      if (message.conversationId === activeIdRef.current && message.senderId !== myId) {
+    return subscribeToMessageChanges((message, meta) => {
+      const isNewInsert = meta.eventType === 'INSERT';
+      const isCurrentActive = message.conversationId === activeIdRef.current;
+      const isFromMe = message.senderId === myId;
+      const settings = userSettingsRef.current;
+      const soundAllowed = settings?.soundEnabled ?? true;
+      const previewAllowed = settings?.notificationPreviewEnabled ?? true;
+      const existingConv = conversationsRef.current.find((c) => c.id === message.conversationId);
+      const isMuted = Boolean(existingConv?.isMuted);
+
+      // Clear peer typing indicator once a new message arrives
+      if (isNewInsert && isCurrentActive && !isFromMe) {
         setActiveTypingText(null);
       }
 
       // Case A: The message belongs to current open thread
-      if (message.conversationId === activeIdRef.current) {
+      if (isCurrentActive) {
         setMessages((prev) => {
           const index = prev.findIndex((m) => m.id === message.id);
           if (index !== -1) {
             const next = [...prev];
-            next[index] = message;
+            next[index] = { ...message, status: 'sent' };
             return next;
           }
-          return [...prev, message];
+          // Reconcile optimistic sending bubble if postgres_changes arrives before sendMessage resolves
+          if (isNewInsert && isFromMe) {
+            const optimisticIdx = prev.findIndex(
+              (m) => m.status === 'sending' && m.senderId === myId && m.body === message.body
+            );
+            if (optimisticIdx !== -1) {
+              const next = [...prev];
+              next[optimisticIdx] = { ...message, status: 'sent' };
+              return next;
+            }
+          }
+          return [...prev, { ...message, status: 'sent' }];
         });
 
-        if (message.senderId !== myId) {
+        if (isNewInsert && !isFromMe) {
           void markConversationRead(message.conversationId, myId);
-          void getUserMessageSettings(myId).then((settings) => {
-            if (settings.soundEnabled) {
-              playSound('notification');
-            }
-          });
+          if (soundAllowed && !isMuted) {
+            playSound('notification');
+          }
         }
       }
 
-      // Case B: Update conversation list in real-time
+      // Case B: Update conversation list cleanly
+      if (!isNewInsert) {
+        // Edits/deletes must NEVER increment unread counts, play sounds, fire toasts,
+        // or bump old threads to the top — simply schedule a debounced sync for preview accuracy.
+        scheduleRefreshConversations();
+        return;
+      }
+
       setConversations((prev) => {
         const targetIdx = prev.findIndex((c) => c.id === message.conversationId);
-        const isCurrentActive = message.conversationId === activeIdRef.current;
-        const isFromMe = message.senderId === myId;
 
         if (targetIdx !== -1) {
           const target = prev[targetIdx];
           const updatedTarget: ChatConversation = {
             ...target,
-            lastMessagePreview: message.deletedAt ? 'Message deleted' : message.body,
+            lastMessagePreview: message.deletedAt
+              ? 'Message deleted'
+              : message.type === 'image' || message.mediaUrl
+              ? message.body && message.body !== 'Photo'
+                ? `📷 ${message.body}`
+                : '📷 Photo'
+              : message.body,
             lastMessageAt: message.createdAt,
             lastMessageFromMe: isFromMe,
             unreadCount: isCurrentActive || isFromMe ? 0 : target.unreadCount + 1,
           };
 
-          if (!isCurrentActive && !isFromMe) {
+          if (!isCurrentActive && !isFromMe && !target.isMuted) {
             setIncomingToast({
               conversationId: message.conversationId,
               senderName: target.person.fullName || 'SZMC Colleague',
-              body: message.body,
+              body: previewAllowed ? updatedTarget.lastMessagePreview : 'Sent you a new message',
             });
-            void getUserMessageSettings(myId).then((settings) => {
-              if (settings.soundEnabled) {
-                playSound('notification');
-              }
-            });
+            if (soundAllowed) {
+              playSound('notification');
+            }
           }
 
           const nextList = prev.filter((_, i) => i !== targetIdx);
           return [updatedTarget, ...nextList];
         } else {
-          void refreshConversations();
+          scheduleRefreshConversations();
           return prev;
         }
       });
     });
-  }, [myId, refreshConversations]);
+  }, [myId, scheduleRefreshConversations]);
 
   const activeConversation = conversations.find((c) => c.id === activeId) ?? null;
 
@@ -295,20 +471,76 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
     }
   }, [activeId, myId, currentUser.fullName]);
 
-  const handleSend = async (body: string): Promise<boolean> => {
-    if (!activeId) return false;
+  // Optimistic message send with server reconciliation and inline retry support
+  const dispatchSend = async (targetConversationId: string, body: string, existingTempId?: string): Promise<boolean> => {
+    const tempId = existingTempId ?? `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const optimisticMsg: ChatMessage = {
+      id: tempId,
+      clientTempId: tempId,
+      conversationId: targetConversationId,
+      senderId: myId,
+      body,
+      createdAt: new Date().toISOString(),
+      editedAt: null,
+      deletedAt: null,
+      type: body === '👍' ? 'like' : 'text',
+      mediaUrl: null,
+      status: 'sending',
+    };
+
     setSending(true);
     setThreadError(null);
+    setMessages((prev) => {
+      if (existingTempId) {
+        return prev.map((m) => (m.id === existingTempId ? { ...m, status: 'sending' } : m));
+      }
+      return [...prev, optimisticMsg];
+    });
+
     try {
-      const sent = await sendMessage(activeId, myId, body);
-      setMessages((prev) => (prev.some((m) => m.id === sent.id) ? prev : [...prev, sent]));
-      void refreshConversations();
+      const sent = await sendMessage(targetConversationId, myId, body);
+      setMessages((prev) => {
+        const alreadyHasServerRow = prev.some((m) => m.id === sent.id);
+        if (alreadyHasServerRow) {
+          return prev.filter((m) => m.id !== tempId);
+        }
+        return prev.map((m) => (m.id === tempId ? { ...sent, status: 'sent' } : m));
+      });
+      scheduleRefreshConversations();
       return true;
     } catch (err) {
+      setMessages((prev) =>
+        prev.map((m) => (m.id === tempId ? { ...m, status: 'failed' } : m))
+      );
       setThreadError(err instanceof Error ? err.message : 'Your message could not be sent.');
       return false;
     } finally {
       setSending(false);
+    }
+  };
+
+  const handleSend = async (body: string): Promise<boolean> => {
+    if (!activeId) return false;
+    return dispatchSend(activeId, body);
+  };
+
+  const handleRetrySend = (failedMessage: ChatMessage) => {
+    if (!activeId) return;
+    void dispatchSend(activeId, failedMessage.body, failedMessage.id);
+  };
+
+  const handleDismissFailed = (tempId: string) => {
+    setMessages((prev) => prev.filter((m) => m.id !== tempId));
+  };
+
+  const handleStartDirectFromPresence = async (peerProfileId: number) => {
+    try {
+      const convId = await findOrCreateDirectConversation(myId, peerProfileId);
+      await refreshConversations();
+      setShowSettings(false);
+      setActiveId(convId);
+    } catch (err) {
+      setListError(err instanceof Error ? err.message : 'Unable to start conversation.');
     }
   };
 
@@ -325,7 +557,9 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
 
   const handleDelete = async (messageId: string) => {
     try {
-      const updated = await deleteMessage(messageId);
+      const targetMsg = messages.find((m) => m.id === messageId);
+      const isModeratingOther = Boolean(targetMsg && targetMsg.senderId !== myId && isSuperAdmin);
+      const updated = await deleteMessage(messageId, { asModerator: isModeratingOther });
       setMessages((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
       void refreshConversations();
     } catch (err) {
@@ -346,31 +580,25 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
     void refreshConversations();
   };
 
-  // Super Admin: Broadcast official announcement across alumni threads
+  // Super Admin: Persist & broadcast an official institutional announcement in Supabase
   const handleSendAdminBroadcast = async () => {
     if (!adminBroadcastText.trim() || adminBroadcastSending) return;
     setAdminBroadcastSending(true);
     setAdminBroadcastSuccess(false);
+    setAdminBroadcastError(null);
     try {
-      // Send to active conversation or broadcast channel event
-      if (activeId) {
-        await sendMessage(activeId, myId, `📢 [OFFICIAL ANNOUNCEMENT]: ${adminBroadcastText.trim()}`);
-      }
-      broadcastMessageEvent('new_message', {
-        id: `adm-${Date.now()}`,
-        conversationId: activeId || 'global-announcement',
-        senderId: myId,
-        body: `📢 [OFFICIAL ANNOUNCEMENT]: ${adminBroadcastText.trim()}`,
-        createdAt: new Date().toISOString(),
-        editedAt: null,
-        deletedAt: null,
-      });
+      const result = await publishOfficialAnnouncement(adminBroadcastText.trim(), activeId);
       setAdminBroadcastSuccess(true);
       setAdminBroadcastText('');
       playSound('like');
-      setTimeout(() => setAdminBroadcastSuccess(false), 3000);
+      await refreshConversations();
+      if (result.conversationId) {
+        setActiveId(result.conversationId);
+      }
+      setTimeout(() => setAdminBroadcastSuccess(false), 3500);
     } catch (err) {
-      console.warn('Admin broadcast error:', err);
+      const errMsg = err instanceof Error ? err.message : 'Failed to publish official announcement.';
+      setAdminBroadcastError(errMsg);
     } finally {
       setAdminBroadcastSending(false);
     }
@@ -411,17 +639,15 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
             </button>
           )}
 
-          {/* Settings button - ONLY visible for admin / super-admin, hidden from normal alumni */}
-          {isSuperAdmin && (
-            <button
-              type="button"
-              onClick={() => setShowMessageSettingsModal(true)}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700/80 text-xs font-semibold text-slate-700 dark:text-slate-200 transition-colors shadow-2xs cursor-pointer"
-            >
-              <Sliders className="w-3.5 h-3.5 text-[#0084FF]" />
-              <span>Settings</span>
-            </button>
-          )}
+          {/* Privacy & Message Settings — available to ALL authenticated alumni */}
+          <button
+            type="button"
+            onClick={() => setShowMessageSettingsModal(true)}
+            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700/80 text-xs font-semibold text-slate-700 dark:text-slate-200 transition-colors shadow-2xs cursor-pointer"
+          >
+            <Sliders className="w-3.5 h-3.5 text-[#0084FF]" />
+            <span>Settings</span>
+          </button>
         </div>
       </div>
 
@@ -471,12 +697,40 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
         </div>
       )}
 
+      {/* Disconnected / Reconnecting Strip — shown ONLY when live sync is actually interrupted */}
+      {(realtimeStatus === 'CLOSED' || realtimeStatus === 'OFFLINE') && (
+        <div className="rounded-2xl border border-amber-200 dark:border-amber-800/70 bg-amber-50/90 dark:bg-amber-950/40 px-3.5 py-2 flex items-center justify-between gap-2 text-xs">
+          <div className="flex items-center gap-2 text-amber-800 dark:text-amber-300 font-medium min-w-0">
+            <WifiOff className="w-3.5 h-3.5 shrink-0" />
+            <span className="truncate">
+              {realtimeStatus === 'OFFLINE'
+                ? 'You are offline. Messages will sync when your connection returns.'
+                : 'Live message sync paused — reconnecting automatically…'}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              forceReconnectMessagingRealtime();
+              void refreshConversations();
+            }}
+            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-amber-200/80 dark:bg-amber-900/60 hover:bg-amber-300/80 dark:hover:bg-amber-900 text-amber-950 dark:text-amber-200 text-[11px] font-bold shrink-0 cursor-pointer"
+          >
+            <RefreshCw className="w-3 h-3" />
+            Reconnect
+          </button>
+        </div>
+      )}
+
       {/* Main Two-Column Meta Messenger Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-4 h-[calc(100vh-210px)] min-h-[540px]">
         {/* Left Column: Conversation List */}
         <div className={`${showThreadOnMobile ? 'hidden lg:flex' : 'flex'} min-h-0`}>
           <ConversationList
             conversations={conversations}
+            myId={myId}
+            onlineProfileIds={onlineProfileIds}
+            onlineUsers={onlineUsers}
             loading={listLoading}
             error={listError}
             activeId={activeId}
@@ -487,8 +741,9 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
                 setIncomingToast(null);
               }
             }}
+            onStartDirectChat={(pid) => void handleStartDirectFromPresence(pid)}
             onNewChat={() => setShowNewChat(true)}
-            onOpenSettings={isSuperAdmin ? () => setShowMessageSettingsModal(true) : undefined}
+            onOpenSettings={() => setShowMessageSettingsModal(true)}
             onRetry={() => void refreshConversations()}
           />
         </div>
@@ -502,6 +757,7 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
                 myId={myId}
                 onBack={() => setShowSettings(false)}
                 onLeft={handleLeft}
+                onBlockStatusChange={() => void refreshConversations()}
                 onMutedChange={(muted) =>
                   setConversations((prev) =>
                     prev.map((c) => (c.id === activeConversation.id ? { ...c, isMuted: muted } : c))
@@ -514,15 +770,21 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
                 messages={messages}
                 myId={myId}
                 isSuperAdmin={isSuperAdmin}
+                readReceiptsEnabled={userSettings?.readReceiptsEnabled ?? true}
                 loading={threadLoading}
+                hasMoreMessages={hasMoreMessages}
+                loadingOlder={loadingOlder}
                 error={threadError}
                 sending={sending}
                 typingText={activeTypingText}
-                isPeerOnline={true}
+                isPeerOnline={onlineProfileIds.has(activeConversation.person.profileId)}
                 onTyping={handleTyping}
                 onBack={() => setActiveId(null)}
                 onOpenSettings={() => setShowSettings(true)}
+                onLoadOlder={handleLoadOlder}
                 onSend={handleSend}
+                onRetrySend={handleRetrySend}
+                onDismissFailed={handleDismissFailed}
                 onEdit={handleEdit}
                 onDelete={handleDelete}
               />
@@ -596,17 +858,18 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
         <NewChatModal myId={myId} onClose={() => setShowNewChat(false)} onStarted={handleStartChat} />
       )}
 
-      {/* Admin Message Settings & Schema Tools (Hidden from normal alumni) */}
-      {isSuperAdmin && (
-        <MessageSettingsModal
-          isOpen={showMessageSettingsModal}
-          onClose={() => setShowMessageSettingsModal(false)}
-          profileId={myId}
-          batchYear={currentUser.batchYear}
-        />
-      )}
+      {/* Message & Privacy Settings Modal (Accessible to all alumni; admin diagnostics gated inside) */}
+      <MessageSettingsModal
+        isOpen={showMessageSettingsModal}
+        onClose={() => {
+          setShowMessageSettingsModal(false);
+          void loadSettings();
+        }}
+        profileId={myId}
+        batchYear={currentUser.batchYear}
+      />
 
-      {/* SUPER ADMIN CONSOLE MODAL (Dr. Nurul Anam Bashir Only) */}
+      {/* SUPER ADMIN CONSOLE MODAL */}
       {showSuperAdminModal && isSuperAdmin && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs animate-fadeIn">
           <div className="w-full max-w-lg rounded-3xl bg-white dark:bg-slate-900 border border-purple-300 dark:border-purple-800 shadow-2xl p-6 space-y-5 animate-scaleUp">
@@ -636,30 +899,33 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
             {/* Pipeline Diagnostics */}
             <div className="p-3.5 rounded-2xl bg-purple-50 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800/60 space-y-2 text-xs">
               <div className="flex items-center justify-between font-bold text-slate-800 dark:text-slate-200">
-                <span>Supabase Realtime Channel:</span>
+                <span>Realtime Sync Mode:</span>
                 <span className="font-mono text-purple-700 dark:text-purple-300">
-                  messages-realtime-feed ({realtimeStatus})
+                  messages-db-sync (RLS · {realtimeStatus})
                 </span>
               </div>
               <div className="flex items-center justify-between text-slate-600 dark:text-slate-400">
                 <span>Total Active Conversations:</span>
                 <span className="font-bold text-slate-900 dark:text-white">{conversations.length}</span>
               </div>
-              <div className="flex items-center justify-between text-slate-600 dark:text-slate-400">
-                <span>Supabase Project URL:</span>
-                <span className="font-mono text-[10px]">hjuyiqyviohinbhzaipl.supabase.co</span>
+              <div className="flex items-center justify-between gap-2 text-slate-600 dark:text-slate-400">
+                <span className="shrink-0">Supabase Endpoint:</span>
+                <span className="font-mono text-[10px] truncate">{SUPABASE_API_URL}</span>
               </div>
             </div>
 
-            {/* Admin Broadcast Announcement Tool */}
+            {/* Persisted Official Announcement Tool */}
             <div className="space-y-2">
               <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
-                Broadcast System Announcement
+                Publish Official Alumni Announcement
               </label>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                Saved permanently in the SZMC Official Announcements channel and delivered via RLS-protected realtime sync.
+              </p>
               <textarea
                 value={adminBroadcastText}
                 onChange={(e) => setAdminBroadcastText(e.target.value)}
-                placeholder="Type an urgent institutional message to broadcast to all alumni..."
+                placeholder="Type an official institutional announcement to publish to all alumni..."
                 rows={3}
                 className="w-full p-3 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs sm:text-sm text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-purple-500/30"
               />
@@ -685,13 +951,19 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
                   ) : (
                     <Send className="w-3.5 h-3.5" />
                   )}
-                  <span>Broadcast Now</span>
+                  <span>Publish Announcement</span>
                 </button>
               </div>
               {adminBroadcastSuccess && (
                 <p className="text-xs text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1">
                   <CheckCircle2 className="w-3.5 h-3.5" />
-                  Announcement dispatched via Supabase Realtime channel!
+                  Official announcement saved and published to SZMC Official Announcements!
+                </p>
+              )}
+              {adminBroadcastError && (
+                <p className="text-xs text-rose-600 dark:text-rose-400 font-medium flex items-center gap-1">
+                  <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                  <span>{adminBroadcastError}</span>
                 </p>
               )}
             </div>

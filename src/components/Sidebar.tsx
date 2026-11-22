@@ -23,6 +23,7 @@ import {
   ShieldAlert,
   Settings,
   Sparkles,
+  Compass,
 } from 'lucide-react';
 import { PWAInstallButton } from './PWAInstallButton';
 import { useTheme } from '../context/ThemeContext';
@@ -72,7 +73,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   // Segment 1: MAIN Navigation
   const mainNavItems: NavItemConfig[] = [
-    { id: 'dashboard', label: 'Dashboard', icon: Home },
+    { id: 'feed', label: 'The Quad', icon: Home },
     { id: 'alumni', label: 'Alumni Directory', icon: Users },
     { id: 'find', label: 'Find Alumni', icon: Search },
     { id: 'map', label: 'Alumni Map', icon: MapPin },
@@ -80,11 +81,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   // Segment 2: COMMUNITY Navigation
   const communityNavItems: NavItemConfig[] = [
-    { id: 'batches', label: 'Batch Directory', icon: BookOpen },
-    { id: 'news', label: 'News & Blog', icon: Newspaper, badge: 'SOON', badgeType: 'soon' },
+    { id: 'discover', label: 'Discover', icon: Compass },
+    { id: 'batches', label: 'Batch Lounges', icon: BookOpen },
+    { id: 'pages', label: 'Official Pages', icon: Building2 },
+    { id: 'saved', label: 'Saved Posts', icon: BookmarkCheck },
     { id: 'events', label: 'Events (SZMC DAY)', icon: Calendar, badge: 'NOV 4-5', badgeType: 'hot' },
     { id: 'gallery', label: 'Gallery', icon: Image },
     { id: 'messages', label: 'Messages', icon: MessageCircle },
+    { id: 'news', label: 'News & Blog', icon: Newspaper, badge: 'SOON', badgeType: 'soon' },
     { id: 'institutions', label: 'Institutions', icon: Building2, badge: 'SOON', badgeType: 'soon' },
   ];
 
@@ -106,9 +110,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const isItemActive = (id: string) => {
     if (activeTab === id) return true;
-    if (id === 'dashboard' && activeTab === 'feed') return true;
+    if (id === 'feed' && (activeTab === 'dashboard' || activeTab === 'quad' || (activeTab.startsWith('quad/') && activeTab !== 'quad/discover'))) return true;
+    if (id === 'discover' && (activeTab === 'discover' || activeTab === 'quad/discover')) return true;
+    if (id === 'saved' && activeTab === 'saved-posts') return true;
     if (id === 'alumni' && activeTab === 'directory') return true;
-    if (id === 'batches' && activeTab.startsWith('batch:')) return true;
+    if (id === 'batches' && (activeTab.startsWith('batch:') || activeTab.startsWith('batch-lounge/'))) return true;
+    if (id === 'pages' && (activeTab === 'pages' || activeTab.startsWith('page/'))) return true;
     if (id === 'emergency' && (activeTab === 'blood' || activeTab === 'blood-network')) return true;
     if (id === 'admin' && (activeTab === 'admin' || activeTab === 'admin-center' || activeTab === 'admin-hub' || activeTab === 'admin-command-center')) return true;
     return false;

@@ -63,6 +63,8 @@ let hydratedFromSupabase = false;
 async function syncSmallAdminsToSupabase(list: SmallAdminUser[]): Promise<void> {
   if (!isSupabaseConfigured) return;
   try {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.access_token) return;
     await supabase.from('site_settings').upsert(
       {
         key: SUPABASE_SETTING_KEY,

@@ -18,11 +18,18 @@ import { SZMCLogo } from './components/SZMCLogo';
 import { OutstandingLoadingScreen } from './components/OutstandingLoadingScreen';
 import { AdminSettingsProvider } from './components/admin/AdminSettingsProvider';
 import { activityTracker } from './services/activityTracker';
+import { loadFeatureFlags } from './services/featureFlagsService';
+import type { QuadFeedFilter } from './components/community/quadConstants';
 import './services/siteConfigService';
 
 // Code-split dynamic views for instant snappy initial page load
 const LandingPage = lazy(() => import('./components/LandingPage').then(m => ({ default: m.LandingPage })));
 const FeedView = lazy(() => import('./components/FeedView').then(m => ({ default: m.FeedView })));
+const QuadCommunityShell = lazy(() => import('./components/community/QuadCommunityShell').then(m => ({ default: m.QuadCommunityShell })));
+const QuadDiscoverView = lazy(() => import('./components/community/QuadDiscoverView').then(m => ({ default: m.QuadDiscoverView })));
+const BatchLoungeView = lazy(() => import('./components/community/BatchLoungeView').then(m => ({ default: m.BatchLoungeView })));
+const OfficialPageView = lazy(() => import('./components/community/OfficialPageView').then(m => ({ default: m.OfficialPageView })));
+const OfficialPagesDirectoryView = lazy(() => import('./components/community/OfficialPagesDirectoryView').then(m => ({ default: m.OfficialPagesDirectoryView })));
 const DirectoryView = lazy(() => import('./components/DirectoryView').then(m => ({ default: m.DirectoryView })));
 const AlumniDirectoryView = lazy(() => import('./components/AlumniDirectoryView').then(m => ({ default: m.AlumniDirectoryView })));
 const BatchesView = lazy(() => import('./components/BatchesView').then(m => ({ default: m.BatchesView })));
@@ -91,7 +98,8 @@ function AlumniAppContent() {
       if (window.location.hash) {
         const h = window.location.hash.replace('#', '');
         if (h.startsWith('album-') || h.startsWith('gallery:')) return 'gallery';
-        if (h.startsWith('post-') || h === 'dashboard' || h === 'feed') return 'feed';
+        if (h.startsWith('post-') || h === 'dashboard' || h === 'feed' || h === 'quad') return 'feed';
+        if (h.startsWith('quad/')) return h;
         // When logged in, always prioritize social media feed over stale profile/directory hash
         if (isLoggedIn && (h === 'profile' || h === 'alumni' || h === 'directory')) {
           return 'feed';
@@ -101,6 +109,22 @@ function AlumniAppContent() {
     }
     return isLoggedIn ? 'feed' : 'landing';
   });
+
+  const [theQuadEnabled, setTheQuadEnabled] = useState<boolean>(true);
+  const [batchLoungesEnabled, setBatchLoungesEnabled] = useState<boolean>(true);
+  const [officialPagesEnabled, setOfficialPagesEnabled] = useState<boolean>(true);
+  useEffect(() => {
+    let mounted = true;
+    void loadFeatureFlags().then((flags) => {
+      if (!mounted) return;
+      if (flags.the_quad_enabled) setTheQuadEnabled(flags.the_quad_enabled.enabled);
+      if (flags.batch_lounges_enabled) setBatchLoungesEnabled(flags.batch_lounges_enabled.enabled);
+      if (flags.official_pages_enabled) setOfficialPagesEnabled(flags.official_pages_enabled.enabled);
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   // Whenever user logs in, ALWAYS take them to the central social media feed / dashboard
   const wasLoggedInRef = useRef(isLoggedIn);
@@ -265,6 +289,11 @@ function AlumniAppContent() {
   }, []);
 
   const navigateTo = (newRoute: string, keepSelectedProfile = false) => {
+    if (newRoute.startsWith('post-')) {
+      setRoute('feed');
+      window.location.hash = newRoute;
+      return;
+    }
     if (newRoute.startsWith('album-')) {
       const aId = Number(newRoute.replace('album-', '')) || null;
       setTargetAlbumIdForGallery(aId);
@@ -293,8 +322,12 @@ function AlumniAppContent() {
 
   const getBackLabel = () => {
     if (previousRoute === 'map' || previousRoute === 'map-directory') return 'Back to Map';
-    if (previousRoute === 'batches') return 'Back to Batches';
-    if (previousRoute === 'feed' || previousRoute === 'dashboard') return 'Back to Feed';
+    if (previousRoute === 'batches') return 'Back to Batch Lounges';
+    if (previousRoute.startsWith('batch-lounge/')) return 'Back to Batch Lounge';
+    if (previousRoute === 'pages') return 'Back to Official Pages';
+    if (previousRoute.startsWith('page/')) return 'Back to Official Page';
+    if (previousRoute === 'discover' || previousRoute === 'quad/discover') return 'Back to Discover';
+    if (previousRoute === 'feed' || previousRoute === 'dashboard' || previousRoute.startsWith('quad')) return 'Back to The Quad';
     if (previousRoute === 'find') return 'Back to Search Results';
     if (previousRoute === 'emergency' || previousRoute === 'blood' || previousRoute === 'blood-network') return 'Back to Blood Network';
     return 'Back to Directory';
@@ -419,12 +452,36 @@ function AlumniAppContent() {
               transition={{ duration: 0.26, ease: [0.16, 1, 0.3, 1] }}
             >
               <Suspense fallback={<ViewSkeletonFallback />}>
-                {(route === 'feed' || route === 'dashboard') && (
-                  <FeedView
-                    onViewProfile={handleViewProfile}
-                    onOpenVerificationCenter={openVerificationCenter}
+                {(route === 'discover' || route === 'quad/discover') && (
+                  <QuadDiscoverView
                     onNavigate={navigateTo}
+                    onViewProfile={handleViewProfile}
                   />
+                )}
+
+                {(route === 'feed' || route === 'dashboard' || route === 'quad' || (route.startsWith('quad/') && route !== 'quad/discover')) && (
+                  theQuadEnabled ? (
+                    <QuadCommunityShell
+                      initialFeedTab={
+                        route === 'quad/my-batch'
+                          ? 'my_batch'
+                          : route === 'quad/following'
+                          ? 'following'
+                          : route === 'quad/latest'
+                          ? 'latest'
+                          : ('for_you' as QuadFeedFilter)
+                      }
+                      onViewProfile={handleViewProfile}
+                      onOpenVerificationCenter={openVerificationCenter}
+                      onNavigate={navigateTo}
+                    />
+                  ) : (
+                    <FeedView
+                      onViewProfile={handleViewProfile}
+                      onOpenVerificationCenter={openVerificationCenter}
+                      onNavigate={navigateTo}
+                    />
+                  )
                 )}
 
                 {(route === 'alumni' || (route === 'directory' && !globalSearch)) && (
@@ -451,8 +508,60 @@ function AlumniAppContent() {
                       setGlobalSearch('');
                       navigateTo('find');
                     }}
+                    onOpenBatchLounge={
+                      batchLoungesEnabled
+                        ? (batchYear) => navigateTo(`batch-lounge/${batchYear}`)
+                        : undefined
+                    }
                     onViewProfile={handleViewProfile}
                   />
+                )}
+
+                {route.startsWith('batch-lounge/') && (
+                  batchLoungesEnabled ? (
+                    <BatchLoungeView
+                      batchYear={Number(route.replace('batch-lounge/', '')) || 1}
+                      onNavigate={navigateTo}
+                      onViewProfile={handleViewProfile}
+                    />
+                  ) : (
+                    <BatchesView
+                      onSelectBatch={(batchYear) => {
+                        setSelectedBatchFilter(batchYear);
+                        setGlobalSearch('');
+                        navigateTo('find');
+                      }}
+                      onViewProfile={handleViewProfile}
+                    />
+                  )
+                )}
+
+                {route === 'pages' && (
+                  officialPagesEnabled ? (
+                    <OfficialPagesDirectoryView onNavigate={navigateTo} />
+                  ) : (
+                    <QuadCommunityShell
+                      onViewProfile={handleViewProfile}
+                      onOpenVerificationCenter={openVerificationCenter}
+                      onNavigate={navigateTo}
+                    />
+                  )
+                )}
+
+                {route.startsWith('page/') && (
+                  officialPagesEnabled ? (
+                    <OfficialPageView
+                      slug={route.replace('page/', '')}
+                      onNavigate={navigateTo}
+                      onViewProfile={handleViewProfile}
+                    />
+                  ) : (
+                    <QuadCommunityShell
+                      onViewProfile={handleViewProfile}
+                      onOpenVerificationCenter={openVerificationCenter}
+                      onNavigate={navigateTo}
+                    />
+                  )
                 )}
 
                 {(route === 'map' || route === 'map-directory') && (
@@ -608,18 +717,13 @@ function AlumniAppContent() {
           <button
             type="button"
             onClick={() => navigateTo('feed')}
-            className={`flex flex-col items-center justify-center flex-1 py-1 px-1 rounded-xl transition-all cursor-pointer ${
-              route === 'feed' || route === 'dashboard'
-                ? 'text-blue-600 dark:text-blue-400 font-bold'
+            className={`min-h-[44px] flex flex-col items-center justify-center flex-1 py-1 px-1 rounded-xl transition-colors cursor-pointer ${
+              route === 'feed' || route === 'dashboard' || route === 'quad' || route === 'discover' || route.startsWith('quad/')
+                ? 'text-blue-600 dark:text-blue-400 font-semibold'
                 : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
             }`}
           >
-            <div className="relative">
-              <Home className={`w-5 h-5 transition-transform ${route === 'feed' || route === 'dashboard' ? 'scale-110' : ''}`} />
-              {(route === 'feed' || route === 'dashboard') && (
-                <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-blue-600 dark:bg-blue-400" />
-              )}
-            </div>
+            <Home className="w-5 h-5" />
             <span className="text-[10px] sm:text-[11px] mt-0.5 truncate max-w-[64px]">The Quad</span>
           </button>
 
@@ -627,18 +731,13 @@ function AlumniAppContent() {
           <button
             type="button"
             onClick={() => navigateTo('alumni')}
-            className={`flex flex-col items-center justify-center flex-1 py-1 px-1 rounded-xl transition-all cursor-pointer ${
+            className={`min-h-[44px] flex flex-col items-center justify-center flex-1 py-1 px-1 rounded-xl transition-colors cursor-pointer ${
               route === 'alumni' || route === 'directory' || route === 'find'
-                ? 'text-blue-600 dark:text-blue-400 font-bold'
+                ? 'text-blue-600 dark:text-blue-400 font-semibold'
                 : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
             }`}
           >
-            <div className="relative">
-              <Users className={`w-5 h-5 transition-transform ${route === 'alumni' || route === 'directory' || route === 'find' ? 'scale-110' : ''}`} />
-              {(route === 'alumni' || route === 'directory' || route === 'find') && (
-                <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-blue-600 dark:bg-blue-400" />
-              )}
-            </div>
+            <Users className="w-5 h-5" />
             <span className="text-[10px] sm:text-[11px] mt-0.5 truncate max-w-[64px]">Directory</span>
           </button>
 
@@ -646,19 +745,13 @@ function AlumniAppContent() {
           <button
             type="button"
             onClick={() => navigateTo('messages')}
-            className={`flex flex-col items-center justify-center flex-1 py-1 px-1 rounded-xl transition-all cursor-pointer ${
+            className={`min-h-[44px] flex flex-col items-center justify-center flex-1 py-1 px-1 rounded-xl transition-colors cursor-pointer ${
               route === 'messages'
-                ? 'text-[#0084FF] dark:text-[#0084FF] font-bold'
+                ? 'text-[#0084FF] dark:text-[#0084FF] font-semibold'
                 : 'text-slate-500 dark:text-slate-400 hover:text-[#0084FF] dark:hover:text-[#0084FF]'
             }`}
           >
-            <div className="relative">
-              <MessageCircle className={`w-5 h-5 transition-transform ${route === 'messages' ? 'scale-110 text-[#0084FF]' : ''}`} />
-              <span className="absolute -top-0.5 -right-1 w-2 h-2 rounded-full bg-[#0084FF] ring-2 ring-white dark:ring-slate-900" />
-              {route === 'messages' && (
-                <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-[#0084FF]" />
-              )}
-            </div>
+            <MessageCircle className={`w-5 h-5 ${route === 'messages' ? 'text-[#0084FF]' : ''}`} />
             <span className="text-[10px] sm:text-[11px] mt-0.5 truncate max-w-[64px]">Chats</span>
           </button>
 
@@ -666,19 +759,13 @@ function AlumniAppContent() {
           <button
             type="button"
             onClick={() => navigateTo('emergency')}
-            className={`flex flex-col items-center justify-center flex-1 py-1 px-1 rounded-xl transition-all cursor-pointer ${
+            className={`min-h-[44px] flex flex-col items-center justify-center flex-1 py-1 px-1 rounded-xl transition-colors cursor-pointer ${
               route === 'emergency' || route === 'blood' || route === 'blood-network'
-                ? 'text-rose-600 dark:text-rose-400 font-bold'
+                ? 'text-rose-600 dark:text-rose-400 font-semibold'
                 : 'text-slate-500 dark:text-slate-400 hover:text-rose-600 dark:hover:text-rose-400'
             }`}
           >
-            <div className="relative">
-              <HeartHandshake className={`w-5 h-5 transition-transform ${route === 'emergency' || route === 'blood' || route === 'blood-network' ? 'scale-110 text-rose-600' : ''}`} />
-              <span className="absolute -top-0.5 -right-1 w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
-              {(route === 'emergency' || route === 'blood' || route === 'blood-network') && (
-                <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-rose-600 dark:bg-rose-400" />
-              )}
-            </div>
+            <HeartHandshake className={`w-5 h-5 ${route === 'emergency' || route === 'blood' || route === 'blood-network' ? 'text-rose-600' : ''}`} />
             <span className="text-[10px] sm:text-[11px] mt-0.5 truncate max-w-[64px]">Blood</span>
           </button>
 

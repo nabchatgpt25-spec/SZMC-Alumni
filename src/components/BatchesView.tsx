@@ -25,10 +25,15 @@ import { realtimeManager } from '../services/supabaseRealtimeService';
 
 interface BatchesViewProps {
   onSelectBatch: (batchYear: number) => void;
+  onOpenBatchLounge?: (batchYear: number) => void;
   onViewProfile?: (profileId: number) => void;
 }
 
-export const BatchesView: React.FC<BatchesViewProps> = ({ onSelectBatch, onViewProfile }) => {
+export const BatchesView: React.FC<BatchesViewProps> = ({
+  onSelectBatch,
+  onOpenBatchLounge,
+  onViewProfile,
+}) => {
   const [batchesList, setBatchesList] = useState<BatchSummary[]>(BATCH_LIST);
   const [batchAlumniProfiles, setBatchAlumniProfiles] = useState<AlumniProfile[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -363,13 +368,23 @@ export const BatchesView: React.FC<BatchesViewProps> = ({ onSelectBatch, onViewP
                 </div>
               </div>
 
-              <div className="flex items-center gap-2 self-start sm:self-auto">
+              <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+                {onOpenBatchLounge && (
+                  <button
+                    type="button"
+                    onClick={() => onOpenBatchLounge(activeBatch.batchYear)}
+                    className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 dark:bg-blue-600 dark:hover:bg-blue-700 text-white text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs whitespace-nowrap"
+                  >
+                    <GraduationCap className="w-3.5 h-3.5" />
+                    <span>Enter Batch Lounge</span>
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => onSelectBatch(activeBatch.batchYear)}
-                  className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
+                  className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs whitespace-nowrap"
                 >
-                  <span>Open Full Batch Directory</span>
+                  <span>Full Directory</span>
                   <ArrowRight className="w-3.5 h-3.5" />
                 </button>
                 <button

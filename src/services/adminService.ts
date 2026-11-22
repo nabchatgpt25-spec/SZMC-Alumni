@@ -146,14 +146,17 @@ export async function saveSupabaseGovernanceState(
 
   if (isSupabaseConfigured) {
     try {
-      await supabase.from('site_settings').upsert(
-        {
-          key: GOVERNANCE_SETTINGS_KEY,
-          value: next,
-          updated_at: next.updatedAt,
-        },
-        { onConflict: 'key' }
-      );
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.access_token) {
+        await supabase.from('site_settings').upsert(
+          {
+            key: GOVERNANCE_SETTINGS_KEY,
+            value: next,
+            updated_at: next.updatedAt,
+          },
+          { onConflict: 'key' }
+        );
+      }
     } catch (err) {
       console.warn('Failed to save admin_governance_state to Supabase site_settings:', err);
     }
@@ -1907,20 +1910,25 @@ export function saveGalleryAlbums(albums: any[]): void {
   } catch {}
 
   if (isSupabaseConfigured) {
-    void supabase
-      .from('site_settings')
-      .upsert(
-        {
-          key: GALLERY_SETTINGS_KEY,
-          value: {
-            albums,
-            updated_at: new Date().toISOString(),
-          },
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: 'key' }
-      )
-      .then(() => {});
+    void supabase.auth
+      .getSession()
+      .then(({ data: { session } }) => {
+        if (!session?.access_token) return;
+        return supabase
+          .from('site_settings')
+          .upsert(
+            {
+              key: GALLERY_SETTINGS_KEY,
+              value: {
+                albums,
+                updated_at: new Date().toISOString(),
+              },
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: 'key' }
+          );
+      })
+      .then(() => {}, () => {});
   }
 }
 

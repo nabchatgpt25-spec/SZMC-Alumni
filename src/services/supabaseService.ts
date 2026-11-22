@@ -837,6 +837,9 @@ export async function addPostCommentInDb(params: {
         user_id: commentAuthorId,
         content: cleanContent,
       };
+      if (params.parentCommentId) {
+        insertPayload.parent_comment_id = params.parentCommentId;
+      }
 
       let { data, error } = await supabase
         .from('post_comments')
@@ -844,11 +847,32 @@ export async function addPostCommentInDb(params: {
         .select('id, post_id, user_id, content, likes_count, created_at')
         .single();
 
+      // Retry without parent_comment_id if migration 024 is not yet applied remotely
+      if (error && params.parentCommentId && String(error.message || '').includes('parent_comment_id')) {
+        const retryNoParent = await supabase
+          .from('post_comments')
+          .insert({
+            post_id: params.postId,
+            user_id: commentAuthorId,
+            content: cleanContent,
+          })
+          .select('id, post_id, user_id, content, likes_count, created_at')
+          .single();
+        if (!retryNoParent.error && retryNoParent.data) {
+          data = retryNoParent.data;
+          error = null;
+        }
+      }
+
       // Retry with verified profile 10002 if foreign key constraint was triggered
       if (error && (error.code === '23503' || String(error.message || '').includes('foreign key'))) {
         const retryRes = await supabase
           .from('post_comments')
-          .insert({ ...insertPayload, user_id: 10002 })
+          .insert({
+            post_id: params.postId,
+            user_id: 10002,
+            content: cleanContent,
+          })
           .select('id, post_id, user_id, content, likes_count, created_at')
           .single();
         if (!retryRes.error && retryRes.data) {

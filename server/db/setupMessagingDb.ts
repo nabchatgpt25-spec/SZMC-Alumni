@@ -686,12 +686,10 @@ BEGIN
 EXCEPTION WHEN OTHERS THEN NULL;
 END $$;
 
--- 16. PERMISSIVE YET SECURE GRANTS & RLS FOR EXPANDED MODULES
-GRANT SELECT, INSERT, UPDATE, DELETE ON public.mentorship_requests TO anon, authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE ON public.mentor_offers TO anon, authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE ON public.career_opportunities TO anon, authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE ON public.gallery_albums TO anon, authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE ON public.gallery_photos TO anon, authenticated;
+-- 16. LEAST-PRIVILEGE GRANTS & OWNERSHIP RLS FOR EXPANDED MODULES
+REVOKE INSERT, UPDATE, DELETE ON public.mentorship_requests, public.mentor_offers, public.career_opportunities, public.gallery_albums, public.gallery_photos FROM anon;
+GRANT SELECT ON public.mentorship_requests, public.mentor_offers, public.career_opportunities, public.gallery_albums, public.gallery_photos TO anon, authenticated;
+GRANT INSERT, UPDATE, DELETE ON public.mentorship_requests, public.mentor_offers, public.career_opportunities, public.gallery_albums, public.gallery_photos TO authenticated;
 
 ALTER TABLE public.mentorship_requests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.mentor_offers ENABLE ROW LEVEL SECURITY;
@@ -700,19 +698,46 @@ ALTER TABLE public.gallery_albums ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.gallery_photos ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "mentorship_requests_all" ON public.mentorship_requests;
-CREATE POLICY "mentorship_requests_all" ON public.mentorship_requests FOR ALL USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "mentorship_requests_public_read" ON public.mentorship_requests;
+DROP POLICY IF EXISTS "mentorship_requests_insert_own" ON public.mentorship_requests;
+DROP POLICY IF EXISTS "mentorship_requests_update_own_or_mod" ON public.mentorship_requests;
+DROP POLICY IF EXISTS "mentorship_requests_delete_own_or_mod" ON public.mentorship_requests;
+CREATE POLICY "mentorship_requests_public_read" ON public.mentorship_requests FOR SELECT TO anon, authenticated USING (true);
+CREATE POLICY "mentorship_requests_insert_own" ON public.mentorship_requests FOR INSERT TO authenticated WITH CHECK (user_id = public.current_profile_id() OR public.is_admin_or_mod());
+CREATE POLICY "mentorship_requests_update_own_or_mod" ON public.mentorship_requests FOR UPDATE TO authenticated USING (user_id = public.current_profile_id() OR public.is_admin_or_mod()) WITH CHECK (user_id = public.current_profile_id() OR public.is_admin_or_mod());
+CREATE POLICY "mentorship_requests_delete_own_or_mod" ON public.mentorship_requests FOR DELETE TO authenticated USING (user_id = public.current_profile_id() OR public.is_admin_or_mod());
 
 DROP POLICY IF EXISTS "mentor_offers_all" ON public.mentor_offers;
-CREATE POLICY "mentor_offers_all" ON public.mentor_offers FOR ALL USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "mentor_offers_public_read" ON public.mentor_offers;
+DROP POLICY IF EXISTS "mentor_offers_insert_own" ON public.mentor_offers;
+DROP POLICY IF EXISTS "mentor_offers_update_own_or_mod" ON public.mentor_offers;
+DROP POLICY IF EXISTS "mentor_offers_delete_own_or_mod" ON public.mentor_offers;
+CREATE POLICY "mentor_offers_public_read" ON public.mentor_offers FOR SELECT TO anon, authenticated USING (true);
+CREATE POLICY "mentor_offers_insert_own" ON public.mentor_offers FOR INSERT TO authenticated WITH CHECK (user_id = public.current_profile_id() OR public.is_admin_or_mod());
+CREATE POLICY "mentor_offers_update_own_or_mod" ON public.mentor_offers FOR UPDATE TO authenticated USING (user_id = public.current_profile_id() OR public.is_admin_or_mod()) WITH CHECK (user_id = public.current_profile_id() OR public.is_admin_or_mod());
+CREATE POLICY "mentor_offers_delete_own_or_mod" ON public.mentor_offers FOR DELETE TO authenticated USING (user_id = public.current_profile_id() OR public.is_admin_or_mod());
 
 DROP POLICY IF EXISTS "career_opportunities_all" ON public.career_opportunities;
-CREATE POLICY "career_opportunities_all" ON public.career_opportunities FOR ALL USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "career_opportunities_public_read" ON public.career_opportunities;
+DROP POLICY IF EXISTS "career_opportunities_insert_own" ON public.career_opportunities;
+DROP POLICY IF EXISTS "career_opportunities_update_own_or_mod" ON public.career_opportunities;
+DROP POLICY IF EXISTS "career_opportunities_delete_own_or_mod" ON public.career_opportunities;
+CREATE POLICY "career_opportunities_public_read" ON public.career_opportunities FOR SELECT TO anon, authenticated USING (true);
+CREATE POLICY "career_opportunities_insert_own" ON public.career_opportunities FOR INSERT TO authenticated WITH CHECK (poster_id = public.current_profile_id() OR public.is_admin_or_mod());
+CREATE POLICY "career_opportunities_update_own_or_mod" ON public.career_opportunities FOR UPDATE TO authenticated USING (poster_id = public.current_profile_id() OR public.is_admin_or_mod()) WITH CHECK (poster_id = public.current_profile_id() OR public.is_admin_or_mod());
+CREATE POLICY "career_opportunities_delete_own_or_mod" ON public.career_opportunities FOR DELETE TO authenticated USING (poster_id = public.current_profile_id() OR public.is_admin_or_mod());
 
 DROP POLICY IF EXISTS "gallery_albums_all" ON public.gallery_albums;
-CREATE POLICY "gallery_albums_all" ON public.gallery_albums FOR ALL USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "gallery_albums_public_read" ON public.gallery_albums;
+DROP POLICY IF EXISTS "gallery_albums_mod_write" ON public.gallery_albums;
+CREATE POLICY "gallery_albums_public_read" ON public.gallery_albums FOR SELECT TO anon, authenticated USING (true);
+CREATE POLICY "gallery_albums_mod_write" ON public.gallery_albums FOR ALL TO authenticated USING (public.is_admin_or_mod()) WITH CHECK (public.is_admin_or_mod());
 
 DROP POLICY IF EXISTS "gallery_photos_all" ON public.gallery_photos;
-CREATE POLICY "gallery_photos_all" ON public.gallery_photos FOR ALL USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "gallery_photos_public_read" ON public.gallery_photos;
+DROP POLICY IF EXISTS "gallery_photos_mod_write" ON public.gallery_photos;
+CREATE POLICY "gallery_photos_public_read" ON public.gallery_photos FOR SELECT TO anon, authenticated USING (true);
+CREATE POLICY "gallery_photos_mod_write" ON public.gallery_photos FOR ALL TO authenticated USING (public.is_admin_or_mod()) WITH CHECK (public.is_admin_or_mod());
 
 -- 17. ENABLE REALTIME REPLICATION FOR ACTIVE MODULES
 DO $$

@@ -13,14 +13,20 @@ import {
   CheckCircle2
 } from 'lucide-react';
 import { PostItem } from '../types';
-import { getSavedPosts, toggleSavePost, setSavedPosts } from '../utils/offlineStorage';
+import { getSavedPosts } from '../utils/offlineStorage';
+import {
+  fetchSavedPostsFromDb,
+  removeSavedPostFromDbAndCache,
+  clearAllSavedPostsFromDbAndCache,
+} from '../services/richInteractionsService';
+import { useAuth } from '../context/AuthContext';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { PostLightboxModal } from './PostLightboxModal';
 import {
   extractUrlsFromText,
-  renderTextWithClickableLinks,
   SharedEmbedCard
 } from './SmartPostMediaAndEmbeds';
+import { RichTextWithMentions } from './community/RichTextWithMentions';
 
 interface SavedPostsViewProps {
   onViewProfile?: (userId: number) => void;
@@ -32,10 +38,32 @@ export const SavedPostsView: React.FC<SavedPostsViewProps> = ({
   onViewProfile,
   onNavigateToFeed,
 }) => {
+  const { currentUser, isLoggedIn } = useAuth();
   const isOnline = useOnlineStatus();
   const [savedPosts, setSavedPostsState] = useState<PostItem[]>(() => getSavedPosts());
+  const [syncSource, setSyncSource] = useState<'supabase' | 'offline_cache'>('offline_cache');
+  const [isSyncing, setIsSyncing] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [copiedSavedPostId, setCopiedSavedPostId] = useState<number | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    if (!isLoggedIn || !currentUser?.id) return;
+    setIsSyncing(true);
+    fetchSavedPostsFromDb(currentUser.id)
+      .then((res) => {
+        if (mounted) {
+          setSavedPostsState(res.posts);
+          setSyncSource(res.source);
+        }
+      })
+      .finally(() => {
+        if (mounted) setIsSyncing(false);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, [isLoggedIn, currentUser?.id, isOnline]);
 
   // Lightbox modal state
   const [lightboxState, setLightboxState] = useState<{
@@ -102,17 +130,17 @@ export const SavedPostsView: React.FC<SavedPostsViewProps> = ({
 
   const [confirmClearAll, setConfirmClearAll] = useState(false);
 
-  const handleRemoveSaved = (post: PostItem) => {
-    toggleSavePost(post);
-    setSavedPostsState(getSavedPosts());
-    showToast('Post removed from saved offline cache.');
+  const handleRemoveSaved = async (post: PostItem) => {
+    setSavedPostsState((prev) => prev.filter((p) => p.id !== post.id));
+    await removeSavedPostFromDbAndCache(post, isLoggedIn ? currentUser?.id : undefined);
+    showToast('Post removed from your saved library.');
   };
 
-  const handleClearAll = () => {
-    setSavedPosts([]);
+  const handleClearAll = async () => {
     setSavedPostsState([]);
     setConfirmClearAll(false);
-    showToast('All saved posts cleared from offline cache.');
+    await clearAllSavedPostsFromDbAndCache(isLoggedIn ? currentUser?.id : undefined);
+    showToast('All saved posts cleared.');
   };
 
   return (
@@ -195,15 +223,22 @@ export const SavedPostsView: React.FC<SavedPostsViewProps> = ({
           </div>
         </div>
 
-        {/* Offline Cache Notice */}
-        <div className="mt-5 p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/60 flex items-center justify-between text-xs text-slate-600 dark:text-slate-300">
+        {/* Sync & Offline Availability Bar */}
+        <div className="mt-5 p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/60 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600 dark:text-slate-300">
           <div className="flex items-center gap-2">
             <CheckCircle2 className="w-4 h-4 text-emerald-500" />
             <span>
-              <strong>{savedPosts.length}</strong> {savedPosts.length === 1 ? 'post' : 'posts'} stored in service worker offline cache
+              <strong className="font-mono tabular-nums">{savedPosts.length}</strong>{' '}
+              {savedPosts.length === 1 ? 'post' : 'posts'} saved
             </span>
           </div>
-          <span className="text-[11px] text-slate-400">Cache Strategy: Stale-While-Revalidate</span>
+          <span className="text-[11px] text-slate-500 dark:text-slate-400">
+            {isSyncing
+              ? 'Syncing with your account...'
+              : syncSource === 'supabase'
+              ? 'Account-synced · Available offline'
+              : 'Offline cache active'}
+          </span>
         </div>
       </div>
 
@@ -283,7 +318,7 @@ export const SavedPostsView: React.FC<SavedPostsViewProps> = ({
 
               {/* Post Content */}
               <p className="text-sm text-slate-800 dark:text-slate-200 whitespace-pre-line leading-relaxed break-words">
-                {renderTextWithClickableLinks(post.content)}
+                <RichTextWithMentions text={post.content} />
               </p>
 
               {/* Attached Images */}

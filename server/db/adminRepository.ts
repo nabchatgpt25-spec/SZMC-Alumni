@@ -1,6 +1,7 @@
 import {
   supabaseServer,
   isSupabaseServerConfigured,
+  findAuthUserByEmailOrPhone,
   SUPABASE_TABLES,
 } from '../lib/supabase-server.ts';
 
@@ -546,72 +547,56 @@ export async function createOrRegisterAlumniProfile(input: {
 
   if (isSupabaseServerConfigured) {
     try {
-      // 1. If effectiveAuthUid is not yet a valid UUID, look up or provision in auth.users
+      // 1. If effectiveAuthUid is not yet a valid UUID, look up or provision in auth.users (bounded lookup)
       if (!effectiveAuthUid && cleanEmail) {
-        const { data: usersData } = await supabaseServer.auth.admin.listUsers();
-        const existingAuthUser = (usersData?.users as any[])?.find(
-          (u: any) => u.email?.toLowerCase() === cleanEmail
-        );
-
+        const existingAuthUser = await findAuthUserByEmailOrPhone({ email: cleanEmail });
         if (existingAuthUser) {
           effectiveAuthUid = existingAuthUser.id;
-          // Auto-confirm user so login across devices is never blocked by unconfirmed email state
-          if (!existingAuthUser.email_confirmed_at) {
-            await supabaseServer.auth.admin.updateUserById(existingAuthUser.id, {
-              email_confirm: true,
-            });
-          }
         }
       }
 
       if (!effectiveAuthUid && cleanEmail && (input.rawPassword || input.passwordHash)) {
         const initialPass = input.rawPassword || 'TempPass_' + Date.now();
+        try {
+          const { data: createdAuthUser, error: createAuthErr } =
+            await supabaseServer.auth.admin.createUser({
+              email: cleanEmail,
+              password: initialPass,
+              email_confirm: false,
+              user_metadata: {
+                full_name: input.fullName.trim(),
+                batch_year: batchNum,
+                phone: cleanPhone,
+              },
+            });
+          if (!createAuthErr && createdAuthUser?.user) {
+            effectiveAuthUid = createdAuthUser.user.id;
+          }
+        } catch {}
+
+        // Fallback to regular signUp if auth.admin lacks service_role key
+        if (!effectiveAuthUid) {
           try {
-            const { data: createdAuthUser, error: createAuthErr } =
-              await supabaseServer.auth.admin.createUser({
-                email: cleanEmail,
-                password: initialPass,
-                email_confirm: true,
-                user_metadata: {
+            const { data: sData, error: sErr } = await supabaseServer.auth.signUp({
+              email: cleanEmail,
+              password: initialPass,
+              options: {
+                data: {
                   full_name: input.fullName.trim(),
                   batch_year: batchNum,
                   phone: cleanPhone,
                 },
-              });
-            if (!createAuthErr && createdAuthUser?.user) {
-              effectiveAuthUid = createdAuthUser.user.id;
+              },
+            });
+            if (!sErr && sData?.user) {
+              effectiveAuthUid = sData.user.id;
             }
           } catch {}
-
-          // Fallback to regular signUp if auth.admin lacks service_role key
-          if (!effectiveAuthUid) {
-            try {
-              const { data: sData, error: sErr } = await supabaseServer.auth.signUp({
-                email: cleanEmail,
-                password: initialPass,
-                options: {
-                  data: {
-                    full_name: input.fullName.trim(),
-                    batch_year: batchNum,
-                    phone: cleanPhone,
-                  },
-                },
-              });
-              if (!sErr && sData?.user) {
-                effectiveAuthUid = sData.user.id;
-              }
-            } catch {}
-          }
         }
+      }
 
       // 2. Persist directly into public.alumni_profiles using client
       if (effectiveAuthUid) {
-        // Auto-confirm existing user in auth.users if service role is enabled
-        try {
-          await supabaseServer.auth.admin.updateUserById(effectiveAuthUid, {
-            email_confirm: true,
-          });
-        } catch {}
 
         const { data, error } = await supabaseServer
           .from(SUPABASE_TABLES.ALUMNI_PROFILES)
@@ -787,25 +772,17 @@ export async function findAlumniByCredential(credential: string) {
         };
       }
 
-      // Self-healing: If user is registered in auth.users but profile row was missing, restore it now
+      // Self-healing: If confirmed user exists in auth.users but profile row was missing, restore profile
       if (clean.includes('@')) {
-        const { data: usersData } = await supabaseServer.auth.admin.listUsers();
-        const matched = (usersData?.users as any[])?.find(
-          (u: any) => u.email?.toLowerCase() === clean
-        );
-        if (matched) {
-          if (!matched.email_confirmed_at) {
-            await supabaseServer.auth.admin.updateUserById(matched.id, {
-              email_confirm: true,
-            });
-          }
+        const matched = await findAuthUserByEmailOrPhone({ email: clean });
+        if (matched && matched.email_confirmed_at) {
           const restored = await createOrRegisterAlumniProfile({
             userUid: matched.id,
             fullName:
               (matched.user_metadata as any)?.full_name ||
               (matched.user_metadata as any)?.name ||
               clean.split('@')[0],
-            batchYear: Number((matched.user_metadata as any)?.batch_year) || 68,
+            batchYear: Number((matched.user_metadata as any)?.batch_year) || 25,
             email: clean,
             phone: (matched.user_metadata as any)?.phone || null,
           });

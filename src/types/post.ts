@@ -12,12 +12,15 @@ export interface PostComment {
   id: number;
   postId: number;
   userId: number;
+  parentCommentId?: number | null;
   fullName: string;
   avatarUrl: string;
   content: string;
   likesCount: number;
   likedByMe: boolean;
   createdAt: string;
+  mentionedUserIds?: number[];
+  replies?: PostComment[];
 }
 
 export interface LinkMetadata {
@@ -41,6 +44,25 @@ export interface LinkMetadata {
 
 export type ReactionType = 'like' | 'love' | 'care' | 'haha' | 'wow' | 'sad' | 'angry';
 
+export type PostAudience = 'public' | 'alumni_only' | 'my_batch' | 'connections';
+
+export interface PostPollOption {
+  id: number;
+  label: string;
+}
+
+export interface PostPoll {
+  id: number;
+  postId?: number | null;
+  question: string;
+  options: PostPollOption[];
+  voteCounts: Record<number, number>;
+  totalVotes: number;
+  myVoteOptionIndex: number | null;
+  isClosed: boolean;
+  closesAt?: string | null;
+}
+
 export interface PostItem {
   id: number;
   userId: number;
@@ -51,7 +73,33 @@ export interface PostItem {
   profession?: string;
   institution?: string;
   content: string;
-  category: string;
+  category?: string;
+  communityCategory?: string;
+  audience?: PostAudience;
+  isFeatured?: boolean;
+  isOfficial?: boolean;
+  priorityLevel?: number;
+  batchLoungeYear?: number | null;
+  officialPageId?: number | null;
+  officialPageName?: string | null;
+  officialPageSlug?: string | null;
+  repostOfId?: number | null;
+  repostCount?: number;
+  repostedPost?: {
+    id: number;
+    userId: number;
+    fullName: string;
+    avatarUrl: string;
+    batchYear?: number;
+    content: string;
+    createdAt: string;
+    images?: string[];
+    category?: string;
+  } | null;
+  mentionedUserIds?: number[];
+  poll?: PostPoll | null;
+  priorityTier?: number;
+  rankScore?: number;
   images: string[];
   videos?: string[];
   layout_template?: 'carousel' | 'grid' | 'column' | 'hero';
@@ -69,6 +117,7 @@ export interface PostItem {
   comments?: PostComment[];
   isBatchmate?: boolean;
   isFriend?: boolean;
+  isFollowing?: boolean;
   albumId?: number | string;
   albumTitle?: string;
   albumCoverUrl?: string;

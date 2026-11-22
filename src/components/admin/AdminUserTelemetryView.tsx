@@ -36,10 +36,19 @@ import {
   Database,
   ShieldCheck,
   Sparkles,
+  Flame,
+  GitBranch,
+  AlertTriangle,
+  Globe,
+  Gauge,
+  ArrowRight,
+  Zap,
+  Route,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useAdminVisualMode } from './adminVisualModes';
 import { isSupabaseConfigured, supabase } from '../../lib/supabase';
+import { UserSessionJourney } from './UserSessionJourney';
 
 interface RouteMetric {
   route: string;
@@ -60,6 +69,30 @@ interface ClickHotspot {
   clicks: number;
   sharePct: number;
   lastClickedAt: string;
+}
+
+interface HeatmapPoint {
+  route: string;
+  routeLabel: string;
+  xPct: number;
+  yPct: number;
+  isRage: boolean;
+  label: string;
+}
+
+interface NavigationFlow {
+  from: string;
+  fromLabel: string;
+  to: string;
+  toLabel: string;
+  count: number;
+}
+
+interface RageClickAlert {
+  label: string;
+  routeLabel: string;
+  count: number;
+  lastSeen: string;
 }
 
 interface TimelineBucket {
@@ -90,6 +123,7 @@ interface MonitoredUser {
   currentRouteLabel: string;
   totalSessions: number;
   totalClicks: number;
+  rageClicks: number;
   totalPageViews: number;
   totalDwellSec: number;
   maxScrollPct: number;
@@ -98,7 +132,18 @@ interface MonitoredUser {
   primaryDevice: string;
   browser: string;
   os: string;
+  screenResolution: string | null;
+  timezone: string | null;
+  language: string | null;
+  connectionType: string | null;
+  utmSource: string | null;
+  colorScheme: string | null;
   routesVisited: string[];
+  engagementScore: number;
+  lifecycleStage: 'Power User' | 'Active Regular' | 'Explorer' | 'At-Risk' | 'New Visitor';
+  churnRisk: 'Low' | 'Medium' | 'High';
+  peakHourLabel: string;
+  recommendedActions: string[];
   inferredInterests: Array<{ label: string; score: number }>;
   routeDwellBreakdown: Array<{
     route: string;
@@ -160,12 +205,22 @@ interface TelemetryOverviewPayload {
     totalSessions: number;
     totalEvents: number;
     totalClicks: number;
+    totalRageClicks: number;
     totalPageViews: number;
     totalDwellSec: number;
     avgSessionSec: number;
+    avgEngagementScore: number;
   };
   routeMetrics: RouteMetric[];
   topClickHotspots: ClickHotspot[];
+  heatmapPoints: HeatmapPoint[];
+  navigationFlows: NavigationFlow[];
+  rageClickAlerts: RageClickAlert[];
+  lifecycleDistribution: Array<{ stage: string; count: number }>;
+  peakBlocks: Array<{ label: string; start: number; events: number }>;
+  acquisitionSources: Array<{ source: string; sessions: number }>;
+  topTimezones: Array<{ timezone: string; count: number }>;
+  topLanguages: Array<{ language: string; count: number }>;
   activityTimeline: TimelineBucket[];
   deviceBreakdown: DeviceStat[];
   audienceInterests: Array<{ interest: string; userCount: number }>;
@@ -242,7 +297,6 @@ function formatRelativeTime(iso: string): string {
 
 function escapeCsvCell(val: unknown): string {
   const raw = String(val ?? '');
-  // Prevent CSV formula injection in spreadsheet apps
   const neutralized = /^[=+\-@\t\r]/.test(raw) ? `'${raw}` : raw;
   return `"${neutralized.replace(/"/g, '""')}"`;
 }
@@ -267,7 +321,8 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
   const [visualMode] = useAdminVisualMode();
   const isNeon = visualMode === 'neon_aura';
 
-  const [activeSubTab, setActiveSubTab] = useState<'overview' | 'users' | 'audiences'>('overview');
+  const [activeSubTab, setActiveSubTab] = useState<'overview' | 'intelligence' | 'users' | 'journey' | 'audiences'>('overview');
+  const [journeyUserKey, setJourneyUserKey] = useState<string>('live_local');
   const [rangeHours, setRangeHours] = useState<number>(168);
   const [autoRefresh, setAutoRefresh] = useState<boolean>(true);
   const [loading, setLoading] = useState<boolean>(true);
@@ -276,8 +331,10 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
 
   // Filters & sorting
   const [eventFilter, setEventFilter] = useState<string>('all');
+  const [heatmapRoute, setHeatmapRoute] = useState<string>('all');
   const [userSearch, setUserSearch] = useState<string>('');
-  const [userSort, setUserSort] = useState<'recent' | 'clicks' | 'dwell' | 'views'>('recent');
+  const [lifecycleFilter, setLifecycleFilter] = useState<string>('all');
+  const [userSort, setUserSort] = useState<'recent' | 'score' | 'clicks' | 'dwell' | 'views'>('recent');
 
   // Selected user deep-dive dossier
   const [selectedUserKey, setSelectedUserKey] = useState<string | null>(null);
@@ -351,7 +408,6 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
     void fetchOverview(false);
   }, [fetchOverview]);
 
-  // Live auto-refresh polling + Supabase Realtime listener on user_activity_events
   useEffect(() => {
     if (!autoRefresh) return;
     const interval = setInterval(() => {
@@ -386,13 +442,16 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
 
   const filteredUsers = useMemo(() => {
     const list = data?.users || [];
+    const byLifecycle =
+      lifecycleFilter === 'all' ? list : list.filter((u) => u.lifecycleStage === lifecycleFilter);
     const matched = effectiveUserSearch
-      ? list.filter((u) => {
+      ? byLifecycle.filter((u) => {
           const hay = [
             u.userName,
             u.userEmail || '',
             u.specialty || '',
             u.city || '',
+            u.lifecycleStage,
             u.currentRouteLabel,
             u.topRouteLabel,
             u.batchYear ? `batch ${u.batchYear}` : '',
@@ -402,22 +461,44 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
             .toLowerCase();
           return hay.includes(effectiveUserSearch);
         })
-      : list;
+      : byLifecycle;
 
     return [...matched].sort((a, b) => {
+      if (userSort === 'score') return b.engagementScore - a.engagementScore;
       if (userSort === 'clicks') return b.totalClicks - a.totalClicks;
       if (userSort === 'dwell') return b.totalDwellSec - a.totalDwellSec;
       if (userSort === 'views') return b.totalPageViews - a.totalPageViews;
       if (a.isOnlineNow !== b.isOnlineNow) return a.isOnlineNow ? -1 : 1;
       return (b.lastActiveAt || '').localeCompare(a.lastActiveAt || '');
     });
-  }, [data?.users, effectiveUserSearch, userSort]);
+  }, [data?.users, effectiveUserSearch, lifecycleFilter, userSort]);
 
   const filteredEvents = useMemo(() => {
     const events = data?.recentEvents || [];
     if (eventFilter === 'all') return events;
     return events.filter((e) => e.event_type === eventFilter);
   }, [data?.recentEvents, eventFilter]);
+
+  const filteredHeatmapPoints = useMemo(() => {
+    const pts = data?.heatmapPoints || [];
+    if (heatmapRoute === 'all') return pts;
+    return pts.filter((p) => p.route === heatmapRoute);
+  }, [data?.heatmapPoints, heatmapRoute]);
+
+  // Build 10x6 visual density matrix from click coordinates
+  const heatmapGrid = useMemo(() => {
+    const cols = 10;
+    const rows = 6;
+    const counts = Array.from({ length: rows }, () => Array(cols).fill(0));
+    let maxCount = 0;
+    for (const pt of filteredHeatmapPoints) {
+      const c = Math.min(cols - 1, Math.max(0, Math.floor((pt.xPct / 100) * cols)));
+      const r = Math.min(rows - 1, Math.max(0, Math.floor((pt.yPct / 100) * rows)));
+      counts[r][c] += 1;
+      if (counts[r][c] > maxCount) maxCount = counts[r][c];
+    }
+    return { counts, maxCount };
+  }, [filteredHeatmapPoints]);
 
   const previewSegmentMatches = useMemo(() => {
     const list = data?.users || [];
@@ -465,7 +546,9 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
       if (!res.ok) throw new Error(json?.error || 'Failed to save audience segment.');
       setSegName('');
       setSegDescription('');
-      setSegmentFeedback(`Saved audience segment "${json.segment?.name}" (${previewSegmentMatches.length} matching users).`);
+      setSegmentFeedback(
+        `Saved audience segment "${json.segment?.name}" (${previewSegmentMatches.length} matching users).`
+      );
       await fetchOverview(true);
     } catch (err: any) {
       setSegmentFeedback(err?.message || 'Unable to save segment.');
@@ -496,10 +579,19 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
       'Specialty',
       'City',
       'Country',
+      'Lifecycle Stage',
+      'Engagement Score',
+      'Churn Risk',
+      'Peak Active Window',
       'Device',
       'Browser',
+      'OS',
+      'Timezone',
+      'Language',
+      'UTM Source',
       'Sessions',
       'Total Clicks',
+      'Rage Clicks',
       'Page Views',
       'Total Dwell Seconds',
       'Top Visited Section',
@@ -514,10 +606,19 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
       u.specialty || '',
       u.city || '',
       u.country || '',
+      u.lifecycleStage,
+      u.engagementScore,
+      u.churnRisk,
+      u.peakHourLabel,
       u.primaryDevice,
       u.browser,
+      u.os,
+      u.timezone || '',
+      u.language || '',
+      u.utmSource || '',
       u.totalSessions,
       u.totalClicks,
+      u.rageClicks || 0,
       u.totalPageViews,
       u.totalDwellSec,
       u.topRouteLabel,
@@ -526,7 +627,7 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
     ]);
     const csv = [header, ...rows].map((r) => r.map(escapeCsvCell).join(',')).join('\n');
     const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40) || 'audience';
-    downloadFile(`szmc-ad-audience-${slug}.csv`, csv, 'text/csv;charset=utf-8');
+    downloadFile(`szmc-cdp-audience-${slug}.csv`, csv, 'text/csv;charset=utf-8');
   };
 
   const handleExportSegmentCsv = (seg: AudienceSegment) => {
@@ -546,7 +647,6 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
     handleExportUsersCsv(matched, seg.name);
   };
 
-  // Visual theme tokens (Classic crisp white vs Neon Mode 1 cosmic glass)
   const cardCls = isNeon
     ? 'bg-[#081229]/85 border border-cyan-400/20 rounded-2xl text-slate-100 shadow-[0_0_24px_-12px_rgba(34,211,238,0.22)]'
     : 'bg-white border border-slate-200/80 rounded-xl text-slate-900 shadow-xs';
@@ -561,9 +661,11 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
     totalSessions: 0,
     totalEvents: 0,
     totalClicks: 0,
+    totalRageClicks: 0,
     totalPageViews: 0,
     totalDwellSec: 0,
     avgSessionSec: 0,
+    avgEngagementScore: 0,
   };
 
   const renderDeviceIcon = (device: string) => {
@@ -580,7 +682,7 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className={`text-base sm:text-lg font-bold tracking-tight ${headingTextCls}`}>
-                User Activity Intelligence &amp; Ad Audience Data Center
+                First-Party Customer Data Platform &amp; Decision Intelligence
               </h2>
               <span className={`text-xs ${mutedTextCls}`}>·</span>
               <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600 dark:text-emerald-400">
@@ -589,13 +691,11 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
               </span>
             </div>
             <p className={`text-xs mt-1 ${mutedTextCls}`}>
-              Monitor every user&apos;s page journey, click hotspots, exact time spent per section, scroll depth, and export behavioral cohorts for targeted advertising.
+              Analyze click heatmaps, page-to-page navigation funnels, idle-aware dwell time, rage-click friction, engagement &amp; churn scores, peak activity windows, and build exportable ad audiences.
             </p>
           </div>
 
-          {/* Right Toolbar */}
           <div className="flex flex-wrap items-center gap-2 shrink-0">
-            {/* Time Range Filter */}
             <div className={`inline-flex items-center p-1 rounded-lg border ${subtleSurfaceCls}`}>
               {[
                 { label: '24h', hours: 24 },
@@ -651,17 +751,19 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#038fde] hover:bg-[#027bc0] disabled:opacity-50 text-white transition-colors cursor-pointer whitespace-nowrap"
             >
               <Download className="w-3.5 h-3.5" />
-              <span>Export CSV</span>
+              <span>Export CDP CSV</span>
             </button>
           </div>
         </div>
 
         {/* Sub-navigation Tabs */}
         <div className={`mt-4 pt-3 border-t ${dividerCls} flex flex-wrap items-center justify-between gap-3`}>
-          <div className={`inline-flex items-center gap-1 p-1 rounded-lg border ${subtleSurfaceCls}`}>
+          <div className={`inline-flex items-center gap-1 p-1 rounded-lg border ${subtleSurfaceCls} overflow-x-auto max-w-full`}>
             {[
-              { id: 'overview', label: 'Traffic & Click Hotspots', icon: Activity },
-              { id: 'users', label: `User Monitor (${kpis.trackedUsers})`, icon: Users },
+              { id: 'overview', label: 'Traffic & Click Stream', icon: Activity },
+              { id: 'intelligence', label: 'Heatmaps, Funnels & Decisions', icon: Flame },
+              { id: 'users', label: `360° User Dossiers (${kpis.trackedUsers})`, icon: Users },
+              { id: 'journey', label: 'Session Journey Log', icon: Route },
               { id: 'audiences', label: `Ad Audience Builder (${data?.segments?.length || 0})`, icon: Target },
             ].map((tab) => {
               const Icon = tab.icon;
@@ -671,7 +773,7 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
                   key={tab.id}
                   type="button"
                   onClick={() => setActiveSubTab(tab.id as any)}
-                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                     active
                       ? isNeon
                         ? 'bg-gradient-to-r from-cyan-500/30 to-violet-500/30 text-white border border-cyan-400/40'
@@ -691,7 +793,7 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
             <span>
               {data?.supabaseConnected
                 ? 'Synced with Supabase Postgres + Realtime'
-                : 'Active on Server Telemetry Store (Run Migration 019 in Supabase SQL Editor for cloud Postgres persistence)'}
+                : 'Active on Server CDP Store (Run Migration 019 in Supabase SQL Editor for cloud Postgres persistence)'}
             </span>
           </div>
         </div>
@@ -709,28 +811,28 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
           {
             label: 'Monitored Users',
             value: kpis.trackedUsers.toLocaleString(),
-            meta: `${kpis.onlineNow} active now · ${kpis.totalSessions} sessions`,
+            meta: `${kpis.onlineNow} online now · ${kpis.totalSessions} sessions`,
             icon: Users,
             accent: isNeon ? 'text-cyan-300 bg-cyan-500/15' : 'text-[#038fde] bg-sky-50',
           },
           {
-            label: 'Total Clicks Tracked',
-            value: kpis.totalClicks.toLocaleString(),
-            meta: `${kpis.totalEvents.toLocaleString()} total behavioral events`,
-            icon: MousePointerClick,
+            label: 'Avg Engagement Score',
+            value: `${kpis.avgEngagementScore}/100`,
+            meta: `${kpis.totalClicks.toLocaleString()} clicks · ${kpis.totalRageClicks} rage-click alerts`,
+            icon: Gauge,
             accent: isNeon ? 'text-violet-300 bg-violet-500/15' : 'text-teal-600 bg-teal-50',
           },
           {
-            label: 'Total Active Dwell Time',
+            label: 'Active Focused Dwell',
             value: formatDuration(kpis.totalDwellSec),
-            meta: `Avg ${formatDuration(kpis.avgSessionSec)} per session`,
+            meta: `Avg ${formatDuration(kpis.avgSessionSec)}/session (idle excluded)`,
             icon: Clock,
             accent: isNeon ? 'text-amber-300 bg-amber-500/15' : 'text-amber-600 bg-amber-50',
           },
           {
-            label: 'Page Views Captured',
+            label: 'Page Views & Events',
             value: kpis.totalPageViews.toLocaleString(),
-            meta: `${data?.routeMetrics?.length || 0} portal sections visited`,
+            meta: `${kpis.totalEvents.toLocaleString()} total signals across ${data?.routeMetrics?.length || 0} pages`,
             icon: Eye,
             accent: isNeon ? 'text-emerald-300 bg-emerald-500/15' : 'text-indigo-600 bg-indigo-50',
           },
@@ -756,17 +858,15 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
       {/* TAB 1: TRAFFIC, DWELL TIME, CLICK HOTSPOTS & LIVE STREAM */}
       {activeSubTab === 'overview' && (
         <div className="space-y-5">
-          {/* Charts Row */}
           <div className="grid grid-cols-1 xl:grid-cols-12 gap-5">
-            {/* Where Users Spend Time & Click (Bar Chart) */}
             <div className={`${cardCls} p-4 sm:p-5 xl:col-span-7`}>
               <div className="flex items-center justify-between gap-2 mb-4">
                 <div>
                   <h3 className={`text-sm font-bold ${headingTextCls}`}>
-                    Where Users Go &amp; Spend Time
+                    Where Users Go &amp; Spend Focused Time
                   </h3>
                   <p className={`text-xs ${mutedTextCls}`}>
-                    Dwell seconds vs click interactions across portal sections
+                    Active dwell seconds vs clicks and page views across portal sections
                   </p>
                 </div>
                 <span className={`text-xs font-mono tabular-nums ${mutedTextCls}`}>
@@ -816,7 +916,6 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
               </div>
             </div>
 
-            {/* Hourly Engagement Pulse + Device Mix */}
             <div className={`${cardCls} p-4 sm:p-5 xl:col-span-5 flex flex-col justify-between gap-4`}>
               <div>
                 <h3 className={`text-sm font-bold ${headingTextCls}`}>24-Hour Activity Pulse</h3>
@@ -866,7 +965,6 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
                 </ResponsiveContainer>
               </div>
 
-              {/* Device Distribution Strip */}
               <div className={`pt-3 border-t ${dividerCls} flex items-center justify-between gap-4`}>
                 <div className="w-20 h-20 shrink-0">
                   <ResponsiveContainer width="100%" height="100%">
@@ -906,9 +1004,7 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
             </div>
           </div>
 
-          {/* Two-Column Breakdown: Route Dwell Table + Top Clicked UI Hotspots */}
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
-            {/* Section Dwell Breakdown */}
             <div className={`${cardCls} overflow-hidden`}>
               <div className={`px-4 py-3.5 border-b ${dividerCls} flex items-center justify-between`}>
                 <h3 className={`text-sm font-bold ${headingTextCls}`}>Section Time-Spent &amp; Visit Breakdown</h3>
@@ -954,7 +1050,6 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
               </div>
             </div>
 
-            {/* Top Clicked UI Hotspots */}
             <div className={`${cardCls} overflow-hidden`}>
               <div className={`px-4 py-3.5 border-b ${dividerCls} flex items-center justify-between`}>
                 <h3 className={`text-sm font-bold ${headingTextCls}`}>Most Clicked Buttons &amp; UI Hotspots</h3>
@@ -991,7 +1086,7 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
                     {(!data?.topClickHotspots || data.topClickHotspots.length === 0) && (
                       <tr>
                         <td colSpan={4} className={`py-8 text-center ${mutedTextCls}`}>
-                          Click any links or buttons across the app to record live click hotspots.
+                          Click links or buttons across the portal to record live click hotspots.
                         </td>
                       </tr>
                     )}
@@ -1001,13 +1096,12 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
             </div>
           </div>
 
-          {/* Live Chronological Behavioral Event Stream */}
           <div className={`${cardCls} overflow-hidden`}>
             <div className={`px-4 py-3.5 border-b ${dividerCls} flex flex-col sm:flex-row sm:items-center justify-between gap-3`}>
               <div>
                 <h3 className={`text-sm font-bold ${headingTextCls}`}>Live Real-Time Behavioral Event Stream</h3>
                 <p className={`text-xs ${mutedTextCls}`}>
-                  Every route view, click coordinate, dwell duration, scroll milestone, and search query as it happens
+                  Route views, click coordinates, rage clicks, focused dwell durations, scroll milestones, and searches
                 </p>
               </div>
               <div className={`inline-flex items-center gap-1 p-1 rounded-lg border ${subtleSurfaceCls} overflow-x-auto`}>
@@ -1015,6 +1109,7 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
                   { id: 'all', label: 'All' },
                   { id: 'page_view', label: 'Page Views' },
                   { id: 'click', label: 'Clicks' },
+                  { id: 'rage_click', label: 'Rage Clicks' },
                   { id: 'page_leave', label: 'Dwell' },
                   { id: 'scroll_milestone', label: 'Scroll' },
                   { id: 'search', label: 'Searches' },
@@ -1048,7 +1143,7 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
                   </tr>
                 </thead>
                 <tbody className={`divide-y ${dividerCls}`}>
-                  {filteredEvents.slice(0, 50).map((ev) => (
+                  {filteredEvents.slice(0, 60).map((ev) => (
                     <tr key={ev.id} className="hover:bg-slate-500/5 transition-colors">
                       <td className={`py-2 px-4 font-mono tabular-nums whitespace-nowrap ${mutedTextCls}`}>
                         {formatRelativeTime(ev.created_at)}
@@ -1056,7 +1151,13 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
                       <td className={`py-2 px-3 font-semibold whitespace-nowrap ${headingTextCls}`}>
                         {ev.user_name}
                       </td>
-                      <td className="py-2 px-3 whitespace-nowrap font-medium text-[#038fde] dark:text-cyan-300">
+                      <td
+                        className={`py-2 px-3 whitespace-nowrap font-medium ${
+                          ev.event_type === 'rage_click'
+                            ? 'text-rose-600 dark:text-rose-400'
+                            : 'text-[#038fde] dark:text-cyan-300'
+                        }`}
+                      >
                         {ev.event_type.replace('_', ' ')}
                       </td>
                       <td className={`py-2 px-3 whitespace-nowrap ${mutedTextCls}`}>{ev.route_label}</td>
@@ -1064,13 +1165,11 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
                         {ev.element_label && <span className={headingTextCls}>{ev.element_label}</span>}
                         {ev.duration_sec > 0 && (
                           <span className="ml-2 font-mono tabular-nums text-amber-600 dark:text-amber-300">
-                            {formatDuration(ev.duration_sec)} spent
+                            {formatDuration(ev.duration_sec)} focused
                           </span>
                         )}
                         {ev.scroll_depth_pct > 0 && (
-                          <span className="ml-2 font-mono tabular-nums">
-                            {ev.scroll_depth_pct}% scroll
-                          </span>
+                          <span className="ml-2 font-mono tabular-nums">{ev.scroll_depth_pct}% scroll</span>
                         )}
                         {ev.click_x_pct !== null && ev.click_y_pct !== null && (
                           <span className="ml-2 font-mono tabular-nums text-[11px]">
@@ -1094,35 +1193,330 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
         </div>
       )}
 
-      {/* TAB 2: INDIVIDUAL USER MONITOR & DEEP-DIVE DOSSIER */}
+      {/* TAB 2: VISUAL CLICK HEATMAPS, NAVIGATION FUNNELS, PEAK HOURS & DECISION INTELLIGENCE */}
+      {activeSubTab === 'intelligence' && (
+        <div className="space-y-5">
+          {/* Lifecycle Distribution Strip */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+            {(data?.lifecycleDistribution || []).map((item) => (
+              <button
+                key={item.stage}
+                type="button"
+                onClick={() => {
+                  setLifecycleFilter(item.stage);
+                  setActiveSubTab('users');
+                }}
+                className={`${cardCls} p-3.5 text-left hover:border-[#038fde] transition-colors cursor-pointer`}
+              >
+                <div className={`text-xs font-medium ${mutedTextCls}`}>{item.stage}</div>
+                <div className={`text-xl font-extrabold font-mono tabular-nums mt-1 ${headingTextCls}`}>
+                  {item.count}
+                </div>
+                <div className="text-[11px] text-[#038fde] mt-1 font-medium">Inspect cohort →</div>
+              </button>
+            ))}
+          </div>
+
+          <div className="grid grid-cols-1 xl:grid-cols-12 gap-5">
+            {/* Visual 2D Viewport Click Heatmap */}
+            <div className={`${cardCls} p-4 sm:p-5 xl:col-span-7 space-y-4`}>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <h3 className={`text-sm font-bold flex items-center gap-1.5 ${headingTextCls}`}>
+                    <Flame className="w-4 h-4 text-amber-500" />
+                    <span>Visual Viewport Click Heatmap</span>
+                  </h3>
+                  <p className={`text-xs ${mutedTextCls}`}>
+                    10×6 spatial click density map across screen zones ({filteredHeatmapPoints.length} plotted clicks)
+                  </p>
+                </div>
+                <select
+                  value={heatmapRoute}
+                  onChange={(e) => setHeatmapRoute(e.target.value)}
+                  className={`px-2.5 py-1.5 rounded-lg border text-xs font-medium cursor-pointer focus:outline-none ${subtleSurfaceCls} ${headingTextCls}`}
+                >
+                  <option value="all">All Portal Pages</option>
+                  {(data?.routeMetrics || []).map((r) => (
+                    <option key={r.route} value={r.route}>
+                      {r.routeLabel}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Simulated Viewport Canvas with Thermal Density Grid + Point Markers */}
+              <div
+                className={`relative rounded-xl border overflow-hidden aspect-[16/9] ${
+                  isNeon ? 'bg-slate-950 border-white/10' : 'bg-slate-900 border-slate-200'
+                }`}
+              >
+                {/* Faint wireframe hints for top bar & sidebar */}
+                <div className="absolute inset-x-0 top-0 h-[10%] border-b border-white/10 pointer-events-none flex items-center px-3 text-[10px] font-mono text-slate-400">
+                  Header / Top Utility Bar Zone
+                </div>
+                <div className="absolute inset-y-0 left-0 w-[18%] border-r border-white/10 pointer-events-none" />
+
+                {/* 10x6 Thermal Grid */}
+                <div className="grid grid-cols-10 grid-rows-6 w-full h-full">
+                  {heatmapGrid.counts.map((row, rIdx) =>
+                    row.map((cnt, cIdx) => {
+                      const intensity = heatmapGrid.maxCount > 0 ? cnt / heatmapGrid.maxCount : 0;
+                      const bgColor =
+                        intensity === 0
+                          ? 'transparent'
+                          : intensity > 0.7
+                          ? `rgba(239, 68, 68, ${0.28 + intensity * 0.48})`
+                          : intensity > 0.35
+                          ? `rgba(245, 158, 11, ${0.22 + intensity * 0.42})`
+                          : `rgba(3, 143, 222, ${0.18 + intensity * 0.35})`;
+                      return (
+                        <div
+                          key={`${rIdx}-${cIdx}`}
+                          title={cnt > 0 ? `${cnt} clicks in zone (${cIdx * 10}%, ${Math.round((rIdx / 6) * 100)}%)` : undefined}
+                          className="border border-white/[0.03] flex items-center justify-center transition-colors"
+                          style={{ backgroundColor: bgColor }}
+                        >
+                          {cnt > 0 && (
+                            <span className="text-[10px] font-mono font-bold text-white drop-shadow-xs">
+                              {cnt}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+
+                {/* Exact Click Dot Scatter */}
+                {filteredHeatmapPoints.slice(0, 140).map((pt, i) => (
+                  <span
+                    key={i}
+                    title={`${pt.label} (${pt.routeLabel})`}
+                    style={{ left: `${pt.xPct}%`, top: `${pt.yPct}%` }}
+                    className={`absolute -translate-x-1/2 -translate-y-1/2 rounded-full pointer-events-none ${
+                      pt.isRage
+                        ? 'w-3 h-3 bg-rose-500 ring-2 ring-rose-300/70'
+                        : 'w-1.5 h-1.5 bg-cyan-300/80'
+                    }`}
+                  />
+                ))}
+              </div>
+
+              <div className={`flex flex-wrap items-center justify-between gap-2 text-[11px] ${mutedTextCls}`}>
+                <div className="flex items-center gap-3">
+                  <span className="inline-flex items-center gap-1">
+                    <span className="w-2.5 h-2.5 rounded-xs bg-[#038fde]/60" /> Low density
+                  </span>
+                  <span className="inline-flex items-center gap-1">
+                    <span className="w-2.5 h-2.5 rounded-xs bg-amber-500/75" /> Medium
+                  </span>
+                  <span className="inline-flex items-center gap-1">
+                    <span className="w-2.5 h-2.5 rounded-xs bg-rose-500/85" /> Hotspot / Rage click
+                  </span>
+                </div>
+                <span>Normalized viewport coordinates (0–100%)</span>
+              </div>
+            </div>
+
+            {/* Navigation Funnel Transitions (Where users move from -> to) */}
+            <div className={`${cardCls} p-4 sm:p-5 xl:col-span-5 space-y-4`}>
+              <div>
+                <h3 className={`text-sm font-bold flex items-center gap-1.5 ${headingTextCls}`}>
+                  <GitBranch className="w-4 h-4 text-[#038fde]" />
+                  <span>User Journey Funnel Flows</span>
+                </h3>
+                <p className={`text-xs ${mutedTextCls}`}>
+                  Most frequent page-to-page paths users take across your platform
+                </p>
+              </div>
+
+              <div className="space-y-2.5 max-h-[310px] overflow-y-auto pr-1">
+                {(data?.navigationFlows || []).map((flow) => {
+                  const maxFlow = Math.max(1, ...(data?.navigationFlows || []).map((f) => f.count));
+                  const pct = Math.max(10, Math.round((flow.count / maxFlow) * 100));
+                  return (
+                    <div key={`${flow.from}-${flow.to}`} className="space-y-1">
+                      <div className="flex items-center justify-between gap-2 text-xs">
+                        <div className={`flex items-center gap-1.5 min-w-0 font-medium ${headingTextCls}`}>
+                          <span className="truncate">{flow.fromLabel}</span>
+                          <ArrowRight className="w-3.5 h-3.5 text-[#038fde] shrink-0" />
+                          <span className="truncate">{flow.toLabel}</span>
+                        </div>
+                        <span className="font-mono tabular-nums font-bold text-[#038fde] shrink-0">
+                          {flow.count}×
+                        </span>
+                      </div>
+                      <div className={`h-1.5 rounded-full overflow-hidden ${isNeon ? 'bg-slate-800' : 'bg-slate-100'}`}>
+                        <div className="h-full rounded-full bg-gradient-to-r from-[#038fde] to-teal-500" style={{ width: `${pct}%` }} />
+                      </div>
+                    </div>
+                  );
+                })}
+                {(!data?.navigationFlows || data.navigationFlows.length === 0) && (
+                  <div className={`py-10 text-center text-xs ${mutedTextCls}`}>
+                    Move between portal sections (e.g., Feed → Directory → Profile) to capture live journey flows.
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Bottom Intelligence Row: Peak Scheduling Hours + Acquisition/Tech Signals + UX Rage-Click Friction */}
+          <div className="grid grid-cols-1 xl:grid-cols-12 gap-5">
+            {/* Best Time to Launch Ads / Notices */}
+            <div className={`${cardCls} p-4 sm:p-5 xl:col-span-5`}>
+              <h3 className={`text-sm font-bold ${headingTextCls}`}>Peak Activity Windows (Best Ad Timing)</h3>
+              <p className={`text-xs mb-3 ${mutedTextCls}`}>
+                Event volume by 3-hour time window so you publish ads &amp; announcements at peak attention
+              </p>
+              <div className="h-[190px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={data?.peakBlocks || []} margin={{ top: 6, right: 8, left: -20, bottom: 0 }}>
+                    <CartesianGrid
+                      strokeDasharray="3 3"
+                      stroke={isNeon ? 'rgba(148,163,184,0.12)' : '#e2e8f0'}
+                      vertical={false}
+                    />
+                    <XAxis dataKey="label" tick={{ fontSize: 10, fill: isNeon ? '#94a3b8' : '#64748b' }} />
+                    <YAxis tick={{ fontSize: 10, fill: isNeon ? '#94a3b8' : '#64748b' }} />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: isNeon ? '#0f172a' : '#ffffff',
+                        borderColor: isNeon ? '#334155' : '#e2e8f0',
+                        borderRadius: '10px',
+                        fontSize: '12px',
+                      }}
+                    />
+                    <Bar dataKey="events" name="Activity Events" fill="#038fde" radius={[5, 5, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            {/* Acquisition Sources, Timezones & Languages */}
+            <div className={`${cardCls} p-4 sm:p-5 xl:col-span-4 space-y-4`}>
+              <div>
+                <h3 className={`text-sm font-bold flex items-center gap-1.5 ${headingTextCls}`}>
+                  <Globe className="w-4 h-4 text-teal-500" />
+                  <span>Acquisition &amp; Environment Signals</span>
+                </h3>
+                <p className={`text-xs ${mutedTextCls}`}>UTM campaigns, referrers, timezones &amp; locales</p>
+              </div>
+
+              <div className="space-y-2">
+                <div className={`text-[11px] font-semibold ${mutedTextCls}`}>Traffic Sources / UTM</div>
+                {(data?.acquisitionSources || []).slice(0, 4).map((src) => (
+                  <div key={src.source} className="flex items-center justify-between text-xs">
+                    <span className={`truncate pr-2 font-medium ${headingTextCls}`}>{src.source}</span>
+                    <span className="font-mono tabular-nums font-semibold">{src.sessions} sessions</span>
+                  </div>
+                ))}
+              </div>
+
+              <div className={`pt-3 border-t ${dividerCls} grid grid-cols-2 gap-3 text-xs`}>
+                <div>
+                  <div className={`text-[11px] font-semibold mb-1.5 ${mutedTextCls}`}>Top Timezones</div>
+                  {(data?.topTimezones || []).slice(0, 3).map((tz) => (
+                    <div key={tz.timezone} className="flex items-center justify-between py-0.5 gap-1">
+                      <span className={`truncate ${headingTextCls}`}>{tz.timezone}</span>
+                      <span className="font-mono tabular-nums">{tz.count}</span>
+                    </div>
+                  ))}
+                  {(!data?.topTimezones || data.topTimezones.length === 0) && (
+                    <div className={mutedTextCls}>—</div>
+                  )}
+                </div>
+                <div>
+                  <div className={`text-[11px] font-semibold mb-1.5 ${mutedTextCls}`}>Languages</div>
+                  {(data?.topLanguages || []).slice(0, 3).map((lg) => (
+                    <div key={lg.language} className="flex items-center justify-between py-0.5 gap-1">
+                      <span className={`truncate ${headingTextCls}`}>{lg.language}</span>
+                      <span className="font-mono tabular-nums">{lg.count}</span>
+                    </div>
+                  ))}
+                  {(!data?.topLanguages || data.topLanguages.length === 0) && (
+                    <div className={mutedTextCls}>—</div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* UX Friction / Rage Click Detector */}
+            <div className={`${cardCls} p-4 sm:p-5 xl:col-span-3 space-y-3`}>
+              <div>
+                <h3 className={`text-sm font-bold flex items-center gap-1.5 ${headingTextCls}`}>
+                  <AlertTriangle className="w-4 h-4 text-rose-500" />
+                  <span>UX Friction Alerts</span>
+                </h3>
+                <p className={`text-xs ${mutedTextCls}`}>Rapid repeated clicks (rage clicks) signaling broken or slow UI</p>
+              </div>
+              <div className="space-y-2">
+                {(data?.rageClickAlerts || []).map((alert, idx) => (
+                  <div key={idx} className={`p-2.5 rounded-lg border ${subtleSurfaceCls} text-xs`}>
+                    <div className={`font-semibold truncate ${headingTextCls}`}>{alert.label}</div>
+                    <div className={`text-[11px] mt-0.5 flex items-center justify-between ${mutedTextCls}`}>
+                      <span>{alert.routeLabel}</span>
+                      <span className="font-mono tabular-nums font-bold text-rose-600 dark:text-rose-400">
+                        {alert.count}× rage
+                      </span>
+                    </div>
+                  </div>
+                ))}
+                {(!data?.rageClickAlerts || data.rageClickAlerts.length === 0) && (
+                  <div className={`p-4 rounded-lg border text-center text-xs ${subtleSurfaceCls} ${mutedTextCls}`}>
+                    Zero rage-click friction detected in this period.
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 3: INDIVIDUAL 360° USER MONITOR & DEEP-DIVE DOSSIER */}
       {activeSubTab === 'users' && (
         <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-start">
-          {/* User List Table */}
           <div className={`${cardCls} overflow-hidden ${selectedUserKey ? 'xl:col-span-7' : 'xl:col-span-12'}`}>
-            <div className={`p-4 border-b ${dividerCls} flex flex-col sm:flex-row sm:items-center justify-between gap-3`}>
+            <div className={`p-4 border-b ${dividerCls} flex flex-col lg:flex-row lg:items-center justify-between gap-3`}>
               <div className="relative flex-1 max-w-sm">
                 <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                 <input
                   type="text"
                   value={userSearch}
                   onChange={(e) => setUserSearch(e.target.value)}
-                  placeholder="Filter by user name, email, batch, interest..."
+                  placeholder="Search user name, email, batch, interest..."
                   className={`w-full pl-9 pr-3 py-1.5 rounded-lg border text-xs focus:outline-none focus:border-[#038fde] ${subtleSurfaceCls} ${headingTextCls}`}
                 />
               </div>
 
-              <div className="flex items-center gap-2 text-xs">
-                <ArrowUpDown className={`w-3.5 h-3.5 ${mutedTextCls}`} />
+              <div className="flex flex-wrap items-center gap-2 text-xs">
                 <select
-                  value={userSort}
-                  onChange={(e) => setUserSort(e.target.value as any)}
+                  value={lifecycleFilter}
+                  onChange={(e) => setLifecycleFilter(e.target.value)}
                   className={`px-2.5 py-1.5 rounded-lg border text-xs font-medium cursor-pointer focus:outline-none ${subtleSurfaceCls} ${headingTextCls}`}
                 >
-                  <option value="recent">Sort: Most Recent</option>
-                  <option value="clicks">Sort: Most Clicks</option>
-                  <option value="dwell">Sort: Most Time Spent</option>
-                  <option value="views">Sort: Most Page Views</option>
+                  <option value="all">All Lifecycles</option>
+                  <option value="Power User">Power User</option>
+                  <option value="Active Regular">Active Regular</option>
+                  <option value="Explorer">Explorer</option>
+                  <option value="At-Risk">At-Risk</option>
+                  <option value="New Visitor">New Visitor</option>
                 </select>
+
+                <div className="inline-flex items-center gap-1.5">
+                  <ArrowUpDown className={`w-3.5 h-3.5 ${mutedTextCls}`} />
+                  <select
+                    value={userSort}
+                    onChange={(e) => setUserSort(e.target.value as any)}
+                    className={`px-2.5 py-1.5 rounded-lg border text-xs font-medium cursor-pointer focus:outline-none ${subtleSurfaceCls} ${headingTextCls}`}
+                  >
+                    <option value="recent">Sort: Most Recent</option>
+                    <option value="score">Sort: Engagement Score</option>
+                    <option value="clicks">Sort: Most Clicks</option>
+                    <option value="dwell">Sort: Most Time Spent</option>
+                    <option value="views">Sort: Most Page Views</option>
+                  </select>
+                </div>
               </div>
             </div>
 
@@ -1130,12 +1524,12 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
               <table className="w-full text-left border-collapse text-xs">
                 <thead>
                   <tr className={`border-b ${dividerCls} ${mutedTextCls}`}>
-                    <th className="py-2.5 px-4 font-semibold">User &amp; Status</th>
-                    <th className="py-2.5 px-3 font-semibold">Current / Top Page</th>
+                    <th className="py-2.5 px-4 font-semibold">User &amp; Lifecycle</th>
+                    <th className="py-2.5 px-3 font-semibold text-right">Score</th>
                     <th className="py-2.5 px-3 font-semibold text-right">Clicks</th>
-                    <th className="py-2.5 px-3 font-semibold text-right">Time Spent</th>
-                    <th className="py-2.5 px-3 font-semibold">Device</th>
-                    <th className="py-2.5 px-4 font-semibold">Primary Ad Interest</th>
+                    <th className="py-2.5 px-3 font-semibold text-right">Dwell</th>
+                    <th className="py-2.5 px-3 font-semibold">Peak Window</th>
+                    <th className="py-2.5 px-4 font-semibold">Top Ad Interest</th>
                   </tr>
                 </thead>
                 <tbody className={`divide-y ${dividerCls}`}>
@@ -1157,28 +1551,34 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
                           <div className={`font-semibold ${headingTextCls}`}>{u.userName}</div>
                           <div className={`text-[11px] mt-0.5 ${mutedTextCls}`}>
                             <span className={u.isOnlineNow ? 'text-emerald-600 dark:text-emerald-400 font-semibold' : ''}>
-                              {u.isOnlineNow ? 'Online now' : `Seen ${formatRelativeTime(u.lastActiveAt)}`}
+                              {u.isOnlineNow ? 'Online now' : formatRelativeTime(u.lastActiveAt)}
                             </span>
+                            {' · '}
+                            <span className="font-medium">{u.lifecycleStage}</span>
                             {u.batchYear ? ` · Batch ${u.batchYear}` : ''}
-                            {u.city ? ` · ${u.city}` : ''}
                           </div>
-                        </td>
-                        <td className="py-3 px-3">
-                          <div className={`font-medium ${headingTextCls}`}>{u.currentRouteLabel}</div>
-                          <div className={`text-[11px] ${mutedTextCls}`}>Top: {u.topRouteLabel}</div>
                         </td>
                         <td className="py-3 px-3 text-right font-mono tabular-nums font-bold">
+                          <span
+                            className={
+                              u.engagementScore >= 70
+                                ? 'text-emerald-600 dark:text-emerald-400'
+                                : u.engagementScore >= 40
+                                ? 'text-[#038fde]'
+                                : 'text-amber-600 dark:text-amber-400'
+                            }
+                          >
+                            {u.engagementScore}
+                          </span>
+                        </td>
+                        <td className="py-3 px-3 text-right font-mono tabular-nums font-semibold">
                           {u.totalClicks}
                         </td>
-                        <td className="py-3 px-3 text-right font-mono tabular-nums font-bold text-[#038fde]">
+                        <td className="py-3 px-3 text-right font-mono tabular-nums font-semibold text-[#038fde]">
                           {formatDuration(u.totalDwellSec)}
                         </td>
-                        <td className={`py-3 px-3 ${mutedTextCls}`}>
-                          <div className="inline-flex items-center gap-1.5">
-                            {renderDeviceIcon(u.primaryDevice)}
-                            <span className="capitalize">{u.primaryDevice}</span>
-                          </div>
-                          <div className="text-[11px]">{u.browser}</div>
+                        <td className={`py-3 px-3 font-mono tabular-nums whitespace-nowrap ${mutedTextCls}`}>
+                          {u.peakHourLabel}
                         </td>
                         <td className="py-3 px-4">
                           {u.inferredInterests[0] ? (
@@ -1198,7 +1598,7 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
                   {filteredUsers.length === 0 && (
                     <tr>
                       <td colSpan={6} className={`py-10 text-center ${mutedTextCls}`}>
-                        No monitored user activity matches your search yet.
+                        No monitored users match the current filter.
                       </td>
                     </tr>
                   )}
@@ -1207,24 +1607,47 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
             </div>
           </div>
 
-          {/* Right Panel: Selected User Deep-Dive Dossier */}
+          {/* Right Panel: Selected User 360° Behavioral & Decision Dossier */}
           {selectedUserKey && (
             <div className={`${cardCls} xl:col-span-5 p-4 sm:p-5 space-y-4`}>
               <div className={`flex items-start justify-between gap-3 pb-3 border-b ${dividerCls}`}>
                 <div className="min-w-0">
-                  <div className={`text-xs font-medium ${mutedTextCls}`}>Individual User Intelligence Dossier</div>
+                  <div className={`text-xs font-medium ${mutedTextCls}`}>360° User Decision Dossier</div>
                   <h3 className={`text-base font-bold truncate mt-0.5 ${headingTextCls}`}>
                     {dossier?.summary?.userName || 'Loading dossier...'}
                   </h3>
                   {dossier?.summary && (
                     <div className={`text-xs mt-1 ${mutedTextCls}`}>
-                      {dossier.summary.userEmail || 'Guest session'}
+                      {dossier.summary.lifecycleStage} · Churn Risk:{' '}
+                      <strong
+                        className={
+                          dossier.summary.churnRisk === 'High'
+                            ? 'text-rose-600 dark:text-rose-400'
+                            : dossier.summary.churnRisk === 'Medium'
+                            ? 'text-amber-600 dark:text-amber-400'
+                            : 'text-emerald-600 dark:text-emerald-400'
+                        }
+                      >
+                        {dossier.summary.churnRisk}
+                      </strong>
                       {dossier.summary.batchYear ? ` · Batch ${dossier.summary.batchYear}` : ''}
-                      {dossier.summary.specialty ? ` · ${dossier.summary.specialty}` : ''}
                     </div>
                   )}
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
+                  {dossier?.summary?.userKey && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setJourneyUserKey(dossier.summary.userKey);
+                        setActiveSubTab('journey');
+                      }}
+                      className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-xs font-semibold cursor-pointer whitespace-nowrap ${subtleSurfaceCls} ${headingTextCls} hover:border-[#038fde]`}
+                    >
+                      <Route className="w-3.5 h-3.5 text-[#038fde]" />
+                      <span>Full Journey</span>
+                    </button>
+                  )}
                   {dossier?.summary?.profileId && onViewProfile && (
                     <button
                       type="button"
@@ -1251,17 +1674,17 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
 
               {dossierLoading ? (
                 <div className={`py-12 text-center text-xs ${mutedTextCls}`}>
-                  Loading complete behavioral timeline...
+                  Loading complete 360° behavioral dossier...
                 </div>
               ) : dossier ? (
                 <>
-                  {/* Quick User Metrics */}
+                  {/* Quick Intelligence Scores */}
                   <div className="grid grid-cols-4 gap-2 text-center">
                     {[
-                      { label: 'Sessions', val: dossier.summary.totalSessions },
+                      { label: 'Score', val: `${dossier.summary.engagementScore}/100` },
                       { label: 'Clicks', val: dossier.summary.totalClicks },
-                      { label: 'Views', val: dossier.summary.totalPageViews },
                       { label: 'Dwell', val: formatDuration(dossier.summary.totalDwellSec) },
+                      { label: 'Scroll', val: `${dossier.summary.maxScrollPct}%` },
                     ].map((m) => (
                       <div key={m.label} className={`p-2.5 rounded-lg border ${subtleSurfaceCls}`}>
                         <div className={`text-[11px] ${mutedTextCls}`}>{m.label}</div>
@@ -1272,11 +1695,61 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
                     ))}
                   </div>
 
+                  {/* Automated Decision Engine Recommendations */}
+                  {dossier.summary.recommendedActions.length > 0 && (
+                    <div className={`p-3 rounded-lg border ${subtleSurfaceCls} space-y-1.5`}>
+                      <div className={`text-xs font-bold flex items-center gap-1.5 ${headingTextCls}`}>
+                        <Zap className="w-3.5 h-3.5 text-amber-500" />
+                        <span>Recommended Super Admin Actions</span>
+                      </div>
+                      <ul className={`text-xs space-y-1 ${mutedTextCls}`}>
+                        {dossier.summary.recommendedActions.map((act, idx) => (
+                          <li key={idx}>• {act}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* Technical & Environmental Context */}
+                  <div className={`p-3 rounded-lg border ${subtleSurfaceCls} grid grid-cols-2 gap-x-3 gap-y-1.5 text-[11px]`}>
+                    <div>
+                      <span className={mutedTextCls}>Device: </span>
+                      <strong className={headingTextCls}>
+                        {dossier.summary.primaryDevice} · {dossier.summary.browser}/{dossier.summary.os}
+                      </strong>
+                    </div>
+                    <div>
+                      <span className={mutedTextCls}>Peak Hour: </span>
+                      <strong className={`font-mono tabular-nums ${headingTextCls}`}>
+                        {dossier.summary.peakHourLabel}
+                      </strong>
+                    </div>
+                    <div>
+                      <span className={mutedTextCls}>Timezone: </span>
+                      <strong className={headingTextCls}>{dossier.summary.timezone || '—'}</strong>
+                    </div>
+                    <div>
+                      <span className={mutedTextCls}>Locale / Net: </span>
+                      <strong className={headingTextCls}>
+                        {dossier.summary.language || '—'}
+                        {dossier.summary.connectionType ? ` · ${dossier.summary.connectionType}` : ''}
+                      </strong>
+                    </div>
+                    <div>
+                      <span className={mutedTextCls}>Screen: </span>
+                      <strong className={`font-mono ${headingTextCls}`}>
+                        {dossier.summary.screenResolution || '—'}
+                      </strong>
+                    </div>
+                    <div>
+                      <span className={mutedTextCls}>Source: </span>
+                      <strong className={headingTextCls}>{dossier.summary.utmSource || 'Direct'}</strong>
+                    </div>
+                  </div>
+
                   {/* Per-Page Time Spent Breakdown */}
                   <div>
-                    <h4 className={`text-xs font-bold mb-2 ${headingTextCls}`}>
-                      Exact Time Spent Per Page
-                    </h4>
+                    <h4 className={`text-xs font-bold mb-2 ${headingTextCls}`}>Exact Focused Time Per Page</h4>
                     <div className="space-y-2">
                       {dossier.summary.routeDwellBreakdown.slice(0, 6).map((r) => {
                         const maxDwell = Math.max(
@@ -1293,25 +1766,17 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
                               </span>
                             </div>
                             <div className={`h-1.5 w-full rounded-full overflow-hidden ${isNeon ? 'bg-slate-800' : 'bg-slate-100'}`}>
-                              <div
-                                className="h-full rounded-full bg-[#038fde]"
-                                style={{ width: `${pct}%` }}
-                              />
+                              <div className="h-full rounded-full bg-[#038fde]" style={{ width: `${pct}%` }} />
                             </div>
                           </div>
                         );
                       })}
-                      {dossier.summary.routeDwellBreakdown.length === 0 && (
-                        <div className={`text-xs ${mutedTextCls}`}>No route dwell recorded yet.</div>
-                      )}
                     </div>
                   </div>
 
                   {/* Inferred Advertising Interests */}
                   <div>
-                    <h4 className={`text-xs font-bold mb-2 ${headingTextCls}`}>
-                      Inferred Ad Targeting Affinities
-                    </h4>
+                    <h4 className={`text-xs font-bold mb-2 ${headingTextCls}`}>Inferred Ad Targeting Affinities</h4>
                     <div className="space-y-1.5">
                       {dossier.summary.inferredInterests.map((intr) => (
                         <div
@@ -1327,29 +1792,10 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
                     </div>
                   </div>
 
-                  {/* Top Clicks by This User */}
-                  {dossier.topClicks.length > 0 && (
-                    <div>
-                      <h4 className={`text-xs font-bold mb-2 ${headingTextCls}`}>Most Clicked by User</h4>
-                      <div className="space-y-1">
-                        {dossier.topClicks.slice(0, 6).map((c, idx) => (
-                          <div key={idx} className="flex items-center justify-between text-xs py-1">
-                            <span className={`truncate pr-2 ${headingTextCls}`}>
-                              {c.label} <span className={mutedTextCls}>({c.routeLabel})</span>
-                            </span>
-                            <span className="font-mono tabular-nums font-semibold shrink-0">{c.count}×</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
                   {/* Chronological User Journey */}
                   <div>
                     <div className="flex items-center justify-between mb-2">
-                      <h4 className={`text-xs font-bold ${headingTextCls}`}>
-                        Chronological Click &amp; Page Journey
-                      </h4>
+                      <h4 className={`text-xs font-bold ${headingTextCls}`}>Chronological Click &amp; Page Journey</h4>
                       <button
                         type="button"
                         onClick={() =>
@@ -1364,7 +1810,7 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
                         Download JSON
                       </button>
                     </div>
-                    <div className={`max-h-[260px] overflow-y-auto divide-y ${dividerCls} border rounded-lg ${dividerCls}`}>
+                    <div className={`max-h-[240px] overflow-y-auto divide-y ${dividerCls} border rounded-lg ${dividerCls}`}>
                       {dossier.timeline.slice(0, 40).map((ev) => (
                         <div key={ev.id} className="p-2.5 text-xs">
                           <div className="flex items-center justify-between gap-2">
@@ -1397,15 +1843,31 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
         </div>
       )}
 
-      {/* TAB 3: AD AUDIENCE BUILDER & TARGETED COHORTS */}
+      {/* TAB 4: CHRONOLOGICAL USER SESSION JOURNEY VIEWER */}
+      {activeSubTab === 'journey' && (
+        <UserSessionJourney
+          users={(data?.users || []).map((u) => ({
+            userKey: u.userKey,
+            profileId: u.profileId,
+            userName: u.userName,
+            userEmail: u.userEmail,
+            batchYear: u.batchYear,
+            isOnlineNow: u.isOnlineNow,
+            totalClicks: u.totalClicks,
+            totalDwellSec: u.totalDwellSec,
+          }))}
+          selectedUserKey={journeyUserKey}
+          onSelectUserKey={setJourneyUserKey}
+          onViewProfile={onViewProfile}
+        />
+      )}
+
+      {/* TAB 5: AD AUDIENCE BUILDER & TARGETED COHORTS */}
       {activeSubTab === 'audiences' && (
         <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-start">
-          {/* Create Segment Form */}
           <form onSubmit={handleCreateSegment} className={`${cardCls} p-4 sm:p-5 xl:col-span-5 space-y-4`}>
             <div>
-              <h3 className={`text-sm font-bold ${headingTextCls}`}>
-                Create Behavioral Ad Audience Segment
-              </h3>
+              <h3 className={`text-sm font-bold ${headingTextCls}`}>Create Behavioral Ad Audience Segment</h3>
               <p className={`text-xs mt-0.5 ${mutedTextCls}`}>
                 Target users based on the pages they visit, click activity, time spent, device, and MBBS batch.
               </p>
@@ -1413,9 +1875,7 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
 
             <div className="space-y-3">
               <div>
-                <label className={`block text-xs font-semibold mb-1 ${headingTextCls}`}>
-                  Segment Name
-                </label>
+                <label className={`block text-xs font-semibold mb-1 ${headingTextCls}`}>Segment Name</label>
                 <input
                   type="text"
                   value={segName}
@@ -1426,9 +1886,7 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
               </div>
 
               <div>
-                <label className={`block text-xs font-semibold mb-1 ${headingTextCls}`}>
-                  Campaign Purpose / Notes
-                </label>
+                <label className={`block text-xs font-semibold mb-1 ${headingTextCls}`}>Campaign Purpose / Notes</label>
                 <input
                   type="text"
                   value={segDescription}
@@ -1471,9 +1929,7 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className={`block text-xs font-semibold mb-1 ${headingTextCls}`}>
-                    Min Clicks
-                  </label>
+                  <label className={`block text-xs font-semibold mb-1 ${headingTextCls}`}>Min Clicks</label>
                   <input
                     type="number"
                     min={0}
@@ -1483,9 +1939,7 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
                   />
                 </div>
                 <div>
-                  <label className={`block text-xs font-semibold mb-1 ${headingTextCls}`}>
-                    Min Dwell (Seconds)
-                  </label>
+                  <label className={`block text-xs font-semibold mb-1 ${headingTextCls}`}>Min Dwell (Seconds)</label>
                   <input
                     type="number"
                     min={0}
@@ -1498,9 +1952,7 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className={`block text-xs font-semibold mb-1 ${headingTextCls}`}>
-                    Batch From (Optional)
-                  </label>
+                  <label className={`block text-xs font-semibold mb-1 ${headingTextCls}`}>Batch From (Optional)</label>
                   <input
                     type="number"
                     min={1}
@@ -1512,9 +1964,7 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
                   />
                 </div>
                 <div>
-                  <label className={`block text-xs font-semibold mb-1 ${headingTextCls}`}>
-                    Batch To (Optional)
-                  </label>
+                  <label className={`block text-xs font-semibold mb-1 ${headingTextCls}`}>Batch To (Optional)</label>
                   <input
                     type="number"
                     min={1}
@@ -1560,7 +2010,6 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
               </div>
             </div>
 
-            {/* Live Match Counter */}
             <div className={`p-3 rounded-lg border flex items-center justify-between ${subtleSurfaceCls}`}>
               <div>
                 <div className={`text-xs font-semibold ${headingTextCls}`}>Live Matching Audience</div>
@@ -1572,9 +2021,7 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
             </div>
 
             {segmentFeedback && (
-              <div className="text-xs font-medium text-emerald-600 dark:text-emerald-400">
-                {segmentFeedback}
-              </div>
+              <div className="text-xs font-medium text-emerald-600 dark:text-emerald-400">{segmentFeedback}</div>
             )}
 
             <button
@@ -1587,16 +2034,13 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
             </button>
           </form>
 
-          {/* Saved Audience Segments List */}
           <div className="xl:col-span-7 space-y-4">
             <div className={`${cardCls} p-4 sm:p-5`}>
               <div className="flex items-center justify-between mb-3">
                 <div>
-                  <h3 className={`text-sm font-bold ${headingTextCls}`}>
-                    Saved Targeted Ad Audiences
-                  </h3>
+                  <h3 className={`text-sm font-bold ${headingTextCls}`}>Saved Targeted Ad Audiences</h3>
                   <p className={`text-xs ${mutedTextCls}`}>
-                    Export any behavioral cohort as CSV for sponsored feed placements or Meta Custom Audiences
+                    Export any behavioral cohort as CSV for sponsored placements or Meta Custom Audiences
                   </p>
                 </div>
                 <Sparkles className="w-4 h-4 text-[#038fde] shrink-0" />
@@ -1616,9 +2060,7 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
                           {seg.matchedUsersCount} matching users
                         </span>
                       </div>
-                      {seg.description && (
-                        <p className={`text-xs mt-1 ${mutedTextCls}`}>{seg.description}</p>
-                      )}
+                      {seg.description && <p className={`text-xs mt-1 ${mutedTextCls}`}>{seg.description}</p>}
                       <div className={`text-[11px] mt-1.5 ${mutedTextCls}`}>
                         Min {seg.min_clicks} clicks · Min {formatDuration(seg.min_dwell_sec)} dwell
                         {seg.target_routes.length > 0 ? ` · Routes: ${seg.target_routes.join(', ')}` : ''}
@@ -1651,7 +2093,6 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
               </div>
             </div>
 
-            {/* Audience Interest Breakdown Card */}
             <div className={`${cardCls} p-4 sm:p-5`}>
               <h3 className={`text-sm font-bold mb-1 ${headingTextCls}`}>
                 Portal-Wide Interest Clusters (Ad Demand Signal)
@@ -1667,9 +2108,7 @@ export const AdminUserTelemetryView: React.FC<AdminUserTelemetryViewProps> = ({
                     <div key={item.interest} className="space-y-1">
                       <div className="flex items-center justify-between text-xs">
                         <span className={`font-medium ${headingTextCls}`}>{item.interest}</span>
-                        <span className={`font-mono tabular-nums ${mutedTextCls}`}>
-                          {item.userCount} users
-                        </span>
+                        <span className={`font-mono tabular-nums ${mutedTextCls}`}>{item.userCount} users</span>
                       </div>
                       <div className={`h-2 w-full rounded-full overflow-hidden ${isNeon ? 'bg-slate-800' : 'bg-slate-100'}`}>
                         <div

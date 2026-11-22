@@ -1,5 +1,18 @@
 import { supabase, getClientAuthHeaders } from '../lib/supabase';
-import { PostItem, PostComment, LinkMetadata } from '../types/post';
+import { PostItem, PostComment, LinkMetadata, PostAudience } from '../types/post';
+import type { QuadFeedFilter, QuadPostCategory } from '../components/community/quadConstants';
+import {
+  buildCursorFromPost,
+  dedupeAndRankFeedPosts,
+  fetchFeedRankingWeights,
+  type FeedCursor,
+} from './feedRankingService';
+import { buildCommentTree } from './richInteractionsUtils';
+import {
+  createPostPoll,
+  fetchPostPollsMap,
+  notifyMentionedUsers,
+} from './richInteractionsService';
 
 /**
  * Fetch feed posts via Supabase get_feed RPC.
@@ -312,6 +325,190 @@ export async function fetchFeedPosts(limit = 25, offset = 0, currentUserId?: num
   }
 }
 
+export interface QuadFeedPageResult {
+  posts: PostItem[];
+  nextCursor: FeedCursor | null;
+  hasMore: boolean;
+  usedRpc: boolean;
+}
+
+function mapCanonicalToLegacyCategory(cat?: string): string {
+  switch (cat) {
+    case 'Career & Jobs':
+      return 'Professional Insights';
+    case 'Events & Reunion':
+      return 'Reunion';
+    case 'Achievement':
+      return 'Achievement';
+    default:
+      return 'General Update';
+  }
+}
+
+function formatQuadRpcRow(row: any): PostItem {
+  const rawComments = Array.isArray(row.comments) ? row.comments : [];
+  const flatComments: PostComment[] = rawComments.map((c: any) => ({
+    id: Number(c.id),
+    postId: Number(c.postId || c.post_id || row.id),
+    userId: Number(c.userId || c.user_id),
+    parentCommentId: c.parentCommentId || c.parent_comment_id ? Number(c.parentCommentId || c.parent_comment_id) : null,
+    fullName: c.fullName || c.full_name || 'SZMC Alumnus',
+    avatarUrl: c.avatarUrl || c.avatar_url || '/assets/aistudio/images__1__2778177d.png',
+    content: c.content || '',
+    likesCount: Number(c.likesCount || c.likes_count || 0),
+    likedByMe: Boolean(c.likedByMe),
+    createdAt: c.createdAt || c.created_at || new Date().toISOString(),
+  }));
+  const formattedComments = buildCommentTree(flatComments);
+
+  const cleanImages = Array.isArray(row.images) ? row.images : [];
+  const cleanVideos = Array.isArray(row.videos) ? row.videos : [];
+  const meta = typeof row.link_metadata === 'object' && row.link_metadata ? row.link_metadata : {};
+
+  return {
+    id: Number(row.id),
+    userId: Number(row.user_id || row.author_id),
+    fullName: row.full_name || 'SZMC Alumnus',
+    avatarUrl: row.avatar_url || '/assets/aistudio/images__1__2778177d.png',
+    batchYear: row.batch_year ? Number(row.batch_year) : undefined,
+    verified: Boolean(row.verified),
+    profession: row.profession || 'Doctor / Medical Professional',
+    institution: row.institution || undefined,
+    content: row.content || '',
+    category: row.community_category || row.category || 'General Discussion',
+    communityCategory: row.community_category || undefined,
+    audience: (row.audience as PostAudience) || 'public',
+    isFeatured: Boolean(row.is_featured),
+    isOfficial: Boolean(row.is_official),
+    priorityLevel: Number(row.priority_level || 0),
+    batchLoungeYear: row.batch_lounge_year ? Number(row.batch_lounge_year) : null,
+    officialPageId: row.official_page_id ? Number(row.official_page_id) : null,
+    officialPageName: row.official_page_name || null,
+    officialPageSlug: row.official_page_slug || null,
+    repostOfId: row.repost_of_id ? Number(row.repost_of_id) : (meta.repostOfId ? Number(meta.repostOfId) : null),
+    repostCount: Number(row.repost_count || 0),
+    repostedPost: meta.repostedPost || null,
+    mentionedUserIds: Array.isArray(row.mentioned_user_ids) ? row.mentioned_user_ids.map(Number) : [],
+    priorityTier: typeof row.priority_tier === 'number' ? Number(row.priority_tier) : undefined,
+    rankScore: typeof row.rank_score === 'number' ? Number(row.rank_score) : undefined,
+    images: cleanImages,
+    videos: cleanVideos,
+    layout_template: row.layout_template || (cleanImages.length > 1 ? 'carousel' : 'grid'),
+    linked_url: row.linked_url || undefined,
+    link_metadata: row.link_metadata || undefined,
+    likesCount: Number(row.likes_count || 0),
+    commentsCount: Number(row.comments_count || 0),
+    createdAt: row.created_at || new Date().toISOString(),
+    likedByMe: Boolean(row.liked_by_me),
+    userReaction: row.user_reaction || (row.liked_by_me ? 'like' : null),
+    reactionsSummary:
+      row.reactions_summary && typeof row.reactions_summary === 'object'
+        ? row.reactions_summary
+        : undefined,
+    isSaved: Boolean(row.saved_by_me),
+    pinned: Boolean(row.is_pinned),
+    isEdited: Boolean(row.is_edited),
+    isBatchmate: Boolean(row.is_batchmate),
+    isFriend: Boolean(row.is_friend),
+    isFollowing: Boolean(row.is_following),
+    comments: formattedComments,
+    author: row.full_name || 'SZMC Alumnus',
+    authorAvatar: row.avatar_url || '/assets/aistudio/images__1__2778177d.png',
+    authorBatch: row.batch_year ? Number(row.batch_year) : undefined,
+    authorRole: 'Alumnus',
+    timestamp: row.created_at || 'Just now',
+    likes: Number(row.likes_count || 0),
+    liked: Boolean(row.liked_by_me),
+    commentsList: formattedComments,
+    shares: Number(row.repost_count || 0),
+  };
+}
+
+/**
+ * Keyset cursor-paginated feed fetcher powered by public.get_quad_feed(...) RPC.
+ * Falls back cleanly to fetchFeedPosts + configurable client ranking if migration 023
+ * has not yet been applied in the remote Supabase database.
+ */
+export async function fetchQuadFeedPage(params: {
+  currentUserId?: number;
+  myBatchYear?: number | null;
+  isStaff?: boolean;
+  feedTab?: QuadFeedFilter;
+  category?: QuadPostCategory;
+  limit?: number;
+  cursor?: FeedCursor | null;
+  fallbackOffset?: number;
+}): Promise<QuadFeedPageResult> {
+  const limit = Math.min(Math.max(params.limit ?? 15, 5), 50);
+  const feedTab = params.feedTab || 'for_you';
+  const category = params.category || 'All';
+
+  try {
+    const { data, error } = await supabase.rpc('get_quad_feed', {
+      p_user_id: params.currentUserId || null,
+      p_feed_tab: feedTab,
+      p_category: category,
+      p_limit: limit + 1,
+      p_cursor_priority: params.cursor ? params.cursor.priorityTier : null,
+      p_cursor_score: params.cursor ? params.cursor.rankScore : null,
+      p_cursor_created_at: params.cursor ? params.cursor.createdAt : null,
+      p_cursor_id: params.cursor ? params.cursor.id : null,
+    });
+
+    if (!error && Array.isArray(data)) {
+      const hasMore = data.length > limit;
+      const slice = hasMore ? data.slice(0, limit) : data;
+      const mapped = slice.map(formatQuadRpcRow);
+      const pollsMap = await fetchPostPollsMap(mapped.map((p) => p.id), params.currentUserId);
+      const hydrated = mapped.map((p) => ({
+        ...p,
+        poll: pollsMap.get(p.id) || p.poll || null,
+      }));
+      const last = hydrated[hydrated.length - 1];
+      return {
+        posts: hydrated,
+        nextCursor: last ? buildCursorFromPost(last) : null,
+        hasMore,
+        usedRpc: true,
+      };
+    }
+  } catch {
+    // Fall back cleanly when get_quad_feed RPC is not deployed remotely yet
+  }
+
+  const offset = params.fallbackOffset ?? 0;
+  const [weights, batch] = await Promise.all([
+    fetchFeedRankingWeights(),
+    fetchFeedPosts(limit + 1, offset, params.currentUserId),
+  ]);
+
+  const ranked = dedupeAndRankFeedPosts(batch, {
+    feedTab,
+    category,
+    myUserId: params.currentUserId,
+    myBatchYear: params.myBatchYear,
+    isStaff: params.isStaff,
+    weights,
+  });
+
+  const hasMore = batch.length > limit;
+  const pagePosts = hasMore ? ranked.slice(0, limit) : ranked;
+  const pollsMap = await fetchPostPollsMap(pagePosts.map((p) => p.id), params.currentUserId);
+  const hydrated = pagePosts.map((p) => ({
+    ...p,
+    comments: buildCommentTree(p.comments || []),
+    poll: pollsMap.get(p.id) || p.poll || null,
+  }));
+  const last = hydrated[hydrated.length - 1];
+
+  return {
+    posts: hydrated,
+    nextCursor: last ? buildCursorFromPost(last, weights) : null,
+    hasMore,
+    usedRpc: false,
+  };
+}
+
 /**
  * Create a new post directly in Supabase.
  * Constraint: Do NOT send a bell notification to everyone for new posts.
@@ -320,6 +517,17 @@ export async function createPost(params: {
   authorId: number;
   content: string;
   category?: string;
+  communityCategory?: string;
+  audience?: PostAudience;
+  isFeatured?: boolean;
+  isOfficial?: boolean;
+  priorityLevel?: number;
+  batchLoungeYear?: number | null;
+  officialPageId?: number | null;
+  repostOfId?: number | null;
+  repostedPost?: PostItem['repostedPost'];
+  mentionedUserIds?: number[];
+  poll?: { question: string; options: string[] } | null;
   images?: string[];
   videos?: string[];
   layout_template?: 'carousel' | 'grid' | 'column' | 'hero';
@@ -437,15 +645,53 @@ export async function createPost(params: {
       realAuthorId = params.authorId || 10021;
     }
 
-    const payload = {
+    const canonicalCat = params.communityCategory || params.category || 'General Discussion';
+    const legacyDbCategory = mapCanonicalToLegacyCategory(canonicalCat);
+    const audience: PostAudience = params.audience || 'public';
+
+    const payload: Record<string, any> = {
       author_id: realAuthorId,
       content: safeContent,
-      category: params.category || 'General Update',
+      category: legacyDbCategory,
+      community_category: canonicalCat,
+      audience,
+      is_featured: Boolean(params.isFeatured),
+      is_official: Boolean(params.isOfficial),
+      priority_level:
+        typeof params.priorityLevel === 'number'
+          ? params.priorityLevel
+          : canonicalCat === 'Blood Request'
+          ? 3
+          : params.isOfficial
+          ? 2
+          : params.isFeatured
+          ? 1
+          : 0,
       images: cleanImages,
       videos: cleanVideos,
       linked_url: params.linked_url || null,
-      link_metadata: metadataWithLayout,
+      link_metadata: {
+        ...metadataWithLayout,
+        communityCategory: canonicalCat,
+        audience,
+        isFeatured: Boolean(params.isFeatured),
+        isOfficial: Boolean(params.isOfficial),
+        ...(params.repostOfId ? { repostOfId: params.repostOfId } : {}),
+        ...(params.repostedPost ? { repostedPost: params.repostedPost } : {}),
+      },
     };
+    if (params.batchLoungeYear) {
+      payload.batch_lounge_year = params.batchLoungeYear;
+    }
+    if (params.officialPageId) {
+      payload.official_page_id = params.officialPageId;
+    }
+    if (params.repostOfId) {
+      payload.repost_of_id = params.repostOfId;
+    }
+    if (Array.isArray(params.mentionedUserIds) && params.mentionedUserIds.length > 0) {
+      payload.mentioned_user_ids = params.mentionedUserIds;
+    }
 
     let { data: insertedRow, error: insertErr } = await supabase
       .from('posts')
@@ -455,11 +701,11 @@ export async function createPost(params: {
 
     if (insertErr || !insertedRow) {
       console.warn('Supabase post insert attempt 1 error:', insertErr);
-      // Retry without extended metadata if schema hasn't added optional columns, keeping the caller's own author_id
+      // Retry without Phase 4 extended columns if migration 023 has not been applied remotely yet
       const basicPayload = {
         author_id: realAuthorId,
         content: safeContent,
-        category: params.category || 'General Update',
+        category: legacyDbCategory,
         images: cleanImages,
         videos: cleanVideos,
       };
@@ -562,15 +808,49 @@ export async function createPost(params: {
         };
       }
 
+    const createdPostId = Number(insertedRow.id);
+    let attachedPoll = null;
+    if (params.poll && params.poll.question.trim() && params.poll.options.length >= 2) {
+      attachedPoll = await createPostPoll({
+        postId: createdPostId,
+        authorId: realAuthorId,
+        question: params.poll.question,
+        options: params.poll.options,
+      });
+    }
+
+    if (Array.isArray(params.mentionedUserIds) && params.mentionedUserIds.length > 0) {
+      void notifyMentionedUsers({
+        mentionedUserIds: params.mentionedUserIds,
+        actorId: realAuthorId,
+        actorName: authorProfile?.full_name || 'An SZMC alumnus',
+        postId: createdPostId,
+        context: 'post',
+      });
+    }
+
     return {
       success: true,
       post: {
-        id: Number(insertedRow.id),
+        id: createdPostId,
         userId: Number(insertedRow.author_id),
-        fullName: 'You',
-        avatarUrl: '/assets/aistudio/images__1__2778177d.png',
+        fullName: authorProfile?.full_name || 'You',
+        avatarUrl: authorProfile?.avatar_url || '/assets/aistudio/images__1__2778177d.png',
+        batchYear: authorProfile?.batch_year ? Number(authorProfile.batch_year) : undefined,
         content: insertedRow.content,
-        category: insertedRow.category,
+        category: insertedRow.community_category || canonicalCat,
+        communityCategory: insertedRow.community_category || canonicalCat,
+        audience: (insertedRow.audience as PostAudience) || audience,
+        isFeatured: Boolean(insertedRow.is_featured ?? params.isFeatured),
+        isOfficial: Boolean(insertedRow.is_official ?? params.isOfficial),
+        priorityLevel: Number(insertedRow.priority_level ?? payload.priority_level ?? 0),
+        batchLoungeYear: insertedRow.batch_lounge_year ?? params.batchLoungeYear ?? null,
+        officialPageId: insertedRow.official_page_id ?? params.officialPageId ?? null,
+        repostOfId: insertedRow.repost_of_id ?? params.repostOfId ?? null,
+        repostCount: 0,
+        repostedPost: params.repostedPost || null,
+        mentionedUserIds: params.mentionedUserIds || [],
+        poll: attachedPoll,
         images: insertedRow.images || [],
         videos: insertedRow.videos || [],
         layout_template: params.layout_template || (cleanImages.length > 1 ? 'carousel' : 'grid'),
@@ -581,9 +861,9 @@ export async function createPost(params: {
         createdAt: insertedRow.created_at || new Date().toISOString(),
         likedByMe: false,
         comments: [],
-        author: 'You',
-        authorAvatar: '/assets/aistudio/images__1__2778177d.png',
-        authorBatch: 20,
+        author: authorProfile?.full_name || 'You',
+        authorAvatar: authorProfile?.avatar_url || '/assets/aistudio/images__1__2778177d.png',
+        authorBatch: authorProfile?.batch_year ? Number(authorProfile.batch_year) : 20,
         authorRole: 'Alumnus',
         timestamp: 'Just now',
         likes: 0,
@@ -668,7 +948,14 @@ export async function togglePostLike(postId: number, userId: number): Promise<bo
  * Add post comment directly in Supabase with realtime broadcast.
  * Sends a notification of type `post_comment` to the post author.
  */
-export async function addComment(postId: number, userId: number, content: string, fullName?: string, avatarUrl?: string): Promise<boolean> {
+export async function addComment(
+  postId: number,
+  userId: number,
+  content: string,
+  fullName?: string,
+  avatarUrl?: string,
+  parentCommentId?: number | null
+): Promise<boolean> {
   const cleanContent = content.trim();
   if (!cleanContent) return false;
 
@@ -676,15 +963,33 @@ export async function addComment(postId: number, userId: number, content: string
     let insertedId: number | undefined;
     let insertedCreatedAt: string | undefined;
 
+    const basePayload: Record<string, any> = {
+      post_id: postId,
+      user_id: userId,
+      content: cleanContent,
+    };
+    if (parentCommentId) {
+      basePayload.parent_comment_id = parentCommentId;
+    }
+
     let { data: commentData, error: insErr } = await supabase
       .from('post_comments')
-      .insert({
-        post_id: postId,
-        user_id: userId,
-        content: cleanContent,
-      })
+      .insert(basePayload)
       .select('id, created_at')
       .single();
+
+    // Retry without parent_comment_id if migration 024 isn't applied yet
+    if (insErr && parentCommentId && String(insErr.message || '').includes('parent_comment_id')) {
+      const retryNoParent = await supabase
+        .from('post_comments')
+        .insert({ post_id: postId, user_id: userId, content: cleanContent })
+        .select('id, created_at')
+        .single();
+      if (!retryNoParent.error && retryNoParent.data) {
+        commentData = retryNoParent.data;
+        insErr = null;
+      }
+    }
 
     if (insErr && (insErr.code === '23503' || String(insErr.message || '').includes('foreign key'))) {
       const retryRes = await supabase
@@ -710,7 +1015,8 @@ export async function addComment(postId: number, userId: number, content: string
     // Broadcast comment instantly to all online alumni (skip duplicate DB insert if already persisted)
     void (async () => {
       const authHeaders = await getClientAuthHeaders();
-      fetch(`/api/posts/${postId}/comment`, {
+      const endpoint = parentCommentId ? `/api/posts/${postId}/reply` : `/api/posts/${postId}/comment`;
+      fetch(endpoint, {
         method: 'POST',
         headers: authHeaders,
         body: JSON.stringify({
@@ -718,6 +1024,7 @@ export async function addComment(postId: number, userId: number, content: string
           content: cleanContent,
           fullName,
           avatarUrl,
+          parentCommentId: parentCommentId || undefined,
           skipDbInsert: Boolean(insertedId),
           commentId: insertedId,
           createdAt: insertedCreatedAt,

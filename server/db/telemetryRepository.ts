@@ -14,6 +14,7 @@ export const ALLOWED_TELEMETRY_EVENT_TYPES = new Set([
   'page_view',
   'page_leave',
   'click',
+  'rage_click',
   'scroll_milestone',
   'search',
   'profile_view',
@@ -28,6 +29,7 @@ export type TelemetryEventType =
   | 'page_view'
   | 'page_leave'
   | 'click'
+  | 'rage_click'
   | 'scroll_milestone'
   | 'search'
   | 'profile_view'
@@ -50,11 +52,19 @@ export interface TelemetrySessionRecord {
   os: string;
   screen_resolution: string | null;
   referrer: string | null;
+  timezone: string | null;
+  language: string | null;
+  connection_type: string | null;
+  utm_source: string | null;
+  utm_medium: string | null;
+  utm_campaign: string | null;
+  color_scheme: string | null;
   current_route: string;
   started_at: string;
   last_active_at: string;
   total_duration_sec: number;
   total_clicks: number;
+  rage_clicks: number;
   total_page_views: number;
   max_scroll_pct: number;
   is_active: boolean;
@@ -102,9 +112,9 @@ interface LocalTelemetryStore {
   segments: AdAudienceSegment[];
 }
 
-const MAX_LOCAL_EVENTS = 6000;
-const MAX_LOCAL_SESSIONS = 1500;
-const ONLINE_WINDOW_MS = 2 * 60 * 1000; // Active in last 2 minutes
+const MAX_LOCAL_EVENTS = 8000;
+const MAX_LOCAL_SESSIONS = 2000;
+const ONLINE_WINDOW_MS = 2 * 60 * 1000;
 
 const ROUTE_INTEREST_MAP: Record<string, string> = {
   feed: 'Community & Newsfeed',
@@ -155,6 +165,8 @@ const ROUTE_LABELS: Record<string, string> = {
   contact: 'Contact Secretariat',
   admin: 'Admin Console',
   landing: 'Landing Page',
+  entry: 'Direct Entry',
+  exit: 'Session Exit',
 };
 
 let store: LocalTelemetryStore = {
@@ -238,7 +250,6 @@ function scheduleDiskFlush() {
   flushDiskTimer = setTimeout(() => {
     flushDiskTimer = null;
     try {
-      // Prune sessions if above cap
       const sessionKeys = Object.keys(store.sessions);
       if (sessionKeys.length > MAX_LOCAL_SESSIONS) {
         const sorted = sessionKeys.sort((a, b) =>
@@ -304,6 +315,13 @@ export interface IngestBatchInput {
     os?: string;
     screenResolution?: string | null;
     referrer?: string | null;
+    timezone?: string | null;
+    language?: string | null;
+    connectionType?: string | null;
+    utmSource?: string | null;
+    utmMedium?: string | null;
+    utmCampaign?: string | null;
+    colorScheme?: string | null;
     currentRoute?: string;
   };
   events: Array<{
@@ -374,11 +392,19 @@ export async function ingestTelemetryBatch(
     os: clampString(input.session.os, 40) || existing?.os || 'Unknown',
     screen_resolution: clampString(input.session.screenResolution, 30) ?? existing?.screen_resolution ?? null,
     referrer: clampString(input.session.referrer, 160) ?? existing?.referrer ?? null,
+    timezone: clampString(input.session.timezone, 60) ?? existing?.timezone ?? null,
+    language: clampString(input.session.language, 30) ?? existing?.language ?? null,
+    connection_type: clampString(input.session.connectionType, 30) ?? existing?.connection_type ?? null,
+    utm_source: clampString(input.session.utmSource, 60) ?? existing?.utm_source ?? null,
+    utm_medium: clampString(input.session.utmMedium, 60) ?? existing?.utm_medium ?? null,
+    utm_campaign: clampString(input.session.utmCampaign, 80) ?? existing?.utm_campaign ?? null,
+    color_scheme: clampString(input.session.colorScheme, 20) ?? existing?.color_scheme ?? null,
     current_route: clampString(input.session.currentRoute, 80) || existing?.current_route || 'landing',
     started_at: existing?.started_at || nowIso,
     last_active_at: nowIso,
     total_duration_sec: existing?.total_duration_sec || 0,
     total_clicks: existing?.total_clicks || 0,
+    rage_clicks: existing?.rage_clicks || 0,
     total_page_views: existing?.total_page_views || 0,
     max_scroll_pct: existing?.max_scroll_pct || 0,
     is_active: true,
@@ -396,7 +422,6 @@ export async function ingestTelemetryBatch(
     const durationSec = clampInt(ev.durationSec, 0, 7200, 0);
     const scrollDepthPct = clampInt(ev.scrollDepthPct, 0, 100, 0);
 
-    // Strip any potentially unsafe/oversized keys from metadata
     const safeMetadata: Record<string, any> = {};
     if (ev.metadata && typeof ev.metadata === 'object' && !Array.isArray(ev.metadata)) {
       let count = 0;
@@ -436,9 +461,12 @@ export async function ingestTelemetryBatch(
 
     sanitizedEvents.push(record);
 
-    // Update session rollups
     if (eventType === 'click' || eventType === 'ad_click' || eventType === 'post_interaction') {
       sessionRecord.total_clicks += 1;
+    }
+    if (eventType === 'rage_click') {
+      sessionRecord.total_clicks += 1;
+      sessionRecord.rage_clicks += 1;
     }
     if (eventType === 'page_view') {
       sessionRecord.total_page_views += 1;
@@ -458,7 +486,6 @@ export async function ingestTelemetryBatch(
   }
   scheduleDiskFlush();
 
-  // Best-effort sync to Supabase tables if Migration 019 is applied
   let supabaseSynced = false;
   if (isSupabaseServerConfigured && supabaseTablesAvailable !== false) {
     try {
@@ -480,11 +507,19 @@ export async function ingestTelemetryBatch(
             os: sessionRecord.os,
             screen_resolution: sessionRecord.screen_resolution,
             referrer: sessionRecord.referrer,
+            timezone: sessionRecord.timezone,
+            language: sessionRecord.language,
+            connection_type: sessionRecord.connection_type,
+            utm_source: sessionRecord.utm_source,
+            utm_medium: sessionRecord.utm_medium,
+            utm_campaign: sessionRecord.utm_campaign,
+            color_scheme: sessionRecord.color_scheme,
             current_route: sessionRecord.current_route,
             started_at: sessionRecord.started_at,
             last_active_at: sessionRecord.last_active_at,
             total_duration_sec: sessionRecord.total_duration_sec,
             total_clicks: sessionRecord.total_clicks,
+            rage_clicks: sessionRecord.rage_clicks,
             total_page_views: sessionRecord.total_page_views,
             max_scroll_pct: sessionRecord.max_scroll_pct,
             is_active: true,
@@ -526,7 +561,7 @@ export async function ingestTelemetryBatch(
         }
       }
     } catch {
-      // Fall back quietly to local store
+      // Quiet local fallback
     }
   }
 
@@ -548,7 +583,7 @@ async function fetchMergedTelemetryDataset(): Promise<{
   events: TelemetryEventRecord[];
   supabaseConnected: boolean;
 }> {
-  let sessionsMap = new Map<string, TelemetrySessionRecord>();
+  const sessionsMap = new Map<string, TelemetrySessionRecord>();
   for (const s of Object.values(store.sessions)) {
     sessionsMap.set(s.session_id, s);
   }
@@ -567,7 +602,7 @@ async function fetchMergedTelemetryDataset(): Promise<{
           .from('user_activity_events')
           .select('*')
           .order('created_at', { ascending: false })
-          .limit(2000),
+          .limit(2500),
       ]);
 
       if (!sessRes.error && !evRes.error) {
@@ -590,11 +625,19 @@ async function fetchMergedTelemetryDataset(): Promise<{
             os: row.os || 'Unknown',
             screen_resolution: row.screen_resolution || null,
             referrer: row.referrer || null,
+            timezone: row.timezone || null,
+            language: row.language || null,
+            connection_type: row.connection_type || null,
+            utm_source: row.utm_source || null,
+            utm_medium: row.utm_medium || null,
+            utm_campaign: row.utm_campaign || null,
+            color_scheme: row.color_scheme || null,
             current_route: row.current_route || 'landing',
             started_at: row.started_at,
             last_active_at: row.last_active_at,
             total_duration_sec: Number(row.total_duration_sec || 0),
             total_clicks: Number(row.total_clicks || 0),
+            rage_clicks: Number(row.rage_clicks || 0),
             total_page_views: Number(row.total_page_views || 0),
             max_scroll_pct: Number(row.max_scroll_pct || 0),
             is_active: Boolean(row.is_active),
@@ -640,6 +683,9 @@ async function fetchMergedTelemetryDataset(): Promise<{
   return { sessions, events: eventsList, supabaseConnected };
 }
 
+export type UserLifecycleStage = 'Power User' | 'Active Regular' | 'Explorer' | 'At-Risk' | 'New Visitor';
+export type ChurnRiskLevel = 'Low' | 'Medium' | 'High';
+
 export interface MonitoredUserSummary {
   userKey: string;
   profileId: number | null;
@@ -655,6 +701,7 @@ export interface MonitoredUserSummary {
   currentRouteLabel: string;
   totalSessions: number;
   totalClicks: number;
+  rageClicks: number;
   totalPageViews: number;
   totalDwellSec: number;
   maxScrollPct: number;
@@ -663,7 +710,18 @@ export interface MonitoredUserSummary {
   primaryDevice: string;
   browser: string;
   os: string;
+  screenResolution: string | null;
+  timezone: string | null;
+  language: string | null;
+  connectionType: string | null;
+  utmSource: string | null;
+  colorScheme: string | null;
   routesVisited: string[];
+  engagementScore: number;
+  lifecycleStage: UserLifecycleStage;
+  churnRisk: ChurnRiskLevel;
+  peakHourLabel: string;
+  recommendedActions: string[];
   inferredInterests: Array<{ label: string; score: number }>;
   routeDwellBreakdown: Array<{ route: string; routeLabel: string; dwellSec: number; views: number; clicks: number }>;
 }
@@ -688,12 +746,20 @@ function buildUserSummaries(
       currentRoute: string;
       sessionIds: Set<string>;
       totalClicks: number;
+      rageClicks: number;
       totalPageViews: number;
       totalDwellSec: number;
       maxScrollPct: number;
       deviceCounts: Map<string, number>;
       browser: string;
       os: string;
+      screenResolution: string | null;
+      timezone: string | null;
+      language: string | null;
+      connectionType: string | null;
+      utmSource: string | null;
+      colorScheme: string | null;
+      hourHistogram: number[];
       routeStats: Map<string, { dwellSec: number; views: number; clicks: number }>;
     }
   >();
@@ -721,12 +787,20 @@ function buildUserSummaries(
         currentRoute: s.current_route,
         sessionIds: new Set(),
         totalClicks: 0,
+        rageClicks: 0,
         totalPageViews: 0,
         totalDwellSec: 0,
         maxScrollPct: 0,
         deviceCounts: new Map(),
         browser: s.browser,
         os: s.os,
+        screenResolution: s.screen_resolution,
+        timezone: s.timezone || null,
+        language: s.language || null,
+        connectionType: s.connection_type || null,
+        utmSource: s.utm_source || null,
+        colorScheme: s.color_scheme || null,
+        hourHistogram: new Array(24).fill(0),
         routeStats: new Map(),
       };
       userMap.set(key, entry);
@@ -738,6 +812,12 @@ function buildUserSummaries(
       entry.currentRoute = s.current_route;
       entry.browser = s.browser;
       entry.os = s.os;
+      if (s.screen_resolution) entry.screenResolution = s.screen_resolution;
+      if (s.timezone) entry.timezone = s.timezone;
+      if (s.language) entry.language = s.language;
+      if (s.connection_type) entry.connectionType = s.connection_type;
+      if (s.utm_source) entry.utmSource = s.utm_source;
+      if (s.color_scheme) entry.colorScheme = s.color_scheme;
     }
     if (s.user_name && s.user_name !== 'Guest Visitor') entry.userName = s.user_name;
     if (s.user_email && !entry.userEmail) entry.userEmail = s.user_email;
@@ -746,13 +826,13 @@ function buildUserSummaries(
     if (s.city && !entry.city) entry.city = s.city;
     if (s.country && !entry.country) entry.country = s.country;
     entry.totalClicks += s.total_clicks;
+    entry.rageClicks += s.rage_clicks || 0;
     entry.totalPageViews += s.total_page_views;
     entry.totalDwellSec += s.total_duration_sec;
     entry.maxScrollPct = Math.max(entry.maxScrollPct, s.max_scroll_pct);
     entry.deviceCounts.set(s.device_type, (entry.deviceCounts.get(s.device_type) || 0) + 1);
   }
 
-  // Enrich per-route stats from granular events
   const sessionToKey = new Map<string, string>();
   for (const s of sessions) {
     sessionToKey.set(s.session_id, keyFor(s.profile_id, s.user_email, s.session_id));
@@ -763,10 +843,20 @@ function buildUserSummaries(
     const entry = userMap.get(key);
     if (!entry) continue;
 
+    const evDate = new Date(ev.created_at);
+    if (!Number.isNaN(evDate.getTime())) {
+      entry.hourHistogram[evDate.getHours()] += 1;
+    }
+
     const rKey = (ev.route || 'landing').split(':')[0].toLowerCase();
     const rStat = entry.routeStats.get(rKey) || { dwellSec: 0, views: 0, clicks: 0 };
     if (ev.event_type === 'page_view') rStat.views += 1;
-    if (ev.event_type === 'click' || ev.event_type === 'post_interaction' || ev.event_type === 'ad_click') {
+    if (
+      ev.event_type === 'click' ||
+      ev.event_type === 'rage_click' ||
+      ev.event_type === 'post_interaction' ||
+      ev.event_type === 'ad_click'
+    ) {
       rStat.clicks += 1;
     }
     if (ev.event_type === 'page_leave' || ev.event_type === 'session_heartbeat') {
@@ -793,7 +883,6 @@ function buildUserSummaries(
       routeLabel: getRouteLabel(entry.currentRoute || 'feed'),
     };
 
-    // Infer advertising/interest affinities from weighted dwell + clicks + views
     const interestScores = new Map<string, number>();
     for (const r of routeBreakdown) {
       if (r.route === 'admin') continue;
@@ -820,7 +909,65 @@ function buildUserSummaries(
     }
 
     const lastMs = Date.parse(entry.lastActiveAt || '');
+    const hoursSinceActive = Number.isFinite(lastMs) ? Math.max(0, (nowMs - lastMs) / 3600000) : 999;
     const isOnlineNow = Number.isFinite(lastMs) && nowMs - lastMs <= ONLINE_WINDOW_MS;
+
+    // Decision-Intelligence Scoring (0-100)
+    const recencyPts = hoursSinceActive <= 24 ? 25 : hoursSinceActive <= 72 ? 18 : hoursSinceActive <= 168 ? 10 : 3;
+    const sessionPts = Math.min(20, entry.sessionIds.size * 6);
+    const clickPts = Math.min(25, entry.totalClicks * 1.4);
+    const dwellPts = Math.min(20, (entry.totalDwellSec / 60) * 3.5);
+    const scrollPts = Math.min(10, (entry.maxScrollPct / 100) * 10);
+    const engagementScore = Math.min(100, Math.round(recencyPts + sessionPts + clickPts + dwellPts + scrollPts));
+
+    let lifecycleStage: UserLifecycleStage = 'New Visitor';
+    if (hoursSinceActive > 168 && entry.totalClicks >= 3) {
+      lifecycleStage = 'At-Risk';
+    } else if (engagementScore >= 72) {
+      lifecycleStage = 'Power User';
+    } else if (engagementScore >= 45) {
+      lifecycleStage = 'Active Regular';
+    } else if (entry.totalPageViews >= 3 || entry.totalClicks >= 3) {
+      lifecycleStage = 'Explorer';
+    }
+
+    const churnRisk: ChurnRiskLevel =
+      hoursSinceActive > 168 ? 'High' : hoursSinceActive > 48 || engagementScore < 35 ? 'Medium' : 'Low';
+
+    // Peak Activity Hour
+    let bestHour = 0;
+    let bestHourCount = -1;
+    entry.hourHistogram.forEach((cnt, hr) => {
+      if (cnt > bestHourCount) {
+        bestHourCount = cnt;
+        bestHour = hr;
+      }
+    });
+    const peakHourLabel =
+      bestHourCount > 0
+        ? `${String(bestHour).padStart(2, '0')}:00–${String((bestHour + 2) % 24).padStart(2, '0')}:00`
+        : 'Not enough data';
+
+    // Concrete Decision Recommendations
+    const recommendedActions: string[] = [];
+    if (inferredInterests[0]) {
+      recommendedActions.push(
+        `Target with "${inferredInterests[0].label}" campaigns (${inferredInterests[0].score}% behavioral fit).`
+      );
+    }
+    if (bestHourCount > 0) {
+      recommendedActions.push(`Best delivery window for ads & notices: ${peakHourLabel}.`);
+    }
+    if (churnRisk === 'High') {
+      recommendedActions.push('Dormant >7 days — include in re-engagement digest or reunion email.');
+    } else if (lifecycleStage === 'Power User') {
+      recommendedActions.push('High-influence member — strong candidate for ambassador/sponsor outreach.');
+    }
+    if (entry.rageClicks > 0) {
+      recommendedActions.push(
+        `Experienced ${entry.rageClicks} rage-click friction event(s) — review UX on ${topRouteObj.routeLabel}.`
+      );
+    }
 
     summaries.push({
       userKey: entry.userKey,
@@ -837,6 +984,7 @@ function buildUserSummaries(
       currentRouteLabel: getRouteLabel(entry.currentRoute),
       totalSessions: entry.sessionIds.size,
       totalClicks: entry.totalClicks,
+      rageClicks: entry.rageClicks,
       totalPageViews: entry.totalPageViews,
       totalDwellSec: entry.totalDwellSec,
       maxScrollPct: entry.maxScrollPct,
@@ -845,7 +993,18 @@ function buildUserSummaries(
       primaryDevice,
       browser: entry.browser,
       os: entry.os,
+      screenResolution: entry.screenResolution,
+      timezone: entry.timezone,
+      language: entry.language,
+      connectionType: entry.connectionType,
+      utmSource: entry.utmSource,
+      colorScheme: entry.colorScheme,
       routesVisited: routeBreakdown.map((r) => r.route),
+      engagementScore,
+      lifecycleStage,
+      churnRisk,
+      peakHourLabel,
+      recommendedActions: recommendedActions.slice(0, 3),
       inferredInterests,
       routeDwellBreakdown: routeBreakdown,
     });
@@ -872,9 +1031,12 @@ export async function getTelemetryOverview(rangeHours = 168) {
   const onlineNowCount = users.filter((u) => u.isOnlineNow).length;
 
   const totalClicks = filteredSessions.reduce((acc, s) => acc + s.total_clicks, 0);
+  const totalRageClicks = filteredSessions.reduce((acc, s) => acc + (s.rage_clicks || 0), 0);
   const totalPageViews = filteredSessions.reduce((acc, s) => acc + s.total_page_views, 0);
   const totalDwellSec = filteredSessions.reduce((acc, s) => acc + s.total_duration_sec, 0);
   const avgSessionSec = filteredSessions.length > 0 ? Math.round(totalDwellSec / filteredSessions.length) : 0;
+  const avgEngagementScore =
+    users.length > 0 ? Math.round(users.reduce((acc, u) => acc + u.engagementScore, 0) / users.length) : 0;
 
   // Route performance breakdown
   const routeMap = new Map<
@@ -897,7 +1059,12 @@ export async function getTelemetryOverview(rangeHours = 168) {
     }
     item.uniqueUsers.add(ev.profile_id ? `p:${ev.profile_id}` : ev.session_id);
     if (ev.event_type === 'page_view') item.views += 1;
-    if (ev.event_type === 'click' || ev.event_type === 'post_interaction' || ev.event_type === 'ad_click') {
+    if (
+      ev.event_type === 'click' ||
+      ev.event_type === 'rage_click' ||
+      ev.event_type === 'post_interaction' ||
+      ev.event_type === 'ad_click'
+    ) {
       item.clicks += 1;
     }
     if (ev.event_type === 'page_leave' || ev.event_type === 'session_heartbeat') {
@@ -923,7 +1090,14 @@ export async function getTelemetryOverview(rangeHours = 168) {
     { label: string; tag: string; route: string; routeLabel: string; section: string; clicks: number; lastClickedAt: string }
   >();
   for (const ev of filteredEvents) {
-    if (ev.event_type !== 'click' && ev.event_type !== 'post_interaction' && ev.event_type !== 'ad_click') continue;
+    if (
+      ev.event_type !== 'click' &&
+      ev.event_type !== 'rage_click' &&
+      ev.event_type !== 'post_interaction' &&
+      ev.event_type !== 'ad_click'
+    ) {
+      continue;
+    }
     const label = ev.element_label || ev.element_tag || 'Interactive Element';
     const route = (ev.route || 'landing').split(':')[0].toLowerCase();
     const key = `${route}::${label.toLowerCase()}`;
@@ -956,6 +1130,124 @@ export async function getTelemetryOverview(rangeHours = 168) {
       sharePct: Math.round((h.clicks / totalHotspotClicks) * 1000) / 10,
     }));
 
+  // Click Heatmap Points (for visual 2D viewport heatmap)
+  const heatmapPoints = filteredEvents
+    .filter(
+      (ev) =>
+        (ev.event_type === 'click' || ev.event_type === 'rage_click') &&
+        ev.click_x_pct !== null &&
+        ev.click_y_pct !== null
+    )
+    .slice(0, 400)
+    .map((ev) => ({
+      route: (ev.route || 'landing').split(':')[0].toLowerCase(),
+      routeLabel: ev.route_label,
+      xPct: ev.click_x_pct!,
+      yPct: ev.click_y_pct!,
+      isRage: ev.event_type === 'rage_click',
+      label: ev.element_label || ev.element_tag || 'Click',
+    }));
+
+  // Navigation Journey Flows (fromRoute -> toRoute)
+  const flowMap = new Map<string, { from: string; fromLabel: string; to: string; toLabel: string; count: number }>();
+  for (const ev of filteredEvents) {
+    if (ev.event_type === 'page_view' && ev.metadata?.fromRoute) {
+      const from = String(ev.metadata.fromRoute).split(':')[0].toLowerCase();
+      const to = (ev.route || 'landing').split(':')[0].toLowerCase();
+      if (from === to) continue;
+      const key = `${from}->${to}`;
+      const existing = flowMap.get(key);
+      if (existing) existing.count += 1;
+      else {
+        flowMap.set(key, {
+          from,
+          fromLabel: getRouteLabel(from),
+          to,
+          toLabel: getRouteLabel(to),
+          count: 1,
+        });
+      }
+    }
+  }
+  const navigationFlows = Array.from(flowMap.values())
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 12);
+
+  // Rage-click UX Friction Alerts
+  const rageMap = new Map<string, { label: string; routeLabel: string; count: number; lastSeen: string }>();
+  for (const ev of filteredEvents) {
+    if (ev.event_type !== 'rage_click') continue;
+    const label = ev.element_label || ev.element_tag || 'Unresponsive Element';
+    const key = `${ev.route}::${label}`;
+    const existing = rageMap.get(key);
+    if (existing) {
+      existing.count += 1;
+      if (ev.created_at > existing.lastSeen) existing.lastSeen = ev.created_at;
+    } else {
+      rageMap.set(key, { label, routeLabel: ev.route_label, count: 1, lastSeen: ev.created_at });
+    }
+  }
+  const rageClickAlerts = Array.from(rageMap.values())
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 8);
+
+  // Lifecycle Cohort Distribution
+  const lifecycleCounts: Record<UserLifecycleStage, number> = {
+    'Power User': 0,
+    'Active Regular': 0,
+    Explorer: 0,
+    'At-Risk': 0,
+    'New Visitor': 0,
+  };
+  for (const u of users) {
+    lifecycleCounts[u.lifecycleStage] += 1;
+  }
+  const lifecycleDistribution = Object.entries(lifecycleCounts).map(([stage, count]) => ({
+    stage,
+    count,
+  }));
+
+  // Peak Activity Hour Distribution (8 x 3-hour blocks across all events)
+  const peakBlocks = [
+    { label: '00–03', start: 0, events: 0 },
+    { label: '03–06', start: 3, events: 0 },
+    { label: '06–09', start: 6, events: 0 },
+    { label: '09–12', start: 9, events: 0 },
+    { label: '12–15', start: 12, events: 0 },
+    { label: '15–18', start: 15, events: 0 },
+    { label: '18–21', start: 18, events: 0 },
+    { label: '21–24', start: 21, events: 0 },
+  ];
+  for (const ev of filteredEvents) {
+    const d = new Date(ev.created_at);
+    if (Number.isNaN(d.getTime())) continue;
+    const idx = Math.floor(d.getHours() / 3);
+    if (peakBlocks[idx]) peakBlocks[idx].events += 1;
+  }
+
+  // Acquisition & Environment Signals
+  const utmMap = new Map<string, number>();
+  const tzMap = new Map<string, number>();
+  const langMap = new Map<string, number>();
+  for (const s of filteredSessions) {
+    const src = s.utm_source || (s.referrer ? safeHost(s.referrer) : 'Direct / Portal');
+    utmMap.set(src, (utmMap.get(src) || 0) + 1);
+    if (s.timezone) tzMap.set(s.timezone, (tzMap.get(s.timezone) || 0) + 1);
+    if (s.language) langMap.set(s.language, (langMap.get(s.language) || 0) + 1);
+  }
+  const acquisitionSources = Array.from(utmMap.entries())
+    .map(([source, sessionsCount]) => ({ source, sessions: sessionsCount }))
+    .sort((a, b) => b.sessions - a.sessions)
+    .slice(0, 8);
+  const topTimezones = Array.from(tzMap.entries())
+    .map(([timezone, count]) => ({ timezone, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 6);
+  const topLanguages = Array.from(langMap.entries())
+    .map(([language, count]) => ({ language, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 6);
+
   // Hourly activity buckets (last 24h)
   const hourlyMap = new Map<string, { label: string; clicks: number; pageViews: number; dwellMin: number }>();
   const now = new Date();
@@ -971,7 +1263,9 @@ export async function getTelemetryOverview(rangeHours = 168) {
     const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}-${Math.floor(d.getHours() / 2)}`;
     const bucket = hourlyMap.get(key);
     if (!bucket) continue;
-    if (ev.event_type === 'click' || ev.event_type === 'post_interaction') bucket.clicks += 1;
+    if (ev.event_type === 'click' || ev.event_type === 'rage_click' || ev.event_type === 'post_interaction') {
+      bucket.clicks += 1;
+    }
     if (ev.event_type === 'page_view') bucket.pageViews += 1;
     if (ev.event_type === 'page_leave' || ev.event_type === 'session_heartbeat') {
       bucket.dwellMin = Math.round((bucket.dwellMin + ev.duration_sec / 60) * 10) / 10;
@@ -989,7 +1283,7 @@ export async function getTelemetryOverview(rangeHours = 168) {
     value,
   }));
 
-  // Interest affinity distribution across all users (for Ad Targeting overview)
+  // Interest affinity distribution
   const interestTotals = new Map<string, number>();
   for (const u of users) {
     for (const intr of u.inferredInterests) {
@@ -1008,19 +1302,37 @@ export async function getTelemetryOverview(rangeHours = 168) {
       totalSessions: filteredSessions.length,
       totalEvents: filteredEvents.length,
       totalClicks,
+      totalRageClicks,
       totalPageViews,
       totalDwellSec,
       avgSessionSec,
+      avgEngagementScore,
     },
     routeMetrics,
     topClickHotspots,
+    heatmapPoints,
+    navigationFlows,
+    rageClickAlerts,
+    lifecycleDistribution,
+    peakBlocks,
+    acquisitionSources,
+    topTimezones,
+    topLanguages,
     activityTimeline: Array.from(hourlyMap.values()),
     deviceBreakdown,
     audienceInterests,
     users,
-    recentEvents: filteredEvents.slice(0, 120),
+    recentEvents: filteredEvents.slice(0, 140),
     segments: await listAdSegments(users),
   };
+}
+
+function safeHost(urlStr: string): string {
+  try {
+    return new URL(urlStr).hostname || 'Referral';
+  } catch {
+    return urlStr.slice(0, 40) || 'Referral';
+  }
 }
 
 export async function getUserTelemetryDossier(userKey: string) {
@@ -1047,7 +1359,6 @@ export async function getUserTelemetryDossier(userKey: string) {
     (e) => matchingSessionIds.has(e.session_id) || (summary.profileId && e.profile_id === summary.profileId)
   );
 
-  // Recent searches by this user
   const searchTerms = userEvents
     .filter((e) => e.event_type === 'search' && e.metadata?.query)
     .map((e) => ({
@@ -1057,10 +1368,11 @@ export async function getUserTelemetryDossier(userKey: string) {
     }))
     .slice(0, 20);
 
-  // Top clicked items by this user
   const clickMap = new Map<string, { label: string; routeLabel: string; count: number }>();
   for (const ev of userEvents) {
-    if (ev.event_type !== 'click' && ev.event_type !== 'post_interaction') continue;
+    if (ev.event_type !== 'click' && ev.event_type !== 'rage_click' && ev.event_type !== 'post_interaction') {
+      continue;
+    }
     const label = ev.element_label || ev.element_tag || 'Element';
     const key = `${ev.route}::${label}`;
     const item = clickMap.get(key);

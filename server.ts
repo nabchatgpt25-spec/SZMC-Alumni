@@ -28,15 +28,25 @@ import * as dotenv from 'dotenv';
 
 dotenv.config({ quiet: true });
 
-import { supabaseServer, isSupabaseServerConfigured } from './server/lib/supabase-server.ts';
+import {
+  supabaseServer,
+  isSupabaseServerConfigured,
+  isSupabaseServiceRoleConfigured,
+  getSupabaseWriteClient,
+  findAuthUserByEmailOrPhone,
+  SUPABASE_TABLES,
+} from './server/lib/supabase-server.ts';
+import { isSafeTargetUrl, safeFetchHtml } from './server/lib/safeFetch.ts';
 import {
   requireAuth,
+  requireModerator,
   requireAdmin,
+  requireSuperAdmin,
   optionalAuth,
   signAdminToken,
-  verifyAdminToken,
-  verifyAuthToken,
-  SUPER_ADMIN_EMAILS,
+  signMemberSessionToken,
+  getRolePermissions,
+  isSuperAdminEmail,
   type AuthRequest,
 } from './server/middleware/auth.ts';
 import {
@@ -119,7 +129,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Vary', 'Origin');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, x-admin-token, x-file-ext, x-user-id');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, x-file-ext, x-user-id');
     res.setHeader('Access-Control-Allow-Credentials', 'true');
   }
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -179,26 +189,32 @@ function resolveActor(req: AuthRequest) {
     return {
       uid: req.dbUser.uid,
       email: req.dbUser.email,
-      role: req.dbUser.role || 'admin',
+      role: req.dbUser.role || 'member',
     };
   }
-  if (req.user) {
-    const user = req.user as any;
-    return {
-      uid: user.uid || user.id || 'admin-user',
-      email: user.email || 'admin@szmcalumni.net',
-      role: 'admin',
-    };
-  }
-  throw new Error('Unauthorized: Valid admin credentials required on backend');
+  throw new Error('Unauthorized: Valid verified session required on backend');
 }
 
 // ---------------------------------------------------------------------------
 // API ROUTES
 // ---------------------------------------------------------------------------
 
-// Admin-only download route for the compiled production distribution package
-app.get(['/api/download-dist', '/download-dist', '/download/dist.zip', '/szmc-alumni-dist.zip'], requireAdmin, (_req: AuthRequest, res: Response) => {
+// Verify any authenticated session (member, moderator, admin, or super_admin)
+app.get('/api/auth/verify-session', requireAuth, (req: AuthRequest, res: Response) => {
+  const actor = req.dbUser;
+  if (!actor) {
+    return res.status(401).json({ authenticated: false, error: 'Unauthorized' });
+  }
+  return res.json({
+    authenticated: true,
+    user: actor,
+    permissions: getRolePermissions(actor.role),
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// Super-Admin-only download route for the compiled production distribution package
+app.get(['/api/download-dist', '/download-dist', '/download/dist.zip', '/szmc-alumni-dist.zip'], requireSuperAdmin, (_req: AuthRequest, res: Response) => {
   const publicZip = path.resolve(__dirname, 'public', 'szmc-alumni-dist.zip');
   if (existsSync(publicZip)) {
     return res.download(publicZip, 'szmc-alumni-dist.zip');
@@ -331,11 +347,11 @@ app.post('/api/auth/register', rateLimitGuard(25, 60_000), async (req: Request, 
     const hashedPassword = hashPasswordServer(password);
 
     const created = await createOrRegisterAlumniProfile({
-      userUid: req.body.userUid,
+      userUid: undefined,
       rawPassword: password,
       fullName: fullName.trim(),
       avatarUrl,
-      batchYear: Number(batchYear) || 68,
+      batchYear: Number(batchYear) || 25,
       session,
       collegeRoll: collegeRoll?.trim(),
       academicStream:
@@ -343,13 +359,13 @@ app.post('/api/auth/register', rateLimitGuard(25, 60_000), async (req: Request, 
           ? academicStream
           : 'Science',
       academicGroup: academicGroup || null,
-      section: section || 'Group 4',
+      section: section || 'MBBS',
       profession: profession || '',
       position: position || '',
       institution: institution || '',
       specialty: Array.isArray(specialty) ? specialty : [],
-      degree: Array.isArray(degree) ? degree : ['HSC'],
-      city: city || 'Dhaka',
+      degree: Array.isArray(degree) ? degree : ['MBBS'],
+      city: city || 'Bogura',
       country: country || 'Bangladesh',
       phone: phone?.trim() || null,
       whatsapp: whatsapp?.trim() || null,
@@ -360,6 +376,13 @@ app.post('/api/auth/register', rateLimitGuard(25, 60_000), async (req: Request, 
     });
 
     const formattedProfile = formatAlumniRowToProfile(created);
+    const memberToken = signMemberSessionToken({
+      email: formattedProfile.email || `member-${formattedProfile.id}@szmcalumni.net`,
+      userId: formattedProfile.id,
+      uid: formattedProfile.authUserId || `member:${formattedProfile.id}`,
+      fullName: formattedProfile.fullName,
+    });
+
     broadcastFeedEvent({
       type: 'ALUMNI_REGISTERED',
       profile: formattedProfile,
@@ -368,6 +391,7 @@ app.post('/api/auth/register', rateLimitGuard(25, 60_000), async (req: Request, 
 
     res.status(201).json({
       success: true,
+      token: memberToken,
       profile: formattedProfile,
     });
   } catch (error: any) {
@@ -399,25 +423,22 @@ async function handleUnifiedLoginCore(req: Request, res: Response) {
     const cleanId = identifier.trim();
     const isEmail = cleanId.includes('@');
 
-    // Strict Super Admin Verification Check (Cryptographic SHA-256 digest matching — zero plaintext secrets in code)
-    const idDigitsSuffix = cleanId.replace(/\D/g, '').slice(-10);
-    const idSuffixDigest = idDigitsSuffix
-      ? crypto.createHash('sha256').update(`szmc_id_salt:${idDigitsSuffix}`).digest('hex')
-      : '';
-    const ADMIN_PHONE_SUFFIX_DIGEST = '752c91e0a1047c99f82ee8eff19f0234f12b2818db5fe0695ac961315b4f4bae';
-    const ADMIN_MASTER_PASS_HASH = 'sha256:78c42a0b21dfeae36b95efa4b145e97e894a3f28d57fa8a233b64fddcaa9b3b1';
+    const safeCompareSecret = (provided: string, expected: string): boolean => {
+      const a = crypto.createHash('sha256').update(provided).digest();
+      const b = crypto.createHash('sha256').update(expected).digest();
+      return crypto.timingSafeEqual(a, b);
+    };
 
-    const isDedicatedAdmin =
-      cleanId.toLowerCase() === 'nurulanambashir25@gmail.com' ||
-      cleanId.toLowerCase() === 'nurulanambashir20@gmail.com' ||
-      idSuffixDigest === ADMIN_PHONE_SUFFIX_DIGEST;
+    // Dedicated Super Admin Verification (verified strictly via Supabase Auth, env ADMIN_PASSWORD, or stored DB password hash)
+    const isDedicatedSuperAdmin = isEmail && isSuperAdminEmail(cleanId);
 
-    if (isDedicatedAdmin) {
+    if (isDedicatedSuperAdmin) {
       let authSession: any = null;
       let authenticated = false;
-      const targetEmail = cleanId.includes('@') ? cleanId.toLowerCase().trim() : 'nurulanambashir25@gmail.com';
+      const targetEmail = cleanId.toLowerCase().trim();
+      let dbProfile: any = null;
 
-      // 1. Try Supabase Auth password verification
+      // 1. Primary: Supabase Auth password verification
       if (isSupabaseServerConfigured) {
         try {
           const { data: sData, error: sErr } = await supabaseServer.auth.signInWithPassword({
@@ -431,58 +452,65 @@ async function handleUnifiedLoginCore(req: Request, res: Response) {
         } catch {}
       }
 
-      // 2. Cryptographic digest verification (env ADMIN_PASSWORD or salted SHA-256 master hash)
+      // 2. Secondary: Environment-configured ADMIN_PASSWORD or stored DB password hash (no hardcoded password hashes in source)
+      dbProfile = await findAlumniByCredential(targetEmail);
       if (!authenticated) {
-        if (process.env.ADMIN_PASSWORD && password === process.env.ADMIN_PASSWORD) {
+        const envAdminPass = process.env.ADMIN_PASSWORD?.trim();
+        if (envAdminPass && safeCompareSecret(password, envAdminPass)) {
           authenticated = true;
-        } else if (hashPasswordServer(password) === ADMIN_MASTER_PASS_HASH) {
+        } else if (dbProfile?.passwordHash && verifyPasswordServer(dbProfile.passwordHash, password)) {
           authenticated = true;
-        } else {
-          // Check if registered alumnus profile has a valid matching password hash
-          const adminAlumnus = await findAlumniByCredential(targetEmail);
-          if (adminAlumnus?.passwordHash && verifyPasswordServer(adminAlumnus.passwordHash, password)) {
-            authenticated = true;
-          }
         }
       }
 
-      // STRICT RULE: If the password does NOT match, REJECT IMMEDIATELY.
       if (!authenticated) {
-        return res.status(401).json({ error: 'Incorrect administrator password. Access denied.' });
+        return res.status(401).json({ error: 'Invalid credentials. Access denied.' });
       }
 
-      const superAdminToken = signAdminToken(targetEmail);
-      const superAdminProfile = {
-        id: 1,
-        userId: 1,
-        fullName: 'Dr. Nurul Anam Bashir',
-        avatarUrl: '/assets/aistudio/images__1__2778177d.png',
-        batchYear: 25,
-        academicStream: 'MBBS',
-        academicGroup: null,
-        section: 'MBBS',
-        verificationStatus: 'verified',
-        verificationMethod: 'admin_verified',
-        vouchesCount: 10,
-        profession: 'Medical Doctor / Physician',
-        position: 'Super Admin / Lead Physician',
-        institution: 'Shaheed Ziaur Rahman Medical College Hospital',
-        specialty: ['Internal Medicine', 'Surgery'],
-        degree: ['MBBS', 'FCPS'],
-        city: 'Bogura',
-        country: 'Bangladesh',
-        email: targetEmail,
-        phone: !isEmail ? cleanId : '',
-        role: 'admin',
-        isPublic: true,
-        online: true,
-        badges: ['SZMCian', 'Super Admin', 'Batch 25'],
-      };
+      const resolvedId = Number(dbProfile?.id || 1);
+      const resolvedUid = authSession?.user?.id || dbProfile?.authUserId || `super-admin:${targetEmail}`;
+      const resolvedName = dbProfile?.fullName || 'Dr. Nurul Anam Bashir';
+
+      const superAdminToken = signAdminToken(targetEmail, 'super_admin', {
+        userId: resolvedId,
+        uid: resolvedUid,
+        fullName: resolvedName,
+      });
+
+      const superAdminProfile = dbProfile
+        ? { ...formatAlumniRowToProfile(dbProfile), role: 'super_admin' }
+        : {
+            id: resolvedId,
+            userId: resolvedId,
+            authUserId: resolvedUid,
+            fullName: resolvedName,
+            avatarUrl: '/assets/aistudio/images__1__2778177d.png',
+            batchYear: 25,
+            academicStream: 'MBBS',
+            academicGroup: null,
+            section: 'MBBS',
+            verificationStatus: 'verified',
+            verificationMethod: 'admin_verified',
+            vouchesCount: 10,
+            profession: 'Medical Doctor / Physician',
+            position: 'Super Admin / Lead Physician',
+            institution: 'Shaheed Ziaur Rahman Medical College Hospital',
+            specialty: ['Internal Medicine', 'Surgery'],
+            degree: ['MBBS', 'FCPS'],
+            city: 'Bogura',
+            country: 'Bangladesh',
+            email: targetEmail,
+            phone: '',
+            role: 'super_admin',
+            isPublic: true,
+            online: true,
+            badges: ['SZMCian', 'Super Admin', 'Batch 25'],
+          };
 
       return res.json({
         success: true,
-        token: superAdminToken,
-        session: authSession || { access_token: superAdminToken, token_type: 'bearer', user: { email: targetEmail, role: 'admin' } },
+        token: authSession?.access_token || superAdminToken,
+        session: authSession || null,
         profile: superAdminProfile,
       });
     }
@@ -494,23 +522,12 @@ async function handleUnifiedLoginCore(req: Request, res: Response) {
       const cleanEmail = cleanId.toLowerCase();
 
       if (isSupabaseServerConfigured) {
-        try {
-          // Auto-confirm email if needed so cross-device logins succeed
-          const { data: uData } = await supabaseServer.auth.admin.listUsers();
-          const existingU = (uData?.users as any[])?.find((u: any) => u.email?.toLowerCase() === cleanEmail);
-          if (existingU && !existingU.email_confirmed_at) {
-            await supabaseServer.auth.admin.updateUserById(existingU.id, { email_confirm: true });
-          }
-        } catch (confirmErr) {
-          console.warn('Auto-confirm check notice:', confirmErr);
-        }
-
         const { data: signInData, error: signInError } = await supabaseServer.auth.signInWithPassword({
           email: cleanEmail,
           password,
         });
 
-        if (!signInError && signInData?.user) {
+        if (!signInError && signInData?.user && signInData?.session) {
           let alumnus = await findAlumniByCredential(cleanEmail);
           if (!alumnus) {
             alumnus = await createOrRegisterAlumniProfile({
@@ -520,27 +537,29 @@ async function handleUnifiedLoginCore(req: Request, res: Response) {
                 (signInData.user.user_metadata as any)?.full_name ||
                 (signInData.user.user_metadata as any)?.name ||
                 cleanEmail.split('@')[0],
-              batchYear: Number((signInData.user.user_metadata as any)?.batch_year) || 68,
+              batchYear: Number((signInData.user.user_metadata as any)?.batch_year) || 25,
               email: cleanEmail,
               passwordHash: hashPasswordServer(password),
             });
           }
 
-          const adminToken = signAdminToken(cleanEmail || 'admin@szmcalumni.net');
           return res.json({
             success: true,
             session: signInData.session,
-            token: signInData.session?.access_token || adminToken,
+            token: signInData.session.access_token,
             profile: formatAlumniRowToProfile(alumnus),
           });
         }
 
         if (signInError) {
           const msg = signInError.message.toLowerCase();
+          if (msg.includes('email not confirmed') || msg.includes('not confirmed')) {
+            return res.status(403).json({
+              error: 'Please confirm your email address using the verification link sent to your inbox before signing in.',
+            });
+          }
           if (msg.includes('invalid login credentials') || msg.includes('invalid_credentials')) {
-            // Check if user was registered with Google OAuth and has no password
-            const { data: uData } = await supabaseServer.auth.admin.listUsers();
-            const existingU = (uData?.users as any[])?.find((u: any) => u.email?.toLowerCase() === cleanEmail);
+            const existingU = await findAuthUserByEmailOrPhone({ email: cleanEmail });
             if (existingU && (existingU.app_metadata?.provider === 'google' || !existingU.encrypted_password)) {
               return res.status(400).json({
                 error: 'This account was created via Google Sign-In and does not have a password set yet. Please continue with "Sign in with Google" or use "Forgot Password" to set a password.',
@@ -551,20 +570,22 @@ async function handleUnifiedLoginCore(req: Request, res: Response) {
         }
       }
 
-      // In-memory fallback
+      // In-memory fallback (strictly issues a non-privileged member token, NEVER an admin token)
       const alumnus = await findAlumniByCredential(cleanEmail);
-      if (!alumnus) {
-        return res.status(404).json({ error: 'No registered account found with this email address.' });
+      if (!alumnus || !verifyPasswordServer(alumnus.passwordHash, password)) {
+        return res.status(401).json({ error: 'Invalid email or password. Please verify your credentials.' });
       }
-      const isValid = verifyPasswordServer(alumnus.passwordHash, password);
-      if (!isValid) {
-        return res.status(401).json({ error: 'Incorrect password. Please try again.' });
-      }
-      const adminToken = signAdminToken(cleanEmail || 'admin@szmcalumni.net');
+      const formatted = formatAlumniRowToProfile(alumnus);
+      const memberToken = signMemberSessionToken({
+        email: cleanEmail,
+        userId: formatted.id,
+        uid: formatted.authUserId || `member:${formatted.id}`,
+        fullName: formatted.fullName,
+      });
       return res.json({
         success: true,
-        token: adminToken,
-        profile: formatAlumniRowToProfile(alumnus),
+        token: memberToken,
+        profile: formatted,
       });
     }
 
@@ -575,8 +596,8 @@ async function handleUnifiedLoginCore(req: Request, res: Response) {
     const alumnus = await findAlumniByCredential(cleanId);
 
     if (!alumnus) {
-      return res.status(404).json({
-        error: 'No registered account found with this mobile number. Please register your verified profile first.',
+      return res.status(401).json({
+        error: 'Invalid mobile number or password. Please verify your credentials.',
       });
     }
 
@@ -588,19 +609,24 @@ async function handleUnifiedLoginCore(req: Request, res: Response) {
     if (isSupabaseServerConfigured) {
       let authSession: any = null;
 
-      // Method 1: Try authenticating with user's verified registered email & password
+      // Method 1: Authenticate via user's verified registered email & password
       if (alumnus.email) {
         const { data: signInData, error: signInError } = await supabaseServer.auth.signInWithPassword({
           email: alumnus.email.toLowerCase().trim(),
           password,
         });
 
+        if (signInError && signInError.message.toLowerCase().includes('not confirmed')) {
+          return res.status(403).json({
+            error: 'Please confirm your registered email address before signing in.',
+          });
+        }
         if (!signInError && signInData?.session) {
           authSession = signInData.session;
         }
       }
 
-      // Method 2: If email attempt was not applicable or failed, try native phone sign-in
+      // Method 2: Native phone sign-in fallback
       if (!authSession) {
         try {
           const { data: phoneSignInData, error: phoneSignInErr } = await supabaseServer.auth.signInWithPassword({
@@ -616,8 +642,7 @@ async function handleUnifiedLoginCore(req: Request, res: Response) {
       }
 
       if (authSession) {
-        // Keep phone on auth.users synchronized
-        if (alumnus.authUserId) {
+        if (alumnus.authUserId && alumnus.phoneOwnershipVerified) {
           try {
             await supabaseServer.auth.admin.updateUserById(alumnus.authUserId, {
               phone: formattedPhone,
@@ -626,22 +651,20 @@ async function handleUnifiedLoginCore(req: Request, res: Response) {
           } catch {}
         }
 
-        const adminToken = signAdminToken(alumnus.email || 'admin@szmcalumni.net');
         return res.json({
           success: true,
           session: authSession,
-          token: authSession?.access_token || adminToken,
+          token: authSession.access_token,
           profile: formatAlumniRowToProfile(alumnus),
         });
       }
 
-      // Check if user was registered via Google OAuth and has no password
-      const { data: usersData } = await supabaseServer.auth.admin.listUsers();
-      const matchedUser = (usersData?.users as any[])?.find(
-        (u: any) =>
-          (alumnus.email && u.email?.toLowerCase() === alumnus.email.toLowerCase().trim()) ||
-          (u.phone && u.phone === formattedPhone)
-      );
+      // Bounded check for Google-only accounts
+      const matchedUser = await findAuthUserByEmailOrPhone({
+        authUserId: alumnus.authUserId,
+        email: alumnus.email,
+        phone: formattedPhone,
+      });
 
       if (matchedUser && (matchedUser.app_metadata?.provider === 'google' || !matchedUser.encrypted_password)) {
         return res.status(400).json({
@@ -650,20 +673,26 @@ async function handleUnifiedLoginCore(req: Request, res: Response) {
         });
       }
 
-      return res.status(401).json({ error: 'Incorrect password for this mobile number. Please try again.' });
+      return res.status(401).json({ error: 'Invalid mobile number or password. Please verify your credentials.' });
     }
 
-    // In-memory fallback
+    // In-memory fallback (strictly issues a non-privileged member token, NEVER an admin token)
     const isValid = verifyPasswordServer(alumnus.passwordHash, password);
     if (!isValid) {
-      return res.status(401).json({ error: 'Incorrect password. Please try again.' });
+      return res.status(401).json({ error: 'Invalid mobile number or password. Please verify your credentials.' });
     }
 
-    const adminToken = signAdminToken(alumnus.email || 'admin@szmcalumni.net');
+    const formatted = formatAlumniRowToProfile(alumnus);
+    const memberToken = signMemberSessionToken({
+      email: formatted.email || `phone-${formatted.id}@szmcalumni.net`,
+      userId: formatted.id,
+      uid: formatted.authUserId || `member:${formatted.id}`,
+      fullName: formatted.fullName,
+    });
     return res.json({
       success: true,
-      token: adminToken,
-      profile: formatAlumniRowToProfile(alumnus),
+      token: memberToken,
+      profile: formatted,
     });
   } catch (error: any) {
     console.error('Unified login error:', error);
@@ -741,31 +770,40 @@ app.post(
   }
 );
 
-// Admin: Verify Server-Side Administrative Access
-app.get('/api/admin/verify-access', requireAdmin, (req: AuthRequest, res: Response) => {
+// Admin/Moderator: Verify Server-Side Administrative Access & Authoritative Permissions
+app.get('/api/admin/verify-access', requireModerator, (req: AuthRequest, res: Response) => {
   const actor = req.dbUser;
-  if (actor && (actor.role === 'admin' || actor.role === 'super_admin')) {
-    return res.json({
-      authorized: true,
-      role: 'admin',
-      userId: actor.id || 1,
-      userUid: actor.uid || 'super-admin-nurul',
-      email: actor.email || 'nurulanambashir25@gmail.com',
-      fullName: actor.fullName || 'Dr. Nurul Anam Bashir',
-      verifiedViaMetadata: true,
-      timestamp: new Date().toISOString(),
+  if (!actor) {
+    return res.status(401).json({
+      authorized: false,
+      role: 'member',
+      error: 'Unauthorized: Missing verified session.',
+    });
+  }
+  const permissions = getRolePermissions(actor.role);
+  if (!permissions.canAccessAdminPortal) {
+    return res.status(403).json({
+      authorized: false,
+      role: actor.role,
+      error: 'Forbidden: Portal access restricted to verified moderators and administrators.',
     });
   }
 
-  return res.status(403).json({
-    authorized: false,
-    role: actor?.role || 'member',
-    error: 'Forbidden: Admin access restricted to verified administrators.',
+  return res.json({
+    authorized: true,
+    role: actor.role,
+    permissions,
+    userId: actor.id,
+    userUid: actor.uid,
+    email: actor.email,
+    fullName: actor.fullName,
+    verifiedViaMetadata: true,
+    timestamp: new Date().toISOString(),
   });
 });
 
 // Admin: Query 7-Day Auto-Verification Status
-app.get('/api/admin/auto-verify-status', (_req: Request, res: Response) => {
+app.get('/api/admin/auto-verify-status', requireAdmin, (_req: AuthRequest, res: Response) => {
   const active = isServerAutoVerifyActive();
   const expiry = new Date(serverAutoVerifyConfig.expiresAt).getTime();
   const now = Date.now();
@@ -809,7 +847,7 @@ app.post('/api/admin/auto-verify-toggle', rateLimitGuard(30, 60_000), requireAdm
 });
 
 // Super Admin: Instant Bulk Verify All Unverified/Pending Alumni
-app.post('/api/admin/bulk-verify-all', rateLimitGuard(15, 60_000), requireAdmin, async (req: AuthRequest, res: Response) => {
+app.post('/api/admin/bulk-verify-all', rateLimitGuard(15, 60_000), requireSuperAdmin, async (req: AuthRequest, res: Response) => {
   try {
     const actor = resolveActor(req);
     const result = await bulkVerifyAllAlumniProfiles({
@@ -851,11 +889,11 @@ app.post(
   }
 );
 
-// Super Admin: Full User Activity Overview (KPIs, Route Dwell, Click Hotspots, Users, Live Feed)
+// Super Admin ONLY: Full User Activity Overview (KPIs, Route Dwell, Click Hotspots, Users, Live Feed)
 app.get(
   '/api/admin/telemetry/overview',
   rateLimitGuard(120, 60_000),
-  requireAdmin,
+  requireSuperAdmin,
   async (req: AuthRequest, res: Response) => {
     try {
       const rawRange = Number(req.query.rangeHours);
@@ -868,11 +906,11 @@ app.get(
   }
 );
 
-// Super Admin: Deep-Dive Behavioral Dossier for a Specific User
+// Super Admin ONLY: Deep-Dive Behavioral Dossier for a Specific User
 app.get(
   '/api/admin/telemetry/user/:userKey',
   rateLimitGuard(120, 60_000),
-  requireAdmin,
+  requireSuperAdmin,
   async (req: AuthRequest, res: Response) => {
     try {
       const userKey = decodeURIComponent(String(req.params.userKey || '')).trim();
@@ -890,11 +928,11 @@ app.get(
   }
 );
 
-// Super Admin: List, Create, and Delete Targeted Ad Audience Segments
+// Super Admin ONLY: List, Create, and Delete Targeted Ad Audience Segments
 app.get(
   '/api/admin/telemetry/segments',
   rateLimitGuard(120, 60_000),
-  requireAdmin,
+  requireSuperAdmin,
   async (_req: AuthRequest, res: Response) => {
     try {
       const segments = await listAdSegments();
@@ -908,7 +946,7 @@ app.get(
 app.post(
   '/api/admin/telemetry/segments',
   rateLimitGuard(60, 60_000),
-  requireAdmin,
+  requireSuperAdmin,
   async (req: AuthRequest, res: Response) => {
     try {
       const actor = resolveActor(req);
@@ -923,7 +961,7 @@ app.post(
 app.delete(
   '/api/admin/telemetry/segments/:id',
   rateLimitGuard(60, 60_000),
-  requireAdmin,
+  requireSuperAdmin,
   async (req: AuthRequest, res: Response) => {
     try {
       const id = String(req.params.id || '').trim();
@@ -938,7 +976,7 @@ app.delete(
 app.post(
   '/api/admin/telemetry/clear',
   rateLimitGuard(10, 60_000),
-  requireAdmin,
+  requireSuperAdmin,
   async (_req: AuthRequest, res: Response) => {
     try {
       await clearTelemetryLogs();
@@ -1116,46 +1154,14 @@ app.get('/api/hall-of-fame', async (_req: Request, res: Response) => {
 });
 
 // Admin Command: Save & Persist Institutional Site Configuration + Broadcast Live via SSE & Supabase
-app.post('/api/admin/site-config', rateLimitGuard(120, 60_000), async (req: AuthRequest, res: Response) => {
+app.post('/api/admin/site-config', rateLimitGuard(120, 60_000), requireAdmin, async (req: AuthRequest, res: Response) => {
   try {
-    // 1. Authorize administrative authority flexibly across session types
-    const authHeader = req.headers.authorization;
-    let isAuthorized = false;
-    let actorEmail = 'admin@szmcalumni.net';
-
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      const token = authHeader.split('Bearer ')[1].trim();
-      const authResult = await verifyAuthToken(token);
-      if (
-        authResult?.dbUser?.role === 'admin' ||
-        authResult?.dbUser?.role === 'super_admin' ||
-        (authResult?.dbUser?.email && SUPER_ADMIN_EMAILS.includes(authResult.dbUser.email.toLowerCase().trim()))
-      ) {
-        isAuthorized = true;
-        actorEmail = authResult.dbUser.email || actorEmail;
-      }
-    }
-
-    if (!isAuthorized) {
-      const directToken = (req.headers['x-admin-token'] as string) || (req.query.token as string);
-      if (directToken) {
-        const verifyRes = verifyAdminToken(directToken);
-        if (verifyRes.valid) {
-          isAuthorized = true;
-          if (verifyRes.email) actorEmail = verifyRes.email;
-        }
-      }
-    }
-
-    if (!isAuthorized) {
-      return res.status(401).json({ error: 'Unauthorized: Valid administrator authorization token required.' });
-    }
-
-    const patch = req.body;
-    if (!patch || typeof patch !== 'object') {
+    const rawBody = req.body;
+    if (!rawBody || typeof rawBody !== 'object') {
       return res.status(400).json({ error: 'Invalid configuration payload' });
     }
 
+    const { _clientSupabaseSynced, ...patch } = rawBody as Record<string, any>;
     const updated = saveServerSiteConfig(patch);
 
     // Immediately broadcast to all connected browsers in real-time (<50ms)
@@ -1174,45 +1180,60 @@ app.post('/api/admin/site-config', rateLimitGuard(120, 60_000), async (req: Auth
       });
     }
 
-    // Sync to Supabase site_settings authoritatively so admin edits are guaranteed persisted
+    // Sync to Supabase site_settings using either service_role or the verified admin's Supabase JWT.
+    // Never attempt an anon-role write to public.site_settings (anon writes are intentionally revoked by RLS).
     let supabaseSynced = false;
     let supabaseSyncError: string | null = null;
-    if (isSupabaseServerConfigured) {
-      const nowIso = new Date().toISOString();
-      const hofMembers = Array.isArray(updated.featuredAlumni) ? updated.featuredAlumni : [];
-      const results = await Promise.allSettled([
-        supabaseServer.from('site_settings').upsert({
-          key: 'master_site_config',
-          value: updated,
-          updated_at: nowIso,
-        }, { onConflict: 'key' }),
-        supabaseServer.from('site_settings').upsert({
-          key: 'hall_of_fame',
-          value: {
-            members: hofMembers,
+    let syncMode: 'service_role' | 'user_jwt' | 'client_jwt' | 'server_local_fallback' = 'server_local_fallback';
+
+    if (_clientSupabaseSynced === true && !isSupabaseServiceRoleConfigured) {
+      supabaseSynced = true;
+      syncMode = 'client_jwt';
+    } else if (isSupabaseServerConfigured) {
+      const writeTarget = getSupabaseWriteClient(req.supabaseAccessToken);
+      if (writeTarget) {
+        syncMode = writeTarget.mode;
+        const nowIso = new Date().toISOString();
+        const hofMembers = Array.isArray(updated.featuredAlumni) ? updated.featuredAlumni : [];
+        const results = await Promise.allSettled([
+          writeTarget.client.from('site_settings').upsert({
+            key: 'master_site_config',
+            value: updated,
             updated_at: nowIso,
-          },
-          updated_at: nowIso,
-        }, { onConflict: 'key' }),
-      ]);
-      const errors = results
-        .map((r) => (r.status === 'rejected' ? r.reason?.message : r.value?.error?.message))
-        .filter(Boolean);
-      if (errors.length === 0) {
-        supabaseSynced = true;
+          }, { onConflict: 'key' }),
+          writeTarget.client.from('site_settings').upsert({
+            key: 'hall_of_fame',
+            value: {
+              members: hofMembers,
+              updated_at: nowIso,
+            },
+            updated_at: nowIso,
+          }, { onConflict: 'key' }),
+        ]);
+        const errors = results
+          .map((r) => (r.status === 'rejected' ? r.reason?.message : r.value?.error?.message))
+          .filter(Boolean);
+        if (errors.length === 0) {
+          supabaseSynced = true;
+        } else {
+          supabaseSyncError = errors.join('; ');
+          console.warn('Supabase site_settings server sync error:', supabaseSyncError);
+        }
       } else {
-        supabaseSyncError = errors.join('; ');
-        console.warn('Supabase site_settings server sync error:', supabaseSyncError);
+        // Neither SUPABASE_SERVICE_ROLE_KEY nor a Supabase Auth JWT is present (e.g. local Express admin session).
+        // Server persistence + live SSE broadcast already succeeded without triggering a rejected anon write.
+        syncMode = 'server_local_fallback';
       }
     }
 
     return res.json({
       success: true,
       supabaseSynced,
+      syncMode,
       supabaseSyncError,
       message: supabaseSynced
         ? 'Site configuration & Hall of Fame saved to Supabase and broadcast live across all devices!'
-        : 'Site configuration broadcast live (check SUPABASE_SERVICE_ROLE_KEY for server-side Supabase sync).',
+        : 'Site configuration saved on server and broadcast live across all devices.',
       savedAt: updated.updatedAt,
       config: updated,
     });
@@ -1307,22 +1328,23 @@ function decodeHtmlEntities(raw: string): string {
     });
 }
 
-// Universal Rich Link Unfurl & OpenGraph Media Extractor (Facebook Pictures, Posts, Videos, YouTube, Instagram, LinkedIn, Web)
+// Universal Rich Link Unfurl & OpenGraph Media Extractor (SSRF-hardened: blocks internal/private IPs, DNS rebinding, unsafe redirects, oversized payloads)
 app.get('/api/unfurl', rateLimitGuard(120, 60_000), async (req: Request, res: Response) => {
-  const targetUrl = req.query.url as string;
-  if (!targetUrl || !/^https?:\/\//i.test(targetUrl)) {
-    return res.status(400).json({ error: 'Valid HTTP/HTTPS URL required' });
+  const targetUrl = typeof req.query.url === 'string' ? req.query.url : '';
+  const cleanUrl = targetUrl.trim();
+  const safety = isSafeTargetUrl(cleanUrl);
+  if (!safety.safe || !safety.parsed) {
+    return res.status(400).json({ error: safety.error || 'Valid public HTTP/HTTPS URL required' });
   }
 
-  const cleanUrl = targetUrl.trim();
-  // Handle direct media files immediately
+  // Handle direct media files immediately after SSRF safety validation
   if (/\.(jpeg|jpg|png|webp|gif)(\?.*)?$/i.test(cleanUrl)) {
     return res.json({
       resolvedUrl: cleanUrl,
       imageUrl: cleanUrl,
       mediaType: 'photo',
       title: 'Direct Photo',
-      publisher: new URL(cleanUrl).hostname,
+      publisher: safety.parsed.hostname,
     });
   }
   if (/\.(mp4|webm|ogg|mov)(\?.*)?$/i.test(cleanUrl)) {
@@ -1331,34 +1353,21 @@ app.get('/api/unfurl', rateLimitGuard(120, 60_000), async (req: Request, res: Re
       videoUrl: cleanUrl,
       mediaType: 'video',
       title: 'Direct Video Stream',
-      publisher: new URL(cleanUrl).hostname,
+      publisher: safety.parsed.hostname,
     });
   }
 
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 7000);
-
     const isFacebook = /(?:facebook\.com|fb\.watch|fb\.com)/i.test(cleanUrl);
-    // Facebook and social networks serve rich public OpenGraph metadata to crawler UAs without login wall
     const crawlerUa = isFacebook
       ? 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)'
       : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
 
-    const resp = await fetch(cleanUrl, {
-      signal: controller.signal,
-      redirect: 'follow',
-      headers: {
-        'User-Agent': crawlerUa,
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9,bn;q=0.8',
-        'Cache-Control': 'no-cache',
-      },
+    const { html: rawHtml, finalUrl: finalResolvedUrl } = await safeFetchHtml(cleanUrl, {
+      userAgent: crawlerUa,
+      timeoutMs: 6000,
+      maxRedirects: 4,
     });
-    clearTimeout(timer);
-
-    const finalResolvedUrl = resp.url || cleanUrl;
-    const rawHtml = await resp.text();
 
     const getMeta = (propName: string): string | undefined => {
       const p1 = new RegExp(`<meta[^>]+(?:property|name)=["']${propName}["'][^>]+content=["']([^"']*)["']`, 'i');
@@ -3168,6 +3177,968 @@ app.delete('/api/careers/:id', rateLimitGuard(30, 60_000), requireAuth, async (r
   }
 });
 
+// Feature Flags System (Backed by public.app_feature_flags)
+const memoryFeatureFlags = new Map<
+  string,
+  { key: string; enabled: boolean; description?: string | null; config: Record<string, unknown>; updatedAt: string }
+>([
+  ['the_quad_enabled', { key: 'the_quad_enabled', enabled: true, description: 'Master toggle for THE QUAD Hybrid Community System', config: { version: 1 }, updatedAt: new Date().toISOString() }],
+  ['batch_lounges_enabled', { key: 'batch_lounges_enabled', enabled: true, description: 'Dedicated Batch Lounges across all 35 SZMC batches', config: { total_batches: 35 }, updatedAt: new Date().toISOString() }],
+  ['official_pages_enabled', { key: 'official_pages_enabled', enabled: true, description: 'Institutional Official Pages inside THE QUAD', config: { official_pages: 6 }, updatedAt: new Date().toISOString() }],
+  ['community_polls_enabled', { key: 'community_polls_enabled', enabled: true, description: 'Interactive polls inside community posts', config: {}, updatedAt: new Date().toISOString() }],
+  ['content_moderation_queue_enabled', { key: 'content_moderation_queue_enabled', enabled: true, description: 'User reporting, blocking, and moderator review queue', config: {}, updatedAt: new Date().toISOString() }],
+]);
+
+const FEATURE_FLAG_KEY_REGEX = /^[a-z0-9_]{2,64}$/;
+
+app.get('/api/feature-flags', rateLimitGuard(120, 60_000), async (_req: Request, res: Response) => {
+  try {
+    if (isSupabaseServerConfigured) {
+      try {
+        const { data, error } = await supabaseServer
+          .from(SUPABASE_TABLES.APP_FEATURE_FLAGS)
+          .select('key, enabled, description, config, updated_at')
+          .order('key', { ascending: true });
+
+        if (!error && Array.isArray(data) && data.length > 0) {
+          const flags = data.map((row: any) => ({
+            key: String(row.key),
+            enabled: Boolean(row.enabled),
+            description: row.description ?? null,
+            config: row.config && typeof row.config === 'object' ? row.config : {},
+            updatedAt: row.updated_at || new Date().toISOString(),
+          }));
+          return res.json({ flags });
+        }
+      } catch (err) {
+        console.warn('Supabase fetch feature flags notice:', err);
+      }
+    }
+    return res.json({ flags: Array.from(memoryFeatureFlags.values()) });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to load feature flags' });
+  }
+});
+
+app.put(
+  '/api/admin/feature-flags/:key',
+  rateLimitGuard(30, 60_000),
+  requireAdmin,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const cleanKey = String(req.params.key || '').trim().toLowerCase();
+      if (!FEATURE_FLAG_KEY_REGEX.test(cleanKey)) {
+        return res.status(400).json({ error: 'Invalid feature flag key format (use 2-64 lowercase letters, digits, or underscores).' });
+      }
+      if (typeof req.body?.enabled !== 'boolean') {
+        return res.status(400).json({ error: 'Field "enabled" must be a boolean.' });
+      }
+
+      const description =
+        typeof req.body.description === 'string'
+          ? req.body.description.trim().slice(0, 280)
+          : memoryFeatureFlags.get(cleanKey)?.description ?? null;
+      const config =
+        req.body.config && typeof req.body.config === 'object' && !Array.isArray(req.body.config)
+          ? req.body.config
+          : memoryFeatureFlags.get(cleanKey)?.config ?? {};
+      const nowIso = new Date().toISOString();
+
+      if (isSupabaseServerConfigured) {
+        const { error } = await supabaseServer
+          .from(SUPABASE_TABLES.APP_FEATURE_FLAGS)
+          .upsert(
+            {
+              key: cleanKey,
+              enabled: req.body.enabled,
+              description,
+              config,
+              updated_by: req.dbUser?.id || null,
+              updated_at: nowIso,
+            },
+            { onConflict: 'key' }
+          );
+
+        if (error) {
+          console.warn('Supabase upsert feature flag notice:', error.message);
+        }
+      }
+
+      const flag = {
+        key: cleanKey,
+        enabled: req.body.enabled,
+        description,
+        config,
+        updatedAt: nowIso,
+      };
+      memoryFeatureFlags.set(cleanKey, flag);
+
+      return res.json({ success: true, flag });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || 'Failed to update feature flag' });
+    }
+  }
+);
+
+// -----------------------------------------------------------------------------
+// PHASE 4: CONFIGURABLE FEED RANKING WEIGHTS (THE QUAD — FOR YOU ALGORITHM)
+// -----------------------------------------------------------------------------
+const memoryFeedRankingWeights = {
+  batchRelevanceWeight: 28,
+  followedAlumniWeight: 20,
+  followedPageWeight: 22,
+  engagementLikeWeight: 1.5,
+  engagementCommentWeight: 3.0,
+  engagementCap: 42,
+  recencyMaxBoost: 48,
+  recencyDecayPerHour: 0.5,
+  featuredBoost: 18,
+  updatedAt: new Date().toISOString(),
+};
+
+app.get('/api/feed/ranking-weights', rateLimitGuard(120, 60_000), async (_req: Request, res: Response) => {
+  try {
+    if (isSupabaseServerConfigured) {
+      try {
+        const { data, error } = await supabaseServer
+          .from(SUPABASE_TABLES.FEED_RANKING_WEIGHTS)
+          .select('*')
+          .eq('id', 1)
+          .maybeSingle();
+
+        if (!error && data) {
+          return res.json({
+            weights: {
+              batchRelevanceWeight: Number(data.batch_relevance_weight ?? 28),
+              followedAlumniWeight: Number(data.followed_alumni_weight ?? 20),
+              followedPageWeight: Number(data.followed_page_weight ?? 22),
+              engagementLikeWeight: Number(data.engagement_like_weight ?? 1.5),
+              engagementCommentWeight: Number(data.engagement_comment_weight ?? 3.0),
+              engagementCap: Number(data.engagement_cap ?? 42),
+              recencyMaxBoost: Number(data.recency_max_boost ?? 48),
+              recencyDecayPerHour: Number(data.recency_decay_per_hour ?? 0.5),
+              featuredBoost: Number(data.featured_boost ?? 18),
+              updatedAt: data.updated_at || new Date().toISOString(),
+            },
+          });
+        }
+      } catch (err) {
+        console.warn('Supabase fetch feed ranking weights notice:', err);
+      }
+    }
+    return res.json({ weights: memoryFeedRankingWeights });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to load feed ranking weights' });
+  }
+});
+
+app.put(
+  '/api/admin/feed/ranking-weights',
+  rateLimitGuard(30, 60_000),
+  requireAdmin,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const clampNum = (val: any, min: number, max: number, fallback: number): number => {
+        const n = Number(val);
+        if (!Number.isFinite(n)) return fallback;
+        return Math.min(max, Math.max(min, Math.round(n * 1000) / 1000));
+      };
+
+      const next = {
+        batchRelevanceWeight: clampNum(req.body?.batchRelevanceWeight, 0, 200, memoryFeedRankingWeights.batchRelevanceWeight),
+        followedAlumniWeight: clampNum(req.body?.followedAlumniWeight, 0, 200, memoryFeedRankingWeights.followedAlumniWeight),
+        followedPageWeight: clampNum(req.body?.followedPageWeight, 0, 200, memoryFeedRankingWeights.followedPageWeight),
+        engagementLikeWeight: clampNum(req.body?.engagementLikeWeight, 0, 50, memoryFeedRankingWeights.engagementLikeWeight),
+        engagementCommentWeight: clampNum(req.body?.engagementCommentWeight, 0, 50, memoryFeedRankingWeights.engagementCommentWeight),
+        engagementCap: clampNum(req.body?.engagementCap, 0, 300, memoryFeedRankingWeights.engagementCap),
+        recencyMaxBoost: clampNum(req.body?.recencyMaxBoost, 0, 300, memoryFeedRankingWeights.recencyMaxBoost),
+        recencyDecayPerHour: clampNum(req.body?.recencyDecayPerHour, 0.01, 20, memoryFeedRankingWeights.recencyDecayPerHour),
+        featuredBoost: clampNum(req.body?.featuredBoost, 0, 200, memoryFeedRankingWeights.featuredBoost),
+        updatedAt: new Date().toISOString(),
+      };
+
+      if (isSupabaseServerConfigured) {
+        const { error } = await supabaseServer
+          .from(SUPABASE_TABLES.FEED_RANKING_WEIGHTS)
+          .upsert(
+            {
+              id: 1,
+              batch_relevance_weight: next.batchRelevanceWeight,
+              followed_alumni_weight: next.followedAlumniWeight,
+              followed_page_weight: next.followedPageWeight,
+              engagement_like_weight: next.engagementLikeWeight,
+              engagement_comment_weight: next.engagementCommentWeight,
+              engagement_cap: next.engagementCap,
+              recency_max_boost: next.recencyMaxBoost,
+              recency_decay_per_hour: next.recencyDecayPerHour,
+              featured_boost: next.featuredBoost,
+              updated_by: req.dbUser?.id || null,
+              updated_at: next.updatedAt,
+            },
+            { onConflict: 'id' }
+          );
+        if (error) {
+          console.warn('Supabase upsert feed ranking weights notice:', error.message);
+        }
+      }
+
+      Object.assign(memoryFeedRankingWeights, next);
+      return res.json({ success: true, weights: next });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || 'Failed to update ranking weights' });
+    }
+  }
+);
+
+// -----------------------------------------------------------------------------
+// PHASE 6: COMMUNITY SAFETY — CONTENT REPORTS & MODERATION QUEUE
+// -----------------------------------------------------------------------------
+interface MemoryContentReport {
+  id: number;
+  reporter_id: number;
+  target_type: 'post' | 'comment' | 'profile';
+  target_id: number;
+  target_author_id: number | null;
+  reason: string;
+  details: string | null;
+  status: 'open' | 'in_review' | 'resolved_removed' | 'resolved_dismissed';
+  reviewed_by: number | null;
+  resolution_note: string | null;
+  created_at: string;
+  reviewed_at: string | null;
+}
+
+const memoryContentReports: MemoryContentReport[] = [];
+const VALID_REPORT_TARGET_TYPES = new Set(['post', 'comment', 'profile']);
+const VALID_REPORT_STATUSES = new Set(['open', 'in_review', 'resolved_removed', 'resolved_dismissed']);
+
+app.post(
+  '/api/community/reports',
+  rateLimitGuard(20, 60_000),
+  requireAuth,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const reporterId = Number(req.dbUser?.id || 0);
+      if (!reporterId) {
+        return res.status(401).json({ error: 'Authenticated alumni profile required to submit a report.' });
+      }
+
+      const targetType = String(req.body?.targetType || '').trim().toLowerCase();
+      const targetId = Number(req.body?.targetId);
+      const targetAuthorId = req.body?.targetAuthorId ? Number(req.body.targetAuthorId) : null;
+      const reason = String(req.body?.reason || '').trim().slice(0, 140);
+      const details = typeof req.body?.details === 'string' ? req.body.details.trim().slice(0, 1000) : null;
+
+      if (!VALID_REPORT_TARGET_TYPES.has(targetType)) {
+        return res.status(400).json({ error: 'Invalid report target type.' });
+      }
+      if (!Number.isInteger(targetId) || targetId <= 0) {
+        return res.status(400).json({ error: 'Invalid report target ID.' });
+      }
+      if (!reason || reason.length < 3) {
+        return res.status(400).json({ error: 'Please select a valid report reason.' });
+      }
+
+      const nowIso = new Date().toISOString();
+      if (isSupabaseServerConfigured) {
+        const { data, error } = await supabaseServer
+          .from(SUPABASE_TABLES.CONTENT_REPORTS)
+          .insert({
+            reporter_id: reporterId,
+            target_type: targetType,
+            target_id: targetId,
+            target_author_id: targetAuthorId && targetAuthorId > 0 ? targetAuthorId : null,
+            reason,
+            details: details || null,
+            status: 'open',
+          })
+          .select('*')
+          .single();
+
+        if (!error && data) {
+          return res.status(201).json({ success: true, report: data, source: 'supabase' });
+        }
+        if (error && (error.code === '23505' || String(error.message || '').includes('uq_content_reports_open'))) {
+          return res.status(200).json({
+            success: true,
+            duplicate: true,
+            message: 'You already have an open report for this item.',
+            source: 'supabase',
+          });
+        }
+      }
+
+      // Fallback when migration 025 has not been applied remotely yet
+      const existing = memoryContentReports.find(
+        (r) =>
+          r.reporter_id === reporterId &&
+          r.target_type === targetType &&
+          r.target_id === targetId &&
+          r.status === 'open'
+      );
+      if (existing) {
+        return res.status(200).json({
+          success: true,
+          duplicate: true,
+          report: existing,
+          source: 'memory',
+        });
+      }
+
+      const fallbackReport: MemoryContentReport = {
+        id: Date.now(),
+        reporter_id: reporterId,
+        target_type: targetType as 'post' | 'comment' | 'profile',
+        target_id: targetId,
+        target_author_id: targetAuthorId && targetAuthorId > 0 ? targetAuthorId : null,
+        reason,
+        details: details || null,
+        status: 'open',
+        reviewed_by: null,
+        resolution_note: null,
+        created_at: nowIso,
+        reviewed_at: null,
+      };
+      memoryContentReports.unshift(fallbackReport);
+      return res.status(201).json({ success: true, report: fallbackReport, source: 'memory' });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || 'Failed to submit content report' });
+    }
+  }
+);
+
+app.get(
+  '/api/admin/moderation/reports',
+  rateLimitGuard(60, 60_000),
+  requireModerator,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const statusFilter = String(req.query.status || 'all').trim().toLowerCase();
+      const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 100);
+
+      if (isSupabaseServerConfigured) {
+        let query = supabaseServer
+          .from(SUPABASE_TABLES.CONTENT_REPORTS)
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(limit);
+
+        if (statusFilter !== 'all' && VALID_REPORT_STATUSES.has(statusFilter)) {
+          query = query.eq('status', statusFilter);
+        }
+
+        const { data, error } = await query;
+        if (!error && Array.isArray(data)) {
+          const profileIds = Array.from(
+            new Set(
+              data
+                .flatMap((r: any) => [r.reporter_id, r.target_author_id, r.reviewed_by])
+                .map((id: any) => Number(id))
+                .filter((id: number) => Number.isInteger(id) && id > 0)
+            )
+          );
+
+          const profileMap = new Map<number, { full_name: string; batch_year: number | null; avatar_url: string | null }>();
+          if (profileIds.length > 0) {
+            const { data: profiles } = await supabaseServer
+              .from(SUPABASE_TABLES.ALUMNI_PROFILES)
+              .select('id, full_name, batch_year, avatar_url')
+              .in('id', profileIds);
+            (profiles || []).forEach((p: any) =>
+              profileMap.set(Number(p.id), {
+                full_name: p.full_name || 'SZMC Alumnus',
+                batch_year: p.batch_year ? Number(p.batch_year) : null,
+                avatar_url: p.avatar_url || null,
+              })
+            );
+          }
+
+          const enriched = data.map((r: any) => ({
+            ...r,
+            reporter: profileMap.get(Number(r.reporter_id)) || null,
+            target_author: r.target_author_id ? profileMap.get(Number(r.target_author_id)) || null : null,
+            reviewer: r.reviewed_by ? profileMap.get(Number(r.reviewed_by)) || null : null,
+          }));
+
+          return res.json({ reports: enriched, source: 'supabase' });
+        }
+      }
+
+      const filtered =
+        statusFilter !== 'all' && VALID_REPORT_STATUSES.has(statusFilter)
+          ? memoryContentReports.filter((r) => r.status === statusFilter)
+          : memoryContentReports;
+      return res.json({ reports: filtered.slice(0, limit), source: 'memory' });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || 'Failed to fetch moderation reports' });
+    }
+  }
+);
+
+app.put(
+  '/api/admin/moderation/reports/:id',
+  rateLimitGuard(30, 60_000),
+  requireModerator,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const reportId = Number(req.params.id);
+      if (!Number.isInteger(reportId) || reportId <= 0) {
+        return res.status(400).json({ error: 'Invalid report ID.' });
+      }
+
+      const nextStatus = String(req.body?.status || '').trim().toLowerCase();
+      if (!VALID_REPORT_STATUSES.has(nextStatus) || nextStatus === 'open') {
+        return res.status(400).json({
+          error: 'Status must be one of: in_review, resolved_removed, resolved_dismissed.',
+        });
+      }
+
+      const resolutionNote =
+        typeof req.body?.resolutionNote === 'string'
+          ? req.body.resolutionNote.trim().slice(0, 600)
+          : null;
+      const removeContent = Boolean(req.body?.removeContent) || nextStatus === 'resolved_removed';
+      const reviewerId = Number(req.dbUser?.id || 0) || null;
+      const nowIso = new Date().toISOString();
+
+      if (isSupabaseServerConfigured) {
+        const { data: updated, error } = await supabaseServer
+          .from(SUPABASE_TABLES.CONTENT_REPORTS)
+          .update({
+            status: nextStatus,
+            reviewed_by: reviewerId,
+            resolution_note: resolutionNote,
+            reviewed_at: nowIso,
+          })
+          .eq('id', reportId)
+          .select('*')
+          .maybeSingle();
+
+        if (!error && updated) {
+          if (removeContent) {
+            if (updated.target_type === 'post') {
+              await supabaseServer
+                .from(SUPABASE_TABLES.POSTS)
+                .update({ is_deleted: true })
+                .eq('id', updated.target_id);
+            } else if (updated.target_type === 'comment') {
+              await supabaseServer
+                .from(SUPABASE_TABLES.POST_COMMENTS)
+                .update({ is_deleted: true })
+                .eq('id', updated.target_id);
+            }
+          }
+
+          // Notify reporter of resolution (without leaking moderator PII)
+          if (updated.reporter_id && updated.reporter_id !== reviewerId && nextStatus.startsWith('resolved_')) {
+            try {
+              await supabaseServer.from(SUPABASE_TABLES.NOTIFICATIONS).insert({
+                recipient_id: updated.reporter_id,
+                actor_id: reviewerId,
+                type: 'moderation_action',
+                title: 'Report Reviewed',
+                message:
+                  nextStatus === 'resolved_removed'
+                    ? 'Thank you for helping keep The Quad safe. Our moderation team reviewed your report and took action.'
+                    : 'Our moderation team reviewed your report and closed it after review.',
+                target_route: 'feed',
+                unread: true,
+              });
+            } catch {}
+          }
+
+          return res.json({ success: true, report: updated, contentRemoved: removeContent, source: 'supabase' });
+        }
+      }
+
+      const idx = memoryContentReports.findIndex((r) => r.id === reportId);
+      if (idx === -1) {
+        return res.status(404).json({ error: 'Report not found.' });
+      }
+      memoryContentReports[idx] = {
+        ...memoryContentReports[idx],
+        status: nextStatus as MemoryContentReport['status'],
+        reviewed_by: reviewerId,
+        resolution_note: resolutionNote,
+        reviewed_at: nowIso,
+      };
+      return res.json({
+        success: true,
+        report: memoryContentReports[idx],
+        contentRemoved: removeContent,
+        source: 'memory',
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || 'Failed to update moderation report' });
+    }
+  }
+);
+
+// -----------------------------------------------------------------------------
+// PHASE 7: ADMIN COMMUNITY MANAGEMENT (BATCH MODERATORS, OFFICIAL PAGES, OVERVIEW)
+// -----------------------------------------------------------------------------
+interface MemoryBatchModerator {
+  id: number;
+  batch_year: number;
+  profile_id: number;
+  role: 'coordinator' | 'moderator';
+  created_at: string;
+  profile?: { id: number; full_name: string; email?: string | null; batch_year?: number | null; avatar_url?: string | null };
+}
+
+interface MemoryOfficialPageRole {
+  id: number;
+  page_id: number;
+  profile_id: number;
+  role: 'admin' | 'editor';
+  created_at: string;
+  profile?: { id: number; full_name: string; email?: string | null; batch_year?: number | null; avatar_url?: string | null };
+}
+
+interface MemoryOfficialPage {
+  id: number;
+  slug: string;
+  name: string;
+  tagline: string;
+  description: string;
+  category: string;
+  is_verified: boolean;
+  is_active: boolean;
+  followers_count: number;
+  posts_count: number;
+}
+
+const memoryBatchModerators: MemoryBatchModerator[] = [];
+const memoryOfficialPageRoles: MemoryOfficialPageRole[] = [];
+const memoryOfficialPages: MemoryOfficialPage[] = [
+  { id: 1, slug: 'szmc-official', name: 'SZMC Official', tagline: 'Shaheed Ziaur Rahman Medical College Institutional Desk', description: 'Official institutional announcements, academic milestones, and campus updates from SZMC Bogura.', category: 'Announcement', is_verified: true, is_active: true, followers_count: 0, posts_count: 0 },
+  { id: 2, slug: 'alumni-association', name: 'Alumni Association', tagline: 'SZMC Alumni Association Secretariat', description: 'Official updates, annual general meetings, membership initiatives, and global alumni news.', category: 'Announcement', is_verified: true, is_active: true, followers_count: 0, posts_count: 0 },
+  { id: 3, slug: 'executive-committee', name: 'Executive Committee', tagline: 'Governance & Elected Leadership Updates', description: 'Resolutions, policy briefings, and executive committee notices for all MBBS batches.', category: 'Announcement', is_verified: true, is_active: true, followers_count: 0, posts_count: 0 },
+  { id: 4, slug: 'blood-donation-network', name: 'Blood Donation Network', tagline: 'Emergency Blood Lifeline & Donor Coordination', description: 'Urgent blood donor mobilization, verified emergency requests, and donor drives.', category: 'Blood Request', is_verified: true, is_active: true, followers_count: 0, posts_count: 0 },
+  { id: 5, slug: 'career-mentorship', name: 'Career & Mentorship', tagline: 'Residency, Fellowship & Clinical Career Guidance', description: 'FCPS, MD/MS, USMLE, PLAB/MRCP mentorship, medical fellowships, and clinical job opportunities.', category: 'Career & Jobs', is_verified: true, is_active: true, followers_count: 0, posts_count: 0 },
+  { id: 6, slug: 'alumni-events', name: 'Alumni Events', tagline: 'Reunions, Scientific Seminars & Batch Gatherings', description: 'Official reunion calendars, Silver Jubilee celebrations, CME conferences, and chapter meetups.', category: 'Events & Reunion', is_verified: true, is_active: true, followers_count: 0, posts_count: 0 },
+];
+
+app.get(
+  '/api/admin/community/overview',
+  rateLimitGuard(60, 60_000),
+  requireModerator,
+  async (_req: AuthRequest, res: Response) => {
+    try {
+      let openReportsCount = memoryContentReports.filter((r) => r.status === 'open' || r.status === 'in_review').length;
+      let totalReportsCount = memoryContentReports.length;
+      let batchModerators: any[] = [...memoryBatchModerators];
+      let officialPages: any[] = memoryOfficialPages.map((p) => ({
+        ...p,
+        roles: memoryOfficialPageRoles.filter((r) => r.page_id === p.id),
+      }));
+      let featureFlags: any[] = Array.from(memoryFeatureFlags.values());
+      let rankingWeights: any = { ...memoryFeedRankingWeights };
+
+      if (isSupabaseServerConfigured) {
+        const [reportsRes, batchModsRes, pagesRes, pageRolesRes, flagsRes, weightsRes] = await Promise.all([
+          supabaseServer.from(SUPABASE_TABLES.CONTENT_REPORTS).select('id, status'),
+          supabaseServer
+            .from(SUPABASE_TABLES.BATCH_LOUNGE_MODERATORS)
+            .select('id, batch_year, profile_id, role, created_at')
+            .order('batch_year', { ascending: true }),
+          supabaseServer
+            .from(SUPABASE_TABLES.OFFICIAL_PAGES)
+            .select('id, slug, name, tagline, description, category, is_verified, is_active, followers_count, posts_count')
+            .order('id', { ascending: true }),
+          supabaseServer
+            .from(SUPABASE_TABLES.OFFICIAL_PAGE_ROLES)
+            .select('id, page_id, profile_id, role, created_at')
+            .order('created_at', { ascending: false }),
+          supabaseServer.from(SUPABASE_TABLES.APP_FEATURE_FLAGS).select('*').order('key', { ascending: true }),
+          supabaseServer.from(SUPABASE_TABLES.FEED_RANKING_WEIGHTS).select('*').eq('id', 1).maybeSingle(),
+        ]);
+
+        if (!reportsRes.error && Array.isArray(reportsRes.data)) {
+          totalReportsCount = reportsRes.data.length;
+          openReportsCount = reportsRes.data.filter(
+            (r: any) => r.status === 'open' || r.status === 'in_review'
+          ).length;
+        }
+
+        const profileIds = new Set<number>();
+        if (!batchModsRes.error && Array.isArray(batchModsRes.data)) {
+          batchModsRes.data.forEach((m: any) => {
+            if (m.profile_id) profileIds.add(Number(m.profile_id));
+          });
+        }
+        if (!pageRolesRes.error && Array.isArray(pageRolesRes.data)) {
+          pageRolesRes.data.forEach((r: any) => {
+            if (r.profile_id) profileIds.add(Number(r.profile_id));
+          });
+        }
+
+        const profileMap = new Map<number, any>();
+        if (profileIds.size > 0) {
+          const { data: profiles } = await supabaseServer
+            .from(SUPABASE_TABLES.ALUMNI_PROFILES)
+            .select('id, full_name, email, batch_year, avatar_url')
+            .in('id', Array.from(profileIds));
+          (profiles || []).forEach((p: any) => profileMap.set(Number(p.id), p));
+        }
+
+        if (!batchModsRes.error && Array.isArray(batchModsRes.data)) {
+          batchModerators = batchModsRes.data.map((m: any) => ({
+            ...m,
+            profile: profileMap.get(Number(m.profile_id)) || null,
+          }));
+        }
+
+        const rolesByPage = new Map<number, any[]>();
+        if (!pageRolesRes.error && Array.isArray(pageRolesRes.data)) {
+          for (const r of pageRolesRes.data as any[]) {
+            const pid = Number(r.page_id);
+            const list = rolesByPage.get(pid) || [];
+            list.push({ ...r, profile: profileMap.get(Number(r.profile_id)) || null });
+            rolesByPage.set(pid, list);
+          }
+        }
+
+        if (!pagesRes.error && Array.isArray(pagesRes.data) && pagesRes.data.length > 0) {
+          officialPages = pagesRes.data.map((p: any) => ({
+            ...p,
+            roles: rolesByPage.get(Number(p.id)) || [],
+          }));
+        }
+
+        if (!flagsRes.error && Array.isArray(flagsRes.data) && flagsRes.data.length > 0) {
+          featureFlags = flagsRes.data.map((f: any) => ({
+            key: f.key,
+            enabled: Boolean(f.enabled),
+            description: f.description || null,
+            config: f.config || {},
+            updatedAt: f.updated_at || new Date().toISOString(),
+          }));
+        }
+
+        if (!weightsRes.error && weightsRes.data) {
+          const d: any = weightsRes.data;
+          rankingWeights = {
+            batchRelevanceWeight: Number(d.batch_relevance_weight ?? 28),
+            followedAlumniWeight: Number(d.followed_alumni_weight ?? 20),
+            followedPageWeight: Number(d.followed_page_weight ?? 22),
+            engagementLikeWeight: Number(d.engagement_like_weight ?? 1.5),
+            engagementCommentWeight: Number(d.engagement_comment_weight ?? 3.0),
+            engagementCap: Number(d.engagement_cap ?? 42),
+            recencyMaxBoost: Number(d.recency_max_boost ?? 48),
+            recencyDecayPerHour: Number(d.recency_decay_per_hour ?? 0.5),
+            featuredBoost: Number(d.featured_boost ?? 18),
+            updatedAt: d.updated_at || new Date().toISOString(),
+          };
+        }
+      }
+
+      return res.json({
+        metrics: {
+          openReportsCount,
+          totalReportsCount,
+          batchLoungesCount: 35,
+          batchModeratorsCount: batchModerators.length,
+          officialPagesCount: officialPages.length,
+          activeFlagsCount: featureFlags.filter((f) => f.enabled).length,
+          totalFlagsCount: featureFlags.length,
+        },
+        batchModerators,
+        officialPages,
+        featureFlags,
+        rankingWeights,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || 'Failed to load community overview' });
+    }
+  }
+);
+
+app.get(
+  '/api/admin/community/alumni-search',
+  rateLimitGuard(60, 60_000),
+  requireAdmin,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const q = String(req.query.q || '').trim().replace(/[%_,]/g, '');
+      if (q.length < 2) {
+        return res.json({ alumni: [] });
+      }
+      if (!isSupabaseServerConfigured) {
+        return res.json({ alumni: [] });
+      }
+
+      const { data, error } = await supabaseServer
+        .from(SUPABASE_TABLES.ALUMNI_PROFILES)
+        .select('id, full_name, email, batch_year, avatar_url, role')
+        .or(`full_name.ilike.%${q}%,email.ilike.%${q}%`)
+        .limit(10);
+
+      if (error) {
+        return res.status(500).json({ error: error.message || 'Search failed' });
+      }
+      return res.json({ alumni: data || [] });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || 'Alumni search failed' });
+    }
+  }
+);
+
+app.post(
+  '/api/admin/community/batch-moderators',
+  rateLimitGuard(30, 60_000),
+  requireAdmin,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const batchYear = Number(req.body?.batchYear);
+      const profileId = Number(req.body?.profileId);
+      const role = String(req.body?.role || 'moderator').trim().toLowerCase();
+
+      if (!Number.isInteger(batchYear) || batchYear < 1 || batchYear > 35) {
+        return res.status(400).json({ error: 'Batch year must be an integer between 1 and 35.' });
+      }
+      if (!Number.isInteger(profileId) || profileId <= 0) {
+        return res.status(400).json({ error: 'A valid alumni profile ID is required.' });
+      }
+      if (role !== 'moderator' && role !== 'coordinator') {
+        return res.status(400).json({ error: 'Role must be "moderator" or "coordinator".' });
+      }
+
+      const assignedBy = Number(req.dbUser?.id || 0) || null;
+      let profileMeta: any = null;
+
+      if (isSupabaseServerConfigured) {
+        const { data: prof } = await supabaseServer
+          .from(SUPABASE_TABLES.ALUMNI_PROFILES)
+          .select('id, full_name, email, batch_year, avatar_url')
+          .eq('id', profileId)
+          .maybeSingle();
+        profileMeta = prof || null;
+
+        const { data, error } = await supabaseServer
+          .from(SUPABASE_TABLES.BATCH_LOUNGE_MODERATORS)
+          .upsert(
+            {
+              batch_year: batchYear,
+              profile_id: profileId,
+              role,
+              assigned_by: assignedBy,
+            },
+            { onConflict: 'batch_year,profile_id' }
+          )
+          .select('*')
+          .single();
+
+        if (!error && data) {
+          return res.status(201).json({
+            success: true,
+            assignment: { ...data, profile: profileMeta },
+            source: 'supabase',
+          });
+        }
+      }
+
+      const existingIdx = memoryBatchModerators.findIndex(
+        (m) => m.batch_year === batchYear && m.profile_id === profileId
+      );
+      const entry: MemoryBatchModerator = {
+        id: existingIdx >= 0 ? memoryBatchModerators[existingIdx].id : Date.now(),
+        batch_year: batchYear,
+        profile_id: profileId,
+        role: role as 'coordinator' | 'moderator',
+        created_at: new Date().toISOString(),
+        profile: profileMeta || { id: profileId, full_name: `Alumnus #${profileId}`, batch_year: batchYear },
+      };
+      if (existingIdx >= 0) memoryBatchModerators[existingIdx] = entry;
+      else memoryBatchModerators.unshift(entry);
+      return res.status(201).json({ success: true, assignment: entry, source: 'memory' });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || 'Failed to assign batch moderator' });
+    }
+  }
+);
+
+app.delete(
+  '/api/admin/community/batch-moderators/:batchYear/:profileId',
+  rateLimitGuard(30, 60_000),
+  requireAdmin,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const batchYear = Number(req.params.batchYear);
+      const profileId = Number(req.params.profileId);
+      if (!Number.isInteger(batchYear) || !Number.isInteger(profileId)) {
+        return res.status(400).json({ error: 'Invalid batch year or profile ID.' });
+      }
+
+      if (isSupabaseServerConfigured) {
+        const { error } = await supabaseServer
+          .from(SUPABASE_TABLES.BATCH_LOUNGE_MODERATORS)
+          .delete()
+          .eq('batch_year', batchYear)
+          .eq('profile_id', profileId);
+        if (!error) {
+          return res.json({ success: true, source: 'supabase' });
+        }
+      }
+
+      const idx = memoryBatchModerators.findIndex(
+        (m) => m.batch_year === batchYear && m.profile_id === profileId
+      );
+      if (idx >= 0) memoryBatchModerators.splice(idx, 1);
+      return res.json({ success: true, source: 'memory' });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || 'Failed to remove batch moderator' });
+    }
+  }
+);
+
+app.post(
+  '/api/admin/community/official-pages/:pageId/roles',
+  rateLimitGuard(30, 60_000),
+  requireAdmin,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const pageId = Number(req.params.pageId);
+      const profileId = Number(req.body?.profileId);
+      const role = String(req.body?.role || 'editor').trim().toLowerCase();
+
+      if (!Number.isInteger(pageId) || pageId <= 0 || !Number.isInteger(profileId) || profileId <= 0) {
+        return res.status(400).json({ error: 'Valid page ID and alumni profile ID are required.' });
+      }
+      if (role !== 'admin' && role !== 'editor') {
+        return res.status(400).json({ error: 'Role must be "admin" or "editor".' });
+      }
+
+      const assignedBy = Number(req.dbUser?.id || 0) || null;
+      let profileMeta: any = null;
+
+      if (isSupabaseServerConfigured) {
+        const { data: prof } = await supabaseServer
+          .from(SUPABASE_TABLES.ALUMNI_PROFILES)
+          .select('id, full_name, email, batch_year, avatar_url')
+          .eq('id', profileId)
+          .maybeSingle();
+        profileMeta = prof || null;
+
+        const { data, error } = await supabaseServer
+          .from(SUPABASE_TABLES.OFFICIAL_PAGE_ROLES)
+          .upsert(
+            {
+              page_id: pageId,
+              profile_id: profileId,
+              role,
+              assigned_by: assignedBy,
+            },
+            { onConflict: 'page_id,profile_id' }
+          )
+          .select('*')
+          .single();
+
+        if (!error && data) {
+          return res.status(201).json({
+            success: true,
+            assignment: { ...data, profile: profileMeta },
+            source: 'supabase',
+          });
+        }
+      }
+
+      const existingIdx = memoryOfficialPageRoles.findIndex(
+        (r) => r.page_id === pageId && r.profile_id === profileId
+      );
+      const entry: MemoryOfficialPageRole = {
+        id: existingIdx >= 0 ? memoryOfficialPageRoles[existingIdx].id : Date.now(),
+        page_id: pageId,
+        profile_id: profileId,
+        role: role as 'admin' | 'editor',
+        created_at: new Date().toISOString(),
+        profile: profileMeta || { id: profileId, full_name: `Alumnus #${profileId}` },
+      };
+      if (existingIdx >= 0) memoryOfficialPageRoles[existingIdx] = entry;
+      else memoryOfficialPageRoles.unshift(entry);
+      return res.status(201).json({ success: true, assignment: entry, source: 'memory' });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || 'Failed to assign official page role' });
+    }
+  }
+);
+
+app.delete(
+  '/api/admin/community/official-pages/:pageId/roles/:profileId',
+  rateLimitGuard(30, 60_000),
+  requireAdmin,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const pageId = Number(req.params.pageId);
+      const profileId = Number(req.params.profileId);
+      if (!Number.isInteger(pageId) || !Number.isInteger(profileId)) {
+        return res.status(400).json({ error: 'Invalid page ID or profile ID.' });
+      }
+
+      if (isSupabaseServerConfigured) {
+        const { error } = await supabaseServer
+          .from(SUPABASE_TABLES.OFFICIAL_PAGE_ROLES)
+          .delete()
+          .eq('page_id', pageId)
+          .eq('profile_id', profileId);
+        if (!error) {
+          return res.json({ success: true, source: 'supabase' });
+        }
+      }
+
+      const idx = memoryOfficialPageRoles.findIndex(
+        (r) => r.page_id === pageId && r.profile_id === profileId
+      );
+      if (idx >= 0) memoryOfficialPageRoles.splice(idx, 1);
+      return res.json({ success: true, source: 'memory' });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || 'Failed to remove official page role' });
+    }
+  }
+);
+
+app.put(
+  '/api/admin/community/official-pages/:pageId',
+  rateLimitGuard(30, 60_000),
+  requireAdmin,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const pageId = Number(req.params.pageId);
+      if (!Number.isInteger(pageId) || pageId <= 0) {
+        return res.status(400).json({ error: 'Invalid official page ID.' });
+      }
+
+      const patch: Record<string, any> = { updated_at: new Date().toISOString() };
+      if (typeof req.body?.isVerified === 'boolean') patch.is_verified = req.body.isVerified;
+      if (typeof req.body?.isActive === 'boolean') patch.is_active = req.body.isActive;
+      if (typeof req.body?.description === 'string') patch.description = req.body.description.trim().slice(0, 600);
+      if (typeof req.body?.tagline === 'string') patch.tagline = req.body.tagline.trim().slice(0, 180);
+
+      if (isSupabaseServerConfigured) {
+        const { data, error } = await supabaseServer
+          .from(SUPABASE_TABLES.OFFICIAL_PAGES)
+          .update(patch)
+          .eq('id', pageId)
+          .select('*')
+          .maybeSingle();
+        if (!error && data) {
+          return res.json({ success: true, page: data, source: 'supabase' });
+        }
+      }
+
+      const page = memoryOfficialPages.find((p) => p.id === pageId);
+      if (!page) return res.status(404).json({ error: 'Official page not found.' });
+      if (typeof patch.is_verified === 'boolean') page.is_verified = patch.is_verified;
+      if (typeof patch.is_active === 'boolean') page.is_active = patch.is_active;
+      if (typeof patch.description === 'string') page.description = patch.description;
+      if (typeof patch.tagline === 'string') page.tagline = patch.tagline;
+      return res.json({ success: true, page, source: 'memory' });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || 'Failed to update official page' });
+    }
+  }
+);
+
 // Paginated 100k-scale Alumni Directory Query (with PII redaction guard)
 app.get(
   '/api/alumni',
@@ -3177,7 +4148,7 @@ app.get(
     try {
       const isAdminView =
         req.query.adminView === 'true' &&
-        req.dbUser?.role === 'admin';
+        (req.dbUser?.role === 'admin' || req.dbUser?.role === 'super_admin');
 
       const result = await queryPaginatedAlumniProfiles({
         page: Number(req.query.page) || 1,
@@ -3328,6 +4299,17 @@ app.patch(
         return res.status(400).json({ error: 'Invalid profile ID' });
       }
       const actor = resolveActor(req);
+
+      // Strict privilege boundary: only super_admin can assign or elevate to admin/super_admin
+      if (
+        (req.body.role === 'admin' || req.body.role === 'super_admin') &&
+        actor.role !== 'super_admin'
+      ) {
+        return res.status(403).json({
+          error: 'Forbidden: Only Super Administrators can assign admin or super_admin roles.',
+        });
+      }
+
       const updated = await adminUpdateAlumniGovernance({
         profileId,
         verificationStatus: req.body.verificationStatus,
@@ -3348,11 +4330,11 @@ app.patch(
   }
 );
 
-// Admin Command Center: Verification Submissions Queue
+// Moderation & Admin: Verification Submissions Queue
 app.get(
   '/api/admin/verifications',
   rateLimitGuard(60, 60_000),
-  requireAdmin,
+  requireModerator,
   async (req: AuthRequest, res: Response) => {
     try {
       const status = (req.query.status as string) || 'all';
@@ -3365,11 +4347,11 @@ app.get(
   }
 );
 
-// Admin Command Center: Approve or Reject Document Verification
+// Moderation & Admin: Approve or Reject Document Verification
 app.post(
   '/api/admin/verifications/:id/review',
   rateLimitGuard(40, 60_000),
-  requireAdmin,
+  requireModerator,
   async (req: AuthRequest, res: Response) => {
     try {
       const submissionId = Number(req.params.id);
@@ -3392,11 +4374,11 @@ app.post(
   }
 );
 
-// Admin Command Center: Blood Emergency Moderation
+// Moderation & Admin: Blood Emergency Moderation
 app.get(
   '/api/admin/blood-requests',
   rateLimitGuard(60, 60_000),
-  requireAdmin,
+  requireModerator,
   async (_req: AuthRequest, res: Response) => {
     try {
       const requests = await getBloodEmergencyList();
@@ -3411,7 +4393,7 @@ app.get(
 app.patch(
   '/api/admin/blood-requests/:id',
   rateLimitGuard(40, 60_000),
-  requireAdmin,
+  requireModerator,
   async (req: AuthRequest, res: Response) => {
     try {
       const id = Number(req.params.id);
@@ -3434,11 +4416,11 @@ app.patch(
   }
 );
 
-// Admin Command Center: Official Notices
+// Moderation & Admin: Official Notices
 app.get(
   '/api/admin/notices',
   rateLimitGuard(60, 60_000),
-  requireAdmin,
+  requireModerator,
   async (_req: AuthRequest, res: Response) => {
     try {
       const notices = await getOfficialNoticesList();
@@ -3453,7 +4435,7 @@ app.get(
 app.post(
   '/api/admin/notices',
   rateLimitGuard(30, 60_000),
-  requireAdmin,
+  requireModerator,
   async (req: AuthRequest, res: Response) => {
     try {
       const actor = resolveActor(req);
@@ -3501,11 +4483,11 @@ app.patch(
   }
 );
 
-// Admin Command Center: Bulk 100k-Scale Cohort Seeder / Stress-Test Importer
+// Super Admin ONLY: Bulk 100k-Scale Cohort Seeder / Stress-Test Importer
 app.post(
   '/api/admin/bulk-cohort',
   rateLimitGuard(10, 60_000),
-  requireAdmin,
+  requireSuperAdmin,
   async (req: AuthRequest, res: Response) => {
     try {
       const actor = resolveActor(req);
@@ -3524,11 +4506,11 @@ app.post(
   }
 );
 
-// Admin Command Center: Full Database Snapshot Export (JSON Backup)
+// Super Admin ONLY: Full Database Snapshot Export (JSON Backup)
 app.get(
   '/api/admin/export-full-backup',
   rateLimitGuard(15, 60_000),
-  requireAdmin,
+  requireSuperAdmin,
   async (_req: AuthRequest, res: Response) => {
     try {
       const [overview, directory, verifications, blood, notices] = await Promise.all([
@@ -3554,7 +4536,7 @@ app.get(
   }
 );
 
-// Admin-only download route for the production deployment dist archive
+// Super Admin ONLY download route for the production deployment dist archive
 app.get([
   '/download/szmc-alumni-dist.zip',
   '/szmc-alumni-dist.zip',
@@ -3562,7 +4544,7 @@ app.get([
   '/dist.zip',
   '/api/download-dist',
   '/download-dist',
-], requireAdmin, (_req: AuthRequest, res: Response) => {
+], requireSuperAdmin, (_req: AuthRequest, res: Response) => {
   const candidates = [
     path.resolve(__dirname, 'public', 'szmc-alumni-dist.zip'),
     path.resolve(__dirname, 'szmc-alumni-dist.zip'),
@@ -3579,7 +4561,7 @@ app.get([
   return res.status(404).send('Production dist archive not found. Please build first.');
 });
 
-app.get(['/download/szmc-alumni-dist.tar.gz', '/szmc-alumni-dist.tar.gz'], requireAdmin, (_req: AuthRequest, res: Response) => {
+app.get(['/download/szmc-alumni-dist.tar.gz', '/szmc-alumni-dist.tar.gz'], requireSuperAdmin, (_req: AuthRequest, res: Response) => {
   const candidates = [
     path.resolve(__dirname, 'public', 'szmc-alumni-dist.tar.gz'),
     path.resolve(__dirname, 'szmc-alumni-dist.tar.gz'),

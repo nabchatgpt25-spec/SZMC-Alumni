@@ -730,38 +730,47 @@ export async function saveSiteConfigToServer(configPatch: Partial<SiteConfig>): 
 
     let supabaseSuccess = false;
     let supabaseErrorMsg: string | null = null;
+    let hasActiveSupabaseSession = false;
 
-    // 1. Direct Supabase public.site_settings write via client
+    // 1. Direct Supabase public.site_settings write via authenticated Supabase session only
+    //    (anon role intentionally has no write permission on public.site_settings)
     if (isSupabaseConfigured && supabase) {
       try {
-        const nowIso = new Date().toISOString();
-        const hofMembers = Array.isArray(fullConfig.featuredAlumni) ? fullConfig.featuredAlumni : [];
-        const { error: upsertErr } = await supabase
-          .from('site_settings')
-          .upsert(
-            [
-              {
-                key: 'master_site_config',
-                value: fullConfig,
-                updated_at: nowIso,
-              },
-              {
-                key: 'hall_of_fame',
-                value: {
-                  members: hofMembers,
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        hasActiveSupabaseSession = Boolean(session?.access_token);
+
+        if (hasActiveSupabaseSession) {
+          const nowIso = new Date().toISOString();
+          const hofMembers = Array.isArray(fullConfig.featuredAlumni) ? fullConfig.featuredAlumni : [];
+          const { error: upsertErr } = await supabase
+            .from('site_settings')
+            .upsert(
+              [
+                {
+                  key: 'master_site_config',
+                  value: fullConfig,
                   updated_at: nowIso,
                 },
-                updated_at: nowIso,
-              },
-            ],
-            { onConflict: 'key' }
-          );
+                {
+                  key: 'hall_of_fame',
+                  value: {
+                    members: hofMembers,
+                    updated_at: nowIso,
+                  },
+                  updated_at: nowIso,
+                },
+              ],
+              { onConflict: 'key' }
+            );
 
-        if (!upsertErr) {
-          supabaseSuccess = true;
-        } else {
-          supabaseErrorMsg = upsertErr.message;
-          console.warn('Supabase site_settings upsert error:', upsertErr);
+          if (!upsertErr) {
+            supabaseSuccess = true;
+          } else {
+            supabaseErrorMsg = upsertErr.message;
+            console.warn('Supabase site_settings upsert error:', upsertErr);
+          }
         }
       } catch (dbErr: any) {
         supabaseErrorMsg = dbErr?.message || 'Supabase write exception';
@@ -771,34 +780,29 @@ export async function saveSiteConfigToServer(configPatch: Partial<SiteConfig>): 
     // 2. Persist to Express API & broadcast via SSE to all active devices
     let serverSuccess = false;
     let serverErrorMsg: string | null = null;
-    let authToken = typeof window !== 'undefined' ? localStorage.getItem('szmc_direct_auth_token') : null;
-    if (!authToken && supabase) {
-      try {
-        const { data: sessionData } = await supabase.auth.getSession();
-        authToken = sessionData?.session?.access_token || null;
-      } catch {}
-    }
-
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
-    if (authToken) {
-      headers.Authorization = `Bearer ${authToken}`;
-      headers['x-admin-token'] = authToken;
-    }
+    let serverSyncMode: string | null = null;
+    const { getClientAuthHeaders } = await import('../lib/supabase');
+    const headers = await getClientAuthHeaders(true);
 
     try {
       const res = await fetch('/api/admin/site-config', {
         method: 'POST',
         headers,
-        body: JSON.stringify(fullConfig),
+        body: JSON.stringify({
+          ...fullConfig,
+          _clientSupabaseSynced: supabaseSuccess,
+        }),
       });
 
       const data = await res.json();
       if (res.ok && data?.success) {
         serverSuccess = true;
+        serverSyncMode = data?.syncMode || null;
         if (data?.supabaseSynced) {
           supabaseSuccess = true;
+        }
+        if (data?.supabaseSyncError && !supabaseErrorMsg) {
+          supabaseErrorMsg = data.supabaseSyncError;
         }
       } else {
         serverErrorMsg = data?.error || 'Server save rejected';
@@ -807,14 +811,19 @@ export async function saveSiteConfigToServer(configPatch: Partial<SiteConfig>): 
       serverErrorMsg = fetchErr?.message || 'Server connection failed';
     }
 
-    // Strict error propagation: fail if Supabase is configured and NEITHER direct client nor server confirmed Supabase persistence
+    // Strict error propagation: fail if an authenticated Supabase write was attempted and rejected,
+    // or if the server save failed. Allow clean server-local fallback when running with an Express
+    // admin session in an environment without SUPABASE_SERVICE_ROLE_KEY.
     let isSupaActive = false;
     try {
       const supaModule = await import('../lib/supabase');
       isSupaActive = Boolean(supaModule.isSupabaseConfigured);
     } catch {}
 
-    if (isSupaActive && !supabaseSuccess) {
+    const acceptedServerLocalFallback =
+      serverSuccess && serverSyncMode === 'server_local_fallback' && !hasActiveSupabaseSession;
+
+    if (isSupaActive && !supabaseSuccess && !acceptedServerLocalFallback) {
       const errMsg = supabaseErrorMsg || serverErrorMsg || 'Supabase rejected the site settings write (check admin permissions or RLS policies on public.site_settings).';
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('szmc-site-config-error', { detail: errMsg }));
@@ -837,7 +846,9 @@ export async function saveSiteConfigToServer(configPatch: Partial<SiteConfig>): 
 
     return {
       success: true,
-      message: 'Site configuration & Hall of Fame saved and broadcast live across all devices!',
+      message: supabaseSuccess
+        ? 'Site configuration & Hall of Fame saved and broadcast live across all devices!'
+        : 'Site configuration saved on server and broadcast live across all devices!',
     };
   } catch (err: any) {
     return {
@@ -1028,30 +1039,31 @@ export function getAutoVerificationRemainingTime(): {
 
 export function pauseAutoVerification(paused: boolean): SiteConfig {
   const updated = saveSiteConfig({ autoVerificationPaused: paused });
-  // Sync to Supabase site_settings table asynchronously
+  // Sync to Supabase site_settings table asynchronously only when an authenticated Supabase session exists
   if (typeof window !== 'undefined') {
-    import('../lib/supabase').then(({ supabase, isSupabaseConfigured }) => {
-      if (isSupabaseConfigured) {
-        supabase
-          .from('site_settings')
-          .upsert({
-            key: 'auto_verification',
-            value: {
-              enabled: updated.autoVerificationEnabled,
-              paused: updated.autoVerificationPaused,
-              until: updated.autoVerificationUntil,
-              updated_at: new Date().toISOString(),
-            },
+    import('../lib/supabase').then(async ({ supabase, isSupabaseConfigured }) => {
+      if (!isSupabaseConfigured) return;
+      const { data: { session } } = await supabase.auth.getSession().catch(() => ({ data: { session: null } }));
+      if (!session?.access_token) return;
+      supabase
+        .from('site_settings')
+        .upsert({
+          key: 'auto_verification',
+          value: {
+            enabled: updated.autoVerificationEnabled,
+            paused: updated.autoVerificationPaused,
+            until: updated.autoVerificationUntil,
             updated_at: new Date().toISOString(),
-          })
-          .then(() => {}, () => {});
-        supabase
-          .rpc('toggle_auto_verification', {
-            p_paused: paused,
-            p_reset_7_days: false,
-          })
-          .then(() => {}, () => {});
-      }
+          },
+          updated_at: new Date().toISOString(),
+        })
+        .then(() => {}, () => {});
+      supabase
+        .rpc('toggle_auto_verification', {
+          p_paused: paused,
+          p_reset_7_days: false,
+        })
+        .then(() => {}, () => {});
     });
   }
   return updated;
@@ -1064,30 +1076,31 @@ export function resetAutoVerification7Days(): SiteConfig {
     autoVerificationPaused: false,
     autoVerificationUntil: newExpiry,
   });
-  // Sync to Supabase site_settings table asynchronously
+  // Sync to Supabase site_settings table asynchronously only when an authenticated Supabase session exists
   if (typeof window !== 'undefined') {
-    import('../lib/supabase').then(({ supabase, isSupabaseConfigured }) => {
-      if (isSupabaseConfigured) {
-        supabase
-          .from('site_settings')
-          .upsert({
-            key: 'auto_verification',
-            value: {
-              enabled: true,
-              paused: false,
-              until: newExpiry,
-              updated_at: new Date().toISOString(),
-            },
+    import('../lib/supabase').then(async ({ supabase, isSupabaseConfigured }) => {
+      if (!isSupabaseConfigured) return;
+      const { data: { session } } = await supabase.auth.getSession().catch(() => ({ data: { session: null } }));
+      if (!session?.access_token) return;
+      supabase
+        .from('site_settings')
+        .upsert({
+          key: 'auto_verification',
+          value: {
+            enabled: true,
+            paused: false,
+            until: newExpiry,
             updated_at: new Date().toISOString(),
-          })
-          .then(() => {}, () => {});
-        supabase
-          .rpc('toggle_auto_verification', {
-            p_paused: false,
-            p_reset_7_days: true,
-          })
-          .then(() => {}, () => {});
-      }
+          },
+          updated_at: new Date().toISOString(),
+        })
+        .then(() => {}, () => {});
+      supabase
+        .rpc('toggle_auto_verification', {
+          p_paused: false,
+          p_reset_7_days: true,
+        })
+        .then(() => {}, () => {});
     });
   }
   return updated;

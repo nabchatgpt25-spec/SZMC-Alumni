@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import {
   AnimatePresence,
   LayoutGroup,
@@ -29,21 +29,35 @@ import {
   X,
   Bell,
   Activity,
+  Layers,
 } from 'lucide-react';
-import { AdminHubView } from './AdminHubView';
-import { AdminCommandCenterView } from './AdminCommandCenterView';
-import { AdminDashboard } from './AdminDashboard';
-import {
-  AdminControlPanel,
-  type AdminControlPanelSection,
-} from './AdminControlPanel';
-import { AdminDashboardStats } from './AdminDashboardStats';
-import { AdminUserTelemetryView } from './AdminUserTelemetryView';
+import type { AdminControlPanelSection } from './AdminControlPanel';
 import { AdminRealtimeProvider } from './AdminRealtimeContext';
 import { useAdminVisualMode } from './adminVisualModes';
 import { useAuth } from '../../context/AuthContext';
-import { isUserSuperAdmin, isUserGeneralAdmin } from '../../types';
 import { SZMCLogo } from '../SZMCLogo';
+
+const AdminHubView = lazy(() => import('./AdminHubView').then((m) => ({ default: m.AdminHubView })));
+const AdminCommandCenterView = lazy(() =>
+  import('./AdminCommandCenterView').then((m) => ({ default: m.AdminCommandCenterView }))
+);
+const AdminDashboard = lazy(() =>
+  import('./AdminDashboard').then((m) => ({ default: m.AdminDashboard }))
+);
+const AdminControlPanel = lazy(() =>
+  import('./AdminControlPanel').then((m) => ({ default: m.AdminControlPanel }))
+);
+const AdminDashboardStats = lazy(() =>
+  import('./AdminDashboardStats').then((m) => ({ default: m.AdminDashboardStats }))
+);
+const AdminUserTelemetryView = lazy(() =>
+  import('./AdminUserTelemetryView').then((m) => ({ default: m.AdminUserTelemetryView }))
+);
+const AdminCommunityManagementView = lazy(() =>
+  import('./AdminCommunityManagementView').then((m) => ({
+    default: m.AdminCommunityManagementView,
+  }))
+);
 
 const FLUID_EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 
@@ -109,9 +123,23 @@ interface AdminPageProps {
   onViewProfile?: (userId: number) => void;
 }
 
+interface ServerRolePermissions {
+  isSuperAdmin: boolean;
+  isAdmin: boolean;
+  isModerator: boolean;
+  canAccessAdminPortal: boolean;
+  canModerateContent: boolean;
+  canManageUsers: boolean;
+  canManageSettings: boolean;
+  canAssignAdminRoles: boolean;
+  canAccessTelemetry: boolean;
+  canExportBackups: boolean;
+}
+
 interface ServerVerificationResult {
   authorized: boolean;
-  role: string;
+  role: 'super_admin' | 'admin' | 'moderator';
+  permissions?: ServerRolePermissions;
   userId?: number;
   userUid?: string;
   email?: string;
@@ -119,6 +147,14 @@ interface ServerVerificationResult {
   verifiedViaMetadata?: boolean;
   timestamp?: string;
 }
+
+type AdminWorkspaceMode =
+  | 'control_panel'
+  | 'community'
+  | 'activity_center'
+  | 'dashboard'
+  | 'hub'
+  | 'command_center';
 
 export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, onViewProfile }) => {
   const { currentUser, isLoggedIn, getAuthHeaders } = useAuth();
@@ -129,7 +165,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, onViewProfile 
   const [denialReason, setDenialReason] = useState<string | null>(null);
   const [verifiedDetails, setVerifiedDetails] = useState<ServerVerificationResult | null>(null);
 
-  const [adminMode, setAdminMode] = useState<'control_panel' | 'activity_center' | 'dashboard' | 'hub' | 'command_center'>('control_panel');
+  const [adminMode, setAdminMode] = useState<AdminWorkspaceMode>('control_panel');
   const [controlSection, setControlSection] = useState<AdminControlPanelSection>('settings');
   const [classicSearch, setClassicSearch] = useState('');
   const [mobileClassicSidebarOpen, setMobileClassicSidebarOpen] = useState(false);
@@ -137,11 +173,12 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, onViewProfile 
   const [visualMode, setVisualMode] = useAdminVisualMode();
   const isNeonMode = visualMode === 'neon_aura';
 
-  // Strict Server-Side Authentication Verification
+  // Strict Zero-Trust Server-Side Authorization Verification (zero client-side fallbacks)
   const verifyServerAdminAccess = useCallback(async () => {
     if (!isLoggedIn) {
       setVerificationStatus('denied');
-      setDenialReason('Authentication required. Please log in with an administrator account.');
+      setDenialReason('Authentication required. Please log in with an authorized governance account.');
+      setVerifiedDetails(null);
       return;
     }
 
@@ -156,21 +193,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, onViewProfile 
       });
 
       if (!res.ok) {
-        if (currentUser.role === 'admin' || isUserSuperAdmin(currentUser) || isUserGeneralAdmin(currentUser)) {
-          setVerificationStatus('authorized');
-          setVerifiedDetails({
-            authorized: true,
-            role: 'admin',
-            userId: currentUser.id,
-            email: currentUser.email,
-            fullName: currentUser.fullName,
-            timestamp: new Date().toISOString(),
-          });
-          setDenialReason(null);
-          return;
-        }
-
-        let errMessage = 'Forbidden: Admin access restricted to verified administrators.';
+        let errMessage = 'Forbidden: Access restricted to verified moderators and administrators.';
         try {
           const errData = await res.json();
           if (errData?.error) errMessage = errData.error;
@@ -185,53 +208,35 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, onViewProfile 
       }
 
       const data: ServerVerificationResult = await res.json();
+      const allowedRoles = new Set(['super_admin', 'admin', 'moderator']);
 
-      // Ensure that only users with an 'admin' role can access the admin dashboard
-      if (data?.authorized === true && data?.role === 'admin') {
+      if (data?.authorized === true && allowedRoles.has(data.role)) {
         setVerificationStatus('authorized');
         setVerifiedDetails(data);
         setDenialReason(null);
-      } else if (currentUser.role === 'admin' || isUserSuperAdmin(currentUser) || isUserGeneralAdmin(currentUser)) {
-        setVerificationStatus('authorized');
-        setVerifiedDetails({
-          authorized: true,
-          role: 'admin',
-          userId: currentUser.id,
-          email: currentUser.email,
-          fullName: currentUser.fullName,
-          timestamp: new Date().toISOString(),
-        });
-        setDenialReason(null);
+
+        // Ensure moderators land on a permitted moderation section immediately
+        if (data.role === 'moderator') {
+          setAdminMode('control_panel');
+          setControlSection('posts');
+        }
       } else {
         setVerificationStatus('denied');
         setDenialReason(
-          'Your account role is not recognized as an administrator in Supabase Auth metadata or verified governance records.'
+          'Your account role is not verified for administrative or moderation access on the server.'
         );
         setVerifiedDetails(null);
       }
     } catch (err: any) {
-      if (currentUser.role === 'admin' || isUserSuperAdmin(currentUser) || isUserGeneralAdmin(currentUser)) {
-        setVerificationStatus('authorized');
-        setVerifiedDetails({
-          authorized: true,
-          role: 'admin',
-          userId: currentUser.id,
-          email: currentUser.email,
-          fullName: currentUser.fullName,
-          timestamp: new Date().toISOString(),
-        });
-        setDenialReason(null);
-        return;
-      }
       console.error('Server-side admin verification failed:', err);
       setVerificationStatus('denied');
       setDenialReason(
-        err.message ||
-          'Unable to verify administrative authorization with backend server. Check your network connection.'
+        err?.message ||
+          'Unable to verify administrative authorization with the backend server. Access is denied until verified.'
       );
       setVerifiedDetails(null);
     }
-  }, [isLoggedIn, currentUser, getAuthHeaders]);
+  }, [isLoggedIn, getAuthHeaders]);
 
   useEffect(() => {
     void verifyServerAdminAccess();
@@ -332,11 +337,93 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, onViewProfile 
   }
 
   const adminDisplayName = verifiedDetails?.fullName || currentUser.fullName || 'Administrator';
-  const adminRoleLabel = verifiedDetails?.role || 'admin';
+  const verifiedRole: 'super_admin' | 'admin' | 'moderator' =
+    verifiedDetails?.role === 'super_admin'
+      ? 'super_admin'
+      : verifiedDetails?.role === 'admin'
+      ? 'admin'
+      : 'moderator';
+  const serverPerms = verifiedDetails?.permissions;
+  const isVerifiedSuperAdmin =
+    verifiedRole === 'super_admin' || Boolean(serverPerms?.isSuperAdmin);
+  const isVerifiedAdmin =
+    isVerifiedSuperAdmin || verifiedRole === 'admin' || Boolean(serverPerms?.isAdmin);
+  const adminRoleLabel =
+    verifiedRole === 'super_admin'
+      ? 'Super Admin'
+      : verifiedRole === 'admin'
+      ? 'Admin'
+      : 'Moderator';
+
+  const allMainNavItems: Array<{
+    id: AdminWorkspaceMode;
+    label: string;
+    icon: React.ComponentType<{ className?: string }>;
+    minTier: 'moderator' | 'admin' | 'super_admin';
+  }> = [
+    { id: 'control_panel', label: 'Control Panel', icon: Radio, minTier: 'moderator' },
+    { id: 'community', label: 'The Quad', icon: Layers, minTier: 'moderator' },
+    { id: 'activity_center', label: 'User Activity & Ads', icon: Activity, minTier: 'super_admin' },
+    { id: 'dashboard', label: 'Dashboard', icon: ShieldCheck, minTier: 'moderator' },
+    { id: 'hub', label: 'Admin Hub', icon: Sliders, minTier: 'admin' },
+    { id: 'command_center', label: 'Command Center', icon: Database, minTier: 'super_admin' },
+  ];
+
+  const classicMainNavItems = allMainNavItems.filter((item) => {
+    if (item.minTier === 'super_admin') return isVerifiedSuperAdmin;
+    if (item.minTier === 'admin') return isVerifiedAdmin;
+    return true;
+  });
+
+  const allControlSections: Array<{
+    id: AdminControlPanelSection;
+    label: string;
+    icon: React.ComponentType<{ className?: string }>;
+    minTier: 'moderator' | 'admin';
+  }> = [
+    { id: 'settings', label: 'Landing & Settings', icon: Settings, minTier: 'admin' },
+    { id: 'theme', label: 'Global Theme', icon: Palette, minTier: 'admin' },
+    { id: 'typography', label: 'Typography & Styles', icon: Type, minTier: 'admin' },
+    { id: 'posts', label: 'Posts & Feed', icon: FileText, minTier: 'moderator' },
+    { id: 'gallery', label: 'Gallery Media', icon: ImageIcon, minTier: 'moderator' },
+    { id: 'notices', label: 'Official Notices', icon: Bell, minTier: 'moderator' },
+    { id: 'messages', label: 'Messages', icon: MessageSquare, minTier: 'admin' },
+  ];
+
+  const classicControlSections = allControlSections.filter((sec) => {
+    if (sec.minTier === 'admin') return isVerifiedAdmin;
+    return true;
+  });
+
+  const effectiveAdminMode: AdminWorkspaceMode = classicMainNavItems.some((m) => m.id === adminMode)
+    ? adminMode
+    : classicMainNavItems[0]?.id || 'dashboard';
+
+  const effectiveControlSection: AdminControlPanelSection = classicControlSections.some(
+    (s) => s.id === controlSection
+  )
+    ? controlSection
+    : classicControlSections[0]?.id || 'posts';
+
+  const moduleLoadingFallback = (
+    <div
+      className={`min-h-[260px] rounded-2xl border flex items-center justify-center p-8 ${
+        isNeonMode
+          ? 'bg-[#081229]/70 border-cyan-400/20 text-cyan-200'
+          : 'bg-white dark:bg-slate-900 border-slate-200/80 dark:border-slate-800 text-slate-500 dark:text-slate-400'
+      }`}
+    >
+      <div className="flex items-center gap-2.5 text-xs font-semibold">
+        <Loader2 className="w-4 h-4 animate-spin" />
+        <span>Loading workspace module...</span>
+      </div>
+    </div>
+  );
 
   const renderActiveModule = () => (
-    <AnimatePresence mode="wait">
-      {adminMode === 'control_panel' ? (
+    <Suspense fallback={moduleLoadingFallback}>
+      <AnimatePresence mode="wait">
+      {effectiveAdminMode === 'control_panel' ? (
         <motion.div
           key="module-control-panel"
           layout
@@ -347,12 +434,33 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, onViewProfile 
           transition={{ layout: { duration: 0.32, ease: FLUID_EASE } }}
         >
           <AdminControlPanel
-            activeSection={controlSection}
-            onSectionChange={setControlSection}
+            activeSection={effectiveControlSection}
+            onSectionChange={(nextSec) => {
+              if (classicControlSections.some((s) => s.id === nextSec)) {
+                setControlSection(nextSec);
+              }
+            }}
             externalSearch={!isNeonMode ? classicSearch : undefined}
           />
         </motion.div>
-      ) : adminMode === 'activity_center' ? (
+      ) : effectiveAdminMode === 'community' ? (
+        <motion.div
+          key="module-community"
+          layout
+          variants={adminModuleSwapVariants}
+          initial="initial"
+          animate="animate"
+          exit="exit"
+          transition={{ layout: { duration: 0.32, ease: FLUID_EASE } }}
+        >
+          <AdminCommunityManagementView
+            verifiedRole={verifiedRole}
+            visualMode={visualMode}
+            externalSearch={!isNeonMode ? classicSearch : undefined}
+            onViewProfile={onViewProfile}
+          />
+        </motion.div>
+      ) : effectiveAdminMode === 'activity_center' && isVerifiedSuperAdmin ? (
         <motion.div
           key="module-activity-center"
           layout
@@ -367,7 +475,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, onViewProfile 
             externalSearch={!isNeonMode ? classicSearch : undefined}
           />
         </motion.div>
-      ) : adminMode === 'dashboard' ? (
+      ) : effectiveAdminMode === 'dashboard' ? (
         <motion.div
           key="module-dashboard"
           layout
@@ -379,7 +487,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, onViewProfile 
         >
           <AdminDashboard onNavigate={onNavigate} onViewProfile={onViewProfile} />
         </motion.div>
-      ) : adminMode === 'hub' ? (
+      ) : effectiveAdminMode === 'hub' && isVerifiedAdmin ? (
         <motion.div
           key="module-hub"
           layout
@@ -393,14 +501,14 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, onViewProfile 
             currentUser={{
               id: verifiedDetails?.userId || currentUser.id,
               fullName: adminDisplayName,
-              role: 'admin',
+              role: verifiedRole,
               email: verifiedDetails?.email || currentUser.email,
             }}
             onNavigate={onNavigate}
             onViewProfile={onViewProfile}
           />
         </motion.div>
-      ) : (
+      ) : isVerifiedSuperAdmin ? (
         <motion.div
           key="module-command-center"
           layout
@@ -412,31 +520,22 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, onViewProfile 
         >
           <AdminCommandCenterView onViewProfile={onViewProfile} />
         </motion.div>
+      ) : (
+        <motion.div
+          key="module-fallback-dashboard"
+          layout
+          variants={adminModuleSwapVariants}
+          initial="initial"
+          animate="animate"
+          exit="exit"
+          transition={{ layout: { duration: 0.32, ease: FLUID_EASE } }}
+        >
+          <AdminDashboard onNavigate={onNavigate} onViewProfile={onViewProfile} />
+        </motion.div>
       )}
-    </AnimatePresence>
+      </AnimatePresence>
+    </Suspense>
   );
-
-  const classicMainNavItems = [
-    { id: 'control_panel', label: 'Control Panel', icon: Radio },
-    { id: 'activity_center', label: 'User Activity & Ads', icon: Activity },
-    { id: 'dashboard', label: 'Dashboard', icon: ShieldCheck },
-    { id: 'hub', label: 'Admin Hub', icon: Sliders },
-    { id: 'command_center', label: 'Command Center', icon: Database },
-  ] as const;
-
-  const classicControlSections: Array<{
-    id: AdminControlPanelSection;
-    label: string;
-    icon: React.ComponentType<{ className?: string }>;
-  }> = [
-    { id: 'settings', label: 'Landing & Settings', icon: Settings },
-    { id: 'theme', label: 'Global Theme', icon: Palette },
-    { id: 'typography', label: 'Typography & Styles', icon: Type },
-    { id: 'posts', label: 'Posts & Feed', icon: FileText },
-    { id: 'gallery', label: 'Gallery Media', icon: ImageIcon },
-    { id: 'notices', label: 'Official Notices', icon: Bell },
-    { id: 'messages', label: 'Messages', icon: MessageSquare },
-  ];
 
   const renderClassicSidebarContent = () => (
     <div className="flex flex-col h-full">
@@ -502,7 +601,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, onViewProfile 
           <nav className="space-y-0.5">
             {classicMainNavItems.map((item) => {
               const Icon = item.icon;
-              const isActive = adminMode === item.id;
+              const isActive = effectiveAdminMode === item.id;
               return (
                 <button
                   key={item.id}
@@ -533,7 +632,8 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, onViewProfile 
           <nav className="space-y-0.5">
             {classicControlSections.map((sec) => {
               const Icon = sec.icon;
-              const isActive = adminMode === 'control_panel' && controlSection === sec.id;
+              const isActive =
+                effectiveAdminMode === 'control_panel' && effectiveControlSection === sec.id;
               return (
                 <button
                   key={sec.id}
@@ -692,7 +792,9 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, onViewProfile 
                     transition={{ layout: { duration: 0.34, ease: FLUID_EASE } }}
                     className="w-full"
                   >
-                    <AdminDashboardStats />
+                    <Suspense fallback={moduleLoadingFallback}>
+                      <AdminDashboardStats />
+                    </Suspense>
                   </motion.div>
                 </div>
               </div>
@@ -732,7 +834,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, onViewProfile 
                       </h2>
                       <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-400/30">
                         <CheckCircle2 className="w-2.5 h-2.5" />
-                        Verified Admin
+                        Verified {adminRoleLabel}
                       </span>
                     </div>
                     <p className="text-[11px] truncate text-slate-300">
@@ -783,7 +885,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, onViewProfile 
                   <div className="flex items-center p-1 rounded-xl w-full sm:w-auto shrink-0 gap-1 overflow-x-auto bg-slate-950/80 border border-white/10">
                     {classicMainNavItems.map((tab) => {
                       const Icon = tab.icon;
-                      const active = adminMode === tab.id;
+                      const active = effectiveAdminMode === tab.id;
                       return (
                         <button
                           key={tab.id}
@@ -816,7 +918,9 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, onViewProfile 
                 transition={{ layout: { duration: 0.34, ease: FLUID_EASE } }}
                 className="w-full"
               >
-                <AdminDashboardStats />
+                <Suspense fallback={moduleLoadingFallback}>
+                  <AdminDashboardStats />
+                </Suspense>
               </motion.div>
 
               {/* Staggered Management Module Stage with Fluid Layout Transitions */}

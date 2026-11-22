@@ -9,12 +9,48 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Content-Type": "application/json",
-};
+function isAllowedOrigin(origin: string): boolean {
+  const normalized = origin.trim().replace(/\/+$/, "");
+  const extraOrigins = (Deno.env.get("ALLOWED_ORIGINS") || "")
+    .split(",")
+    .map((o) => o.trim().replace(/\/+$/, ""))
+    .filter(Boolean);
+
+  if (extraOrigins.includes(normalized)) return true;
+
+  return (
+    normalized === "https://szmcalumni.net" ||
+    normalized === "https://www.szmcalumni.net" ||
+    /^https:\/\/([a-zA-Z0-9-]+\.)*szmcalumni\.net$/.test(normalized) ||
+    /^https:\/\/([a-zA-Z0-9-]+\.)*alumniworld\.xyz$/.test(normalized) ||
+    /^https:\/\/([a-zA-Z0-9-]+\.)*run\.app$/.test(normalized) ||
+    /^https:\/\/([a-zA-Z0-9-]+\.)*googleusercontent\.com$/.test(normalized) ||
+    /^https?:\/\/(localhost|127\.0\.0\.1)(:[0-9]+)?$/.test(normalized)
+  );
+}
+
+function buildCorsHeaders(req: Request): { allowed: boolean; headers: Record<string, string> } {
+  const origin = req.headers.get("Origin");
+  const baseHeaders: Record<string, string> = {
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Content-Type": "application/json",
+    "Vary": "Origin",
+  };
+  if (!origin) {
+    return { allowed: true, headers: baseHeaders };
+  }
+  if (!isAllowedOrigin(origin)) {
+    return { allowed: false, headers: baseHeaders };
+  }
+  return {
+    allowed: true,
+    headers: {
+      ...baseHeaders,
+      "Access-Control-Allow-Origin": origin,
+    },
+  };
+}
 
 // -----------------------------------------------------------------------------
 // SSRF (Server-Side Request Forgery) DEFENSE
@@ -268,6 +304,14 @@ async function safeFetchHtml(targetUrl: string, userAgent: string): Promise<{ ht
 // MAIN HANDLER
 // -----------------------------------------------------------------------------
 serve(async (req: Request) => {
+  const { allowed: originAllowed, headers: corsHeaders } = buildCorsHeaders(req);
+  if (!originAllowed) {
+    return new Response(
+      JSON.stringify({ error: "Forbidden: Origin not permitted." }),
+      { status: 403, headers: corsHeaders }
+    );
+  }
+
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }

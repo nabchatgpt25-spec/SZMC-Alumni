@@ -16,6 +16,11 @@ import {
   ShieldCheck,
   Check,
   CheckCheck,
+  Clock,
+  RotateCcw,
+  ChevronDown,
+  Ban,
+  Megaphone,
 } from 'lucide-react';
 import type { ChatConversation, ChatMessage } from '../../types/messaging';
 import { playSound } from '../../utils/audio';
@@ -25,7 +30,10 @@ interface ChatThreadProps {
   messages: ChatMessage[];
   myId: number;
   isSuperAdmin?: boolean;
+  readReceiptsEnabled?: boolean;
   loading: boolean;
+  hasMoreMessages?: boolean;
+  loadingOlder?: boolean;
   error: string | null;
   sending: boolean;
   typingText?: string | null;
@@ -33,7 +41,10 @@ interface ChatThreadProps {
   onTyping?: () => void;
   onBack: () => void;
   onOpenSettings: () => void;
+  onLoadOlder?: () => Promise<void>;
   onSend: (body: string) => Promise<boolean>;
+  onRetrySend?: (message: ChatMessage) => void;
+  onDismissFailed?: (tempId: string) => void;
   onEdit: (messageId: string, body: string) => Promise<boolean>;
   onDelete: (messageId: string) => Promise<void>;
 }
@@ -52,20 +63,38 @@ function formatTime(iso: string): string {
   return new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 
+function formatLastSeen(iso?: string | null): string | null {
+  if (!iso) return null;
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return null;
+  const diffMin = Math.floor((Date.now() - date.getTime()) / 60000);
+  if (diffMin < 2) return 'Last seen just now';
+  if (diffMin < 60) return `Last seen ${diffMin}m ago`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `Last seen ${diffHr}h ago`;
+  return `Last seen ${date.toLocaleDateString([], { month: 'short', day: 'numeric' })}`;
+}
+
 export const ChatThread: React.FC<ChatThreadProps> = ({
   conversation,
   messages,
   myId,
   isSuperAdmin = false,
+  readReceiptsEnabled = true,
   loading,
+  hasMoreMessages = false,
+  loadingOlder = false,
   error,
   sending,
   typingText,
-  isPeerOnline = true,
+  isPeerOnline = false,
   onTyping,
   onBack,
   onOpenSettings,
+  onLoadOlder,
   onSend,
+  onRetrySend,
+  onDismissFailed,
   onEdit,
   onDelete,
 }) => {
@@ -73,26 +102,88 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState('');
   const [savingEdit, setSavingEdit] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [callToast, setCallToast] = useState<string | null>(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [hasUnseenBelow, setHasUnseenBelow] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const isNearBottomRef = useRef(true);
+  const prevLastMsgIdRef = useRef<string | null>(null);
+  const pendingScrollRestoreHeightRef = useRef<number | null>(null);
 
   useEffect(() => {
     setDraft('');
     setEditingId(null);
+    setConfirmDeleteId(null);
+    setHasUnseenBelow(false);
+    isNearBottomRef.current = true;
+    prevLastMsgIdRef.current = null;
+    pendingScrollRestoreHeightRef.current = null;
   }, [conversation.id]);
 
+  // Smart auto-scroll: preserve scroll offset on older-page prepend, auto-scroll on
+  // thread switch / own message / near-bottom, and show jump pill when scrolled up.
   useEffect(() => {
     const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [messages.length, conversation.id, typingText]);
+    if (!el) return;
+
+    if (pendingScrollRestoreHeightRef.current !== null) {
+      const prevHeight = pendingScrollRestoreHeightRef.current;
+      pendingScrollRestoreHeightRef.current = null;
+      const delta = el.scrollHeight - prevHeight;
+      if (delta > 0) {
+        el.scrollTop = delta;
+      }
+      return;
+    }
+
+    const latest = messages[messages.length - 1];
+    const latestId = latest?.id ?? null;
+    const isInitialLoad = prevLastMsgIdRef.current === null && messages.length > 0;
+    const appendedNewMessage = latestId !== null && latestId !== prevLastMsgIdRef.current;
+    const sentByMe = latest?.senderId === myId;
+    prevLastMsgIdRef.current = latestId;
+
+    if (isInitialLoad || sentByMe || isNearBottomRef.current) {
+      el.scrollTop = el.scrollHeight;
+      setHasUnseenBelow(false);
+    } else if (appendedNewMessage) {
+      setHasUnseenBelow(true);
+    }
+  }, [messages, conversation.id, typingText, myId]);
+
+  const handleScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const nearBottom = distanceFromBottom < 140;
+    isNearBottomRef.current = nearBottom;
+    if (nearBottom) setHasUnseenBelow(false);
+  };
+
+  const scrollToBottom = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    isNearBottomRef.current = true;
+    setHasUnseenBelow(false);
+  };
+
+  const handleLoadOlderClick = async () => {
+    if (!onLoadOlder || loadingOlder) return;
+    const el = scrollRef.current;
+    if (el) {
+      pendingScrollRestoreHeightRef.current = el.scrollHeight;
+    }
+    await onLoadOlder();
+  };
 
   const submit = async () => {
     const body = draft.trim();
     if (!body || sending) return;
+    setDraft('');
     const ok = await onSend(body);
     if (ok) {
-      setDraft('');
       playSound('pop');
     }
   };
@@ -118,8 +209,8 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
     if (ok) setEditingId(null);
   };
 
-  const handleDelete = (messageId: string) => {
-    if (!window.confirm('Delete this message for everyone?')) return;
+  const handleConfirmDelete = (messageId: string) => {
+    setConfirmDeleteId(null);
     void onDelete(messageId);
   };
 
@@ -165,7 +256,7 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
               alt={person.fullName}
               className="w-10 h-10 rounded-full object-cover ring-1 ring-slate-200/80 dark:ring-slate-700"
             />
-            {isPeerOnline && (
+            {isPeerOnline && !conversation.isBlockedEitherWay && conversation.type !== 'announcement' && (
               <span
                 className="absolute bottom-0 right-0 w-3 h-3 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-slate-900"
                 title="Active now"
@@ -178,16 +269,23 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
               <h3 className="text-sm font-bold text-slate-900 dark:text-white truncate">
                 {person.fullName}
               </h3>
-              <ShieldCheck className="w-4 h-4 text-[#0084FF] shrink-0" />
+              {(person.verificationStatus === 'verified' || conversation.type === 'announcement') && (
+                <ShieldCheck className="w-4 h-4 text-[#0084FF] shrink-0" />
+              )}
             </div>
             <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate flex items-center gap-1">
-              {isPeerOnline ? (
+              {conversation.type === 'announcement' ? (
+                <span>Official SZMC Alumni Broadcast Channel</span>
+              ) : isPeerOnline && !conversation.isBlockedEitherWay ? (
                 <>
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
                   <span className="font-medium text-emerald-600 dark:text-emerald-400">Active now</span>
                 </>
               ) : (
-                <span>Batch {person.batchYear || 'Alumnus'} · {person.profession || 'Doctor'}</span>
+                <span>
+                  {(!conversation.isBlockedEitherWay && formatLastSeen(person.lastSeenAt)) ||
+                    `Batch ${person.batchYear || 'Alumnus'} · ${person.profession || 'Doctor'}`}
+                </span>
               )}
             </p>
           </div>
@@ -223,7 +321,26 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
       </div>
 
       {/* Messages Canvas */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-3 bg-[#F0F2F5]/40 dark:bg-slate-950/40">
+      <div
+        ref={scrollRef}
+        onScroll={handleScroll}
+        className="flex-1 overflow-y-auto px-4 py-4 space-y-3 bg-[#F0F2F5]/40 dark:bg-slate-950/40 relative"
+      >
+        {/* Cursor Pagination: Load older history */}
+        {hasMoreMessages && !loading && (
+          <div className="flex justify-center pb-2">
+            <button
+              type="button"
+              onClick={() => void handleLoadOlderClick()}
+              disabled={loadingOlder}
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-[11px] font-bold text-slate-600 dark:text-slate-300 hover:border-[#0084FF] hover:text-[#0084FF] shadow-2xs disabled:opacity-50 transition-colors cursor-pointer"
+            >
+              {loadingOlder && <Loader2 className="w-3 h-3 animate-spin" />}
+              <span>{loadingOlder ? 'Loading older messages...' : 'Load older messages'}</span>
+            </button>
+          </div>
+        )}
+
         {loading && messages.length === 0 && (
           <div className="flex justify-center py-10">
             <Loader2 className="w-6 h-6 animate-spin text-[#0084FF]" />
@@ -331,6 +448,8 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
 
                       <div
                         className={`text-[14px] leading-relaxed whitespace-pre-wrap break-words transition-all ${
+                          message.status === 'sending' ? 'opacity-75' : message.status === 'failed' ? 'opacity-80 ring-1 ring-rose-400' : ''
+                        } ${
                           deleted
                             ? 'italic text-slate-500 dark:text-slate-400 bg-slate-200/60 dark:bg-slate-800 px-4 py-2.5 rounded-2xl'
                             : message.type === 'like' || message.body === '👍'
@@ -351,45 +470,118 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
                           : message.body}
                       </div>
 
-                      {/* Message Actions (Edit / Delete for sender or Super Admin) */}
-                      {(mine || isSuperAdmin) && !deleted && !editing && (
+                      {/* Message Actions: Edit strictly for original author; Delete for author or Admin moderation */}
+                      {(mine || isSuperAdmin) &&
+                        !deleted &&
+                        !editing &&
+                        message.status !== 'sending' &&
+                        message.status !== 'failed' && (
                         <div
                           className={`absolute top-1/2 -translate-y-1/2 ${
-                            mine ? '-left-16' : '-right-16'
-                          } hidden group-hover/msg:flex items-center gap-1 bg-white dark:bg-slate-800 p-1 rounded-full shadow-md border border-slate-200 dark:border-slate-700 z-10`}
+                            confirmDeleteId === message.id
+                              ? mine
+                                ? '-left-32 flex'
+                                : '-right-32 flex'
+                              : mine
+                              ? '-left-16 hidden group-hover/msg:flex'
+                              : '-right-12 hidden group-hover/msg:flex'
+                          } items-center gap-1 bg-white dark:bg-slate-800 p-1 rounded-full shadow-md border border-slate-200 dark:border-slate-700 z-10`}
                         >
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setEditingId(message.id);
-                              setEditDraft(message.body);
-                            }}
-                            title="Edit"
-                            className="p-1 rounded-full text-slate-500 hover:text-[#0084FF] hover:bg-slate-100 dark:hover:bg-slate-700 cursor-pointer"
-                          >
-                            <Pencil className="w-3 h-3" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleDelete(message.id)}
-                            title="Delete"
-                            className="p-1 rounded-full text-slate-500 hover:text-rose-600 hover:bg-slate-100 dark:hover:bg-slate-700 cursor-pointer"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                          </button>
+                          {confirmDeleteId === message.id ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => handleConfirmDelete(message.id)}
+                                className="px-2 py-0.5 rounded-full bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold cursor-pointer whitespace-nowrap"
+                              >
+                                {mine ? 'Delete' : 'Remove'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteId(null)}
+                                className="px-2 py-0.5 rounded-full text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 text-[10px] font-semibold cursor-pointer"
+                              >
+                                Cancel
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              {mine && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setConfirmDeleteId(null);
+                                    setEditingId(message.id);
+                                    setEditDraft(message.body);
+                                  }}
+                                  title="Edit"
+                                  className="p-1 rounded-full text-slate-500 hover:text-[#0084FF] hover:bg-slate-100 dark:hover:bg-slate-700 cursor-pointer"
+                                >
+                                  <Pencil className="w-3 h-3" />
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteId(message.id)}
+                                title={mine ? 'Delete' : 'Remove message (Admin moderation)'}
+                                className="p-1 rounded-full text-slate-500 hover:text-rose-600 hover:bg-slate-100 dark:hover:bg-slate-700 cursor-pointer"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            </>
+                          )}
                         </div>
                       )}
                     </div>
                   )}
 
-                  {/* Message timestamp and status */}
+                  {/* Message timestamp, delivery state, and REAL read receipts */}
                   <div className={`flex items-center gap-1.5 mt-0.5 px-1 ${mine ? 'justify-end' : 'justify-start'}`}>
-                    <span className="text-[10px] text-slate-400 dark:text-slate-500">
-                      {formatTime(message.createdAt)}
-                      {message.editedAt && !deleted ? ' · edited' : ''}
-                    </span>
-                    {mine && !deleted && (
-                      <CheckCheck className="w-3 h-3 text-[#0084FF]" />
+                    {message.status === 'failed' ? (
+                      <div className="flex items-center gap-2 text-[10px] font-semibold text-rose-600 dark:text-rose-400">
+                        <span>Failed to send</span>
+                        {onRetrySend && (
+                          <button
+                            type="button"
+                            onClick={() => onRetrySend(message)}
+                            className="inline-flex items-center gap-0.5 underline hover:text-rose-700 cursor-pointer"
+                          >
+                            <RotateCcw className="w-2.5 h-2.5" />
+                            Retry
+                          </button>
+                        )}
+                        {onDismissFailed && (
+                          <button
+                            type="button"
+                            onClick={() => onDismissFailed(message.id)}
+                            className="text-slate-400 hover:text-slate-600 cursor-pointer"
+                          >
+                            Dismiss
+                          </button>
+                        )}
+                      </div>
+                    ) : (
+                      <>
+                        <span className="text-[10px] text-slate-400 dark:text-slate-500">
+                          {message.status === 'sending' ? 'Sending...' : formatTime(message.createdAt)}
+                          {message.editedAt && !deleted ? ' · edited' : ''}
+                        </span>
+                        {mine && !deleted && (
+                          message.status === 'sending' ? (
+                            <Clock className="w-3 h-3 text-slate-400" aria-label="Sending" />
+                          ) : readReceiptsEnabled &&
+                            conversation.peerLastReadAt &&
+                            message.createdAt <= conversation.peerLastReadAt ? (
+                            <span title="Seen">
+                              <CheckCheck className="w-3 h-3 text-[#0084FF]" />
+                            </span>
+                          ) : (
+                            <span title="Delivered">
+                              <Check className="w-3 h-3 text-slate-400 dark:text-slate-500" />
+                            </span>
+                          )
+                        )}
+                      </>
                     )}
                   </div>
                 </div>
@@ -415,6 +607,20 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
         )}
       </div>
 
+      {/* Floating jump-to-latest pill when scrolled up and a new message arrives */}
+      {hasUnseenBelow && (
+        <div className="absolute bottom-20 left-1/2 -translate-x-1/2 z-20">
+          <button
+            type="button"
+            onClick={scrollToBottom}
+            className="inline-flex items-center gap-1 px-3.5 py-1.5 rounded-full bg-[#0084FF] hover:bg-[#0073E6] text-white text-xs font-bold shadow-lg cursor-pointer animate-fadeIn"
+          >
+            <span>New messages</span>
+            <ChevronDown className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
       {/* Quick Emoji Bar */}
       {showEmojiPicker && (
         <div className="p-2 border-t border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center gap-2 overflow-x-auto">
@@ -431,88 +637,115 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
         </div>
       )}
 
-      {/* Meta Messenger Rounded Input Bar */}
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          void submit();
-        }}
-        className="p-2.5 sm:p-3 border-t border-slate-100 dark:border-slate-800/80 bg-white dark:bg-slate-900 flex items-center gap-1.5 sm:gap-2"
-      >
-        {/* Left Actions: Plus, Photo */}
-        <button
-          type="button"
-          onClick={() => setShowEmojiPicker((prev) => !prev)}
-          title="More actions"
-          className="p-2 rounded-full text-[#0084FF] hover:bg-blue-50 dark:hover:bg-slate-800 transition-colors cursor-pointer shrink-0"
-        >
-          <Plus className="w-5 h-5" />
-        </button>
-
-        <button
-          type="button"
-          onClick={() => {
-            setCallToast('Attach photo feature ready');
-            setTimeout(() => setCallToast(null), 2500);
+      {/* Composer area: blocked guard, read-only announcement guard, or standard composer */}
+      {conversation.isBlockedEitherWay ? (
+        <div className="p-3.5 border-t border-slate-100 dark:border-slate-800/80 bg-slate-50 dark:bg-slate-900/90 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600 dark:text-slate-300">
+          <div className="flex items-center gap-2 min-w-0">
+            <Ban className="w-4 h-4 text-rose-500 shrink-0" />
+            <span>
+              {conversation.isBlockedByMe
+                ? `You blocked ${person.fullName}. Unblock them to send messages again.`
+                : 'You can no longer send messages to this conversation.'}
+            </span>
+          </div>
+          {conversation.isBlockedByMe && (
+            <button
+              type="button"
+              onClick={onOpenSettings}
+              className="px-3 py-1.5 rounded-full bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 font-semibold transition-colors cursor-pointer shrink-0"
+            >
+              Manage Block
+            </button>
+          )}
+        </div>
+      ) : conversation.type === 'announcement' && !isSuperAdmin ? (
+        <div className="p-3.5 border-t border-slate-100 dark:border-slate-800/80 bg-slate-50 dark:bg-slate-900/90 flex items-center justify-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+          <Megaphone className="w-4 h-4 text-[#0084FF] shrink-0" />
+          <span>Official SZMC Alumni Announcements channel (read-only)</span>
+        </div>
+      ) : (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            void submit();
           }}
-          title="Attach photo"
-          className="p-2 rounded-full text-[#0084FF] hover:bg-blue-50 dark:hover:bg-slate-800 transition-colors cursor-pointer shrink-0 hidden sm:flex"
+          className="p-2.5 sm:p-3 border-t border-slate-100 dark:border-slate-800/80 bg-white dark:bg-slate-900 flex items-center gap-1.5 sm:gap-2"
         >
-          <ImageIcon className="w-5 h-5" />
-        </button>
-
-        {/* Rounded Input Pill */}
-        <div className="flex-1 flex items-center bg-[#F0F2F5] dark:bg-slate-800 rounded-full px-4 py-1.5 min-w-0">
-          <textarea
-            value={draft}
-            onChange={(e) => {
-              setDraft(e.target.value);
-              onTyping?.();
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                void submit();
-              }
-            }}
-            rows={1}
-            maxLength={2000}
-            placeholder="Aa"
-            aria-label="Message"
-            className="w-full resize-none bg-transparent text-sm text-slate-900 dark:text-white placeholder:text-slate-400 outline-none leading-relaxed max-h-24 py-1"
-          />
+          {/* Left Actions: Plus, Photo */}
           <button
             type="button"
             onClick={() => setShowEmojiPicker((prev) => !prev)}
-            title="Choose emoji"
-            className="p-1 text-[#0084FF] hover:opacity-80 transition-opacity cursor-pointer shrink-0"
+            title="More actions"
+            className="p-2 rounded-full text-[#0084FF] hover:bg-blue-50 dark:hover:bg-slate-800 transition-colors cursor-pointer shrink-0"
           >
-            <Smile className="w-5 h-5" />
+            <Plus className="w-5 h-5" />
           </button>
-        </div>
 
-        {/* Iconic Meta Messenger Right Action: Thumbs Up or Send Button */}
-        {draft.trim() ? (
-          <button
-            type="submit"
-            disabled={sending}
-            aria-label="Send message"
-            className="w-10 h-10 rounded-full bg-[#0084FF] hover:bg-[#0073E6] text-white flex items-center justify-center shadow-sm shadow-[#0084FF]/30 transition-transform active:scale-95 cursor-pointer shrink-0"
-          >
-            {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-          </button>
-        ) : (
           <button
             type="button"
-            onClick={sendThumbsUp}
-            disabled={sending}
-            title="Send Like"
-            className="p-2 rounded-full text-[#0084FF] hover:scale-125 transition-transform active:scale-95 cursor-pointer shrink-0"
+            onClick={() => {
+              setCallToast('Attach photo feature ready');
+              setTimeout(() => setCallToast(null), 2500);
+            }}
+            title="Attach photo"
+            className="p-2 rounded-full text-[#0084FF] hover:bg-blue-50 dark:hover:bg-slate-800 transition-colors cursor-pointer shrink-0 hidden sm:flex"
           >
-            <ThumbsUp className="w-6 h-6 fill-[#0084FF]" />
+            <ImageIcon className="w-5 h-5" />
           </button>
-        )}
-      </form>
+
+          {/* Rounded Input Pill */}
+          <div className="flex-1 flex items-center bg-[#F0F2F5] dark:bg-slate-800 rounded-full px-4 py-1.5 min-w-0">
+            <textarea
+              value={draft}
+              onChange={(e) => {
+                setDraft(e.target.value);
+                onTyping?.();
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  void submit();
+                }
+              }}
+              rows={1}
+              maxLength={2000}
+              placeholder="Aa"
+              aria-label="Message"
+              className="w-full resize-none bg-transparent text-sm text-slate-900 dark:text-white placeholder:text-slate-400 outline-none leading-relaxed max-h-24 py-1"
+            />
+            <button
+              type="button"
+              onClick={() => setShowEmojiPicker((prev) => !prev)}
+              title="Choose emoji"
+              className="p-1 text-[#0084FF] hover:opacity-80 transition-opacity cursor-pointer shrink-0"
+            >
+              <Smile className="w-5 h-5" />
+            </button>
+          </div>
+
+          {/* Iconic Meta Messenger Right Action: Thumbs Up or Send Button */}
+          {draft.trim() ? (
+            <button
+              type="submit"
+              disabled={sending}
+              aria-label="Send message"
+              className="w-10 h-10 rounded-full bg-[#0084FF] hover:bg-[#0073E6] text-white flex items-center justify-center shadow-sm shadow-[#0084FF]/30 transition-transform active:scale-95 cursor-pointer shrink-0"
+            >
+              {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={sendThumbsUp}
+              disabled={sending}
+              title="Send Like"
+              className="p-2 rounded-full text-[#0084FF] hover:scale-125 transition-transform active:scale-95 cursor-pointer shrink-0"
+            >
+              <ThumbsUp className="w-6 h-6 fill-[#0084FF]" />
+            </button>
+          )}
+        </form>
+      )}
     </div>
   );
 };

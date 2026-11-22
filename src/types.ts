@@ -75,7 +75,12 @@ export interface VouchRequest {
   message?: string;
 }
 
-export type UserRole = 'member' | 'batch_representative' | 'moderator' | 'admin';
+export type UserRole =
+  | 'member'
+  | 'batch_representative'
+  | 'moderator'
+  | 'admin'
+  | 'super_admin';
 
 export const SUPER_ADMIN_EMAILS = [
   'admin@szmcalumni.net',
@@ -87,41 +92,38 @@ export const SUPER_ADMIN_EMAILS = [
 ];
 
 /**
- * Administrator check: Verified via user role ('admin') or recognized administrative email.
+ * Super Administrator UI hint check (authoritative enforcement always runs server-side & via RLS).
  */
 export function isUserSuperAdmin(user?: { email?: string | null; role?: string | null } | null): boolean {
   if (!user) return false;
-  if (user.role === 'admin') return true;
+  if (user.role === 'super_admin') return true;
   if (user.email && SUPER_ADMIN_EMAILS.some((e) => e.toLowerCase() === user.email?.toLowerCase().trim())) return true;
   return false;
 }
 
 /**
- * General Admin check: Verified via user role ('admin') or recognized administrative email.
+ * General Admin UI hint check (strictly role === 'admin', excluding super_admin).
  */
 export function isUserGeneralAdmin(user?: { email?: string | null; role?: string | null } | null): boolean {
   if (!user) return false;
-  if (user.role === 'admin') return true;
-  if (user.email && SUPER_ADMIN_EMAILS.some((e) => e.toLowerCase() === user.email?.toLowerCase().trim())) return true;
-  return false;
+  if (isUserSuperAdmin(user)) return false;
+  return user.role === 'admin';
 }
 
 /**
- * Any admin check (role === 'admin' or recognized admin email)
+ * Any Administrator UI hint check ('super_admin' or 'admin').
  */
 export function isUserAnyAdmin(user?: { email?: string | null; role?: string | null } | null): boolean {
   if (!user) return false;
-  if (user.role === 'admin') return true;
-  if (user.email && SUPER_ADMIN_EMAILS.some((e) => e.toLowerCase() === user.email?.toLowerCase().trim())) return true;
-  return false;
+  return isUserSuperAdmin(user) || user.role === 'admin';
 }
 
 /**
- * Sub-Admin / Moderator check (excluding full admins)
+ * Sub-Admin / Moderator UI hint check (excluding admins and super admins).
  */
 export function isUserSubAdmin(user?: { email?: string | null; role?: string | null } | null): boolean {
   if (!user) return false;
-  if (user.role === 'admin' || isUserAnyAdmin(user)) return false;
+  if (isUserAnyAdmin(user)) return false;
   return user.role === 'moderator' || user.role === 'batch_representative';
 }
 
@@ -293,16 +295,30 @@ export interface PostComment {
   id: number;
   postId: number;
   userId: number;
+  parentCommentId?: number | null;
   fullName: string;
   avatarUrl: string;
   content: string;
   likesCount: number;
   likedByMe: boolean;
   createdAt: string;
+  mentionedUserIds?: number[];
   replies?: PostComment[];
 }
 
 export type ReactionType = 'like' | 'love' | 'care' | 'haha' | 'wow' | 'sad' | 'angry';
+
+export interface PostPoll {
+  id: number;
+  postId?: number | null;
+  question: string;
+  options: { id: number; label: string }[];
+  voteCounts: Record<number, number>;
+  totalVotes: number;
+  myVoteOptionIndex: number | null;
+  isClosed: boolean;
+  closesAt?: string | null;
+}
 
 export interface PostItem {
   id: number;
@@ -324,10 +340,37 @@ export interface PostItem {
   reactionsSummary?: Partial<Record<ReactionType, number>>;
   comments?: PostComment[];
   category?: 'General Update' | 'Tech & Innovation' | 'Professional Insights' | 'Reunion' | 'Achievement' | string;
+  communityCategory?: string;
+  audience?: 'public' | 'alumni_only' | 'my_batch' | 'connections';
+  isFeatured?: boolean;
+  isOfficial?: boolean;
+  priorityLevel?: number;
+  batchLoungeYear?: number | null;
+  officialPageId?: number | null;
+  officialPageName?: string | null;
+  officialPageSlug?: string | null;
+  repostOfId?: number | null;
+  repostCount?: number;
+  repostedPost?: {
+    id: number;
+    userId: number;
+    fullName: string;
+    avatarUrl: string;
+    batchYear?: number;
+    content: string;
+    createdAt: string;
+    images?: string[];
+    category?: string;
+  } | null;
+  mentionedUserIds?: number[];
+  poll?: PostPoll | null;
+  priorityTier?: number;
+  rankScore?: number;
   isEdited?: boolean;
   isSaved?: boolean;
   isBatchmate?: boolean;
   isFriend?: boolean;
+  isFollowing?: boolean;
   albumId?: number | string;
   albumTitle?: string;
   albumCoverUrl?: string;

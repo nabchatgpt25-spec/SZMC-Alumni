@@ -1,5 +1,12 @@
 import { supabase } from '../lib/supabase';
 import { NotificationItem, NotificationType } from '../types/notification.types';
+import { formatNotificationRelativeTime } from './communitySafetyUtils';
+import { fetchBlockedUserIds } from './communitySafetyService';
+
+function filterBlockedActors(items: NotificationItem[], blockedSet: Set<number>): NotificationItem[] {
+  if (!blockedSet.size) return items;
+  return items.filter((item) => !(item.actorId && blockedSet.has(item.actorId)));
+}
 
 /**
  * Fetch unread notifications via unread_notifications RPC.
@@ -7,13 +14,16 @@ import { NotificationItem, NotificationType } from '../types/notification.types'
  */
 export async function fetchUnreadNotificationsFromDb(userId: number): Promise<NotificationItem[]> {
   try {
+    const blockedIds = await fetchBlockedUserIds(userId);
+    const blockedSet = new Set(blockedIds);
+
     // 1. Primary: Only supabase.rpc('unread_notifications')
     const { data: rpcData, error: rpcErr } = await supabase.rpc('unread_notifications', {
       p_user_id: userId,
     });
 
     if (!rpcErr && Array.isArray(rpcData)) {
-      return rpcData.map(mapNotificationRow);
+      return filterBlockedActors(rpcData.map(mapNotificationRow), blockedSet);
     }
 
     // 2. Fallback: Direct query on notifications table for my rows only
@@ -25,7 +35,7 @@ export async function fetchUnreadNotificationsFromDb(userId: number): Promise<No
       .order('created_at', { ascending: false });
 
     if (!error && Array.isArray(data)) {
-      return data.map(mapNotificationRow);
+      return filterBlockedActors(data.map(mapNotificationRow), blockedSet);
     }
   } catch (err) {
     console.warn('fetchUnreadNotificationsFromDb notice:', err);
@@ -38,18 +48,23 @@ export async function fetchUnreadNotificationsFromDb(userId: number): Promise<No
  */
 export async function fetchNotificationsFromDb(userId: number): Promise<NotificationItem[]> {
   try {
-    const { data, error } = await supabase
-      .from('notifications')
-      .select('*, actor:alumni_profiles!notifications_actor_id_fkey(id, full_name, avatar_url)')
-      .eq('recipient_id', userId)
-      .order('created_at', { ascending: false })
-      .limit(50);
+    const [blockedIds, notifRes] = await Promise.all([
+      fetchBlockedUserIds(userId),
+      supabase
+        .from('notifications')
+        .select('*, actor:alumni_profiles!notifications_actor_id_fkey(id, full_name, avatar_url)')
+        .eq('recipient_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(50),
+    ]);
 
+    const { data, error } = notifRes;
     if (error || !data || data.length === 0) {
       return [];
     }
 
-    return data.map(mapNotificationRow);
+    const blockedSet = new Set(blockedIds);
+    return filterBlockedActors(data.map(mapNotificationRow), blockedSet);
   } catch (err) {
     console.warn('fetchNotificationsFromDb error:', err);
     return [];
@@ -75,18 +90,26 @@ export async function isSoundEnabledForUser(userId: number): Promise<boolean> {
 }
 
 /**
- * Normalizes notification types to canonical set:
- * post_like, post_comment, post_reaction, connection_request, connection_accepted, new_message, blood_request, system
+ * Normalizes notification types to the canonical Quad + Portal set.
  */
-function normalizeNotificationType(rawType: string, targetRoute?: string): NotificationType {
+export function normalizeNotificationType(rawType: string, targetRoute?: string): NotificationType {
   const t = (rawType || '').toLowerCase().trim();
   if (t === 'post_like' || t === 'like') return 'post_like';
   if (t === 'post_comment' || t === 'comment') return 'post_comment';
   if (t === 'post_reaction' || t === 'reaction') return 'post_reaction';
+  if (t === 'mention' || t === 'post_mention') return 'mention';
+  if (t === 'repost' || t === 'post_repost') return 'repost';
+  if (t === 'new_follower' || t === 'follow' || t === 'follower') return 'new_follower';
   if (t === 'connection_request') return 'connection_request';
   if (t === 'connection_accepted') return 'connection_accepted';
   if (t === 'new_message' || t === 'message') return 'new_message';
   if (t === 'blood_request' || t === 'blood') return 'blood_request';
+  if (t === 'batch_announcement') return 'batch_announcement';
+  if (t === 'official_announcement' || t === 'official_page_update') return 'official_announcement';
+  if (t === 'moderation_action' || t === 'moderation') return 'moderation_action';
+  if (t === 'verification') return 'verification';
+  if (t === 'mentorship') return 'mentorship';
+  if (t === 'career') return 'career';
   if (targetRoute === 'blood' || targetRoute === 'emergency') return 'blood_request';
   return 'system';
 }
@@ -94,12 +117,13 @@ function normalizeNotificationType(rawType: string, targetRoute?: string): Notif
 function mapNotificationRow(n: any): NotificationItem {
   const targetRoute = n.target_route || undefined;
   const type = normalizeNotificationType(n.type, targetRoute);
+  const createdAt = n.created_at || new Date().toISOString();
 
   return {
     id: Number(n.id),
     title: n.title || 'Notification',
     message: n.message || '',
-    timeAgo: n.created_at ? new Date(n.created_at).toISOString() : 'Just now',
+    timeAgo: formatNotificationRelativeTime(createdAt),
     unread: Boolean(n.unread),
     type,
     targetRoute,
@@ -109,7 +133,7 @@ function mapNotificationRow(n: any): NotificationItem {
     actorAvatar: n.actor_avatar || n.actor?.avatar_url || undefined,
     postId: n.post_id ? Number(n.post_id) : undefined,
     bloodRequestId: n.blood_request_id || undefined,
-    createdAt: n.created_at || new Date().toISOString(),
+    createdAt,
   };
 }
 

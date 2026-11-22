@@ -56,9 +56,26 @@ export const supabase: SupabaseClient = createClient(effectiveUrl, effectiveAnon
  */
 export const supabaseAdmin: SupabaseClient = supabase;
 
+// Strictly in-memory fallback token holder (never persisted to localStorage)
+let inMemoryDirectAuthToken: string | null = null;
+
+export function setInMemoryDirectAuthToken(token: string | null): void {
+  inMemoryDirectAuthToken = token && token.trim() ? token.trim() : null;
+  if (typeof window !== 'undefined') {
+    try {
+      // Proactively purge any legacy persisted admin token from localStorage
+      localStorage.removeItem('szmc_direct_auth_token');
+    } catch {}
+  }
+}
+
+export function getInMemoryDirectAuthToken(): string | null {
+  return inMemoryDirectAuthToken;
+}
+
 /**
- * Returns HTTP headers with the active user's Bearer token (Supabase JWT or verified
- * server-issued admin token) for authenticated calls to `/api/*` endpoints.
+ * Returns HTTP headers with the active user's Bearer token (Supabase JWT preferred,
+ * falling back to in-memory server-issued session token) for authenticated calls to `/api/*`.
  */
 export async function getClientAuthHeaders(
   includeJsonContentType = true
@@ -78,17 +95,12 @@ export async function getClientAuthHeaders(
         return headers;
       }
     } catch {
-      // Fallback to direct auth token if present
+      // Fallback to in-memory token if present
     }
   }
 
-  if (typeof window !== 'undefined') {
-    try {
-      const directToken = localStorage.getItem('szmc_direct_auth_token');
-      if (directToken && directToken.trim()) {
-        headers.Authorization = `Bearer ${directToken.trim()}`;
-      }
-    } catch {}
+  if (inMemoryDirectAuthToken) {
+    headers.Authorization = `Bearer ${inMemoryDirectAuthToken}`;
   }
 
   return headers;

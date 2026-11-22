@@ -11,5 +11,6 @@ export * from './adminVisualModes';
 export * from './AdminNeonAnalyticsVisuals';
 export * from './AdminClassicOverviewWidgets';
 export * from './AdminUserTelemetryView';
+export * from './UserSessionJourney';
 export * from './adminTypes';
 export * from './adminService';

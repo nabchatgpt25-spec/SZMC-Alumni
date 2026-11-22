@@ -8,10 +8,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export default defineConfig(() => {
-  // Resolve valid Supabase URL: must be an http(s) URL
+  // Resolve valid Supabase URL from environment variables (never inject conflicting hardcoded keys)
   const rawUrlCandidates = [
-    process.env.SUPABASE_URL,
     process.env.VITE_SUPABASE_URL,
+    process.env.SUPABASE_URL,
   ];
   const resolvedSupabaseUrl =
     rawUrlCandidates.find(
@@ -19,25 +19,19 @@ export default defineConfig(() => {
         typeof u === 'string' &&
         (u.trim().startsWith('http://') || u.trim().startsWith('https://')) &&
         !u.includes('placeholder.supabase.co')
-    )?.trim() || 'https://hjuyiqyviohinbhzaipl.supabase.co';
+    )?.trim() || '';
 
-  // Resolve valid Supabase Anon / Publishable Key:
+  // Resolve valid public Supabase Anon Key strictly from environment variables
   const rawKeyCandidates = [
-    process.env.SUPABASE_ANON_KEY,
-    process.env.VITE_SUPABASE_URL && !process.env.VITE_SUPABASE_URL.startsWith('http')
-      ? process.env.VITE_SUPABASE_URL
-      : undefined,
     process.env.VITE_SUPABASE_ANON_KEY,
+    process.env.SUPABASE_ANON_KEY,
   ];
   const resolvedSupabaseAnonKey =
     rawKeyCandidates.find(
       (k) =>
         typeof k === 'string' &&
         (k.trim().startsWith('eyJ') || k.trim().startsWith('sb_publishable_'))
-    )?.trim() ||
-    process.env.SUPABASE_ANON_KEY ||
-    process.env.VITE_SUPABASE_ANON_KEY ||
-    'sb_publishable_uTT8ybm0tcIb04W4cN54Tg_YujRpZQg';
+    )?.trim() || '';
 
   return {
     define: {
@@ -77,6 +71,16 @@ export default defineConfig(() => {
             }
             if (id.includes('node_modules/@supabase')) {
               return 'vendor-supabase';
+            }
+            if (
+              id.includes('node_modules/recharts') ||
+              id.includes('node_modules/d3-') ||
+              id.includes('node_modules/victory-vendor')
+            ) {
+              return 'vendor-charts';
+            }
+            if (id.includes('node_modules/hls.js')) {
+              return 'vendor-video';
             }
           },
         },

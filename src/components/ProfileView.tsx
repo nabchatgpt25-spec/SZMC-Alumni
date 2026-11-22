@@ -33,6 +33,8 @@ import {
   AlertTriangle,
   AlertCircle,
   Loader2,
+  Flag,
+  ShieldBan,
 } from 'lucide-react';
 import { AlumniProfile, PostItem, PostComment, SPECIALTIES_LIST, DEGREES_LIST } from '../types';
 import { ALUMNI_PROFILES, loadStoredAlumniProfiles } from '../data/mockData';
@@ -61,6 +63,13 @@ import { BloodDonorRegistration } from './BloodDonorRegistration';
 import { getDonorProfileByUserId } from '../utils/bloodDonationService';
 import campusHeroImg from '../assets/images/szmc_campus_hero.jpg';
 import { compressImageFileToDataUrl } from '../utils/mediaStorage';
+import { SocialGraphActions, MyNetworkPanel } from './community/SocialGraphActions';
+import { ReportContentModal, BlockedUsersPanel } from './community/SafetyActionModal';
+import {
+  blockUser,
+  unblockUser,
+  fetchBlockedUserIds,
+} from '../services/communitySafetyService';
 
 interface ProfileViewProps {
   profileId: number;
@@ -148,12 +157,30 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const [activeTab, setActiveTab] = useState<'about' | 'posts' | 'edit' | 'blood' | 'settings'>(
     initialTab || 'about'
   );
+  const [isProfileBlocked, setIsProfileBlocked] = useState(false);
+  const [blockActionPending, setBlockActionPending] = useState(false);
+  const [reportProfileOpen, setReportProfileOpen] = useState(false);
+  const [safetyBanner, setSafetyBanner] = useState<string | null>(null);
 
   useEffect(() => {
     if (initialTab) {
       setActiveTab(initialTab);
     }
   }, [initialTab]);
+
+  useEffect(() => {
+    if (!isLoggedIn || isMine || !currentUser.id || !profile.id) {
+      setIsProfileBlocked(false);
+      return;
+    }
+    let mounted = true;
+    void fetchBlockedUserIds(currentUser.id).then((ids) => {
+      if (mounted) setIsProfileBlocked(ids.includes(Number(profile.id)));
+    });
+    return () => {
+      mounted = false;
+    };
+  }, [isLoggedIn, isMine, currentUser.id, profile.id]);
 
   useEffect(() => {
     let isMounted = true;
@@ -1000,21 +1027,83 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
             {/* Social & Contact Actions */}
             <div className="flex flex-wrap items-center justify-center sm:justify-end gap-1.5 sm:gap-2 pt-2 sm:pt-4 shrink-0 w-full sm:w-auto">
               {!isMine && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (onStartMessage) {
-                      onStartMessage(profile);
-                    } else if (onNavigate) {
-                      onNavigate('messages');
-                    }
-                  }}
-                  className="inline-flex items-center gap-1.5 sm:gap-2 px-3.5 sm:px-4 py-1.5 sm:py-2 rounded-xl bg-gradient-to-r from-[#0084FF] to-[#00A3FF] hover:from-[#0073E6] hover:to-[#0090E6] text-white text-[11px] sm:text-xs font-bold shadow-md shadow-[#0084FF]/25 hover:shadow-lg hover:shadow-[#0084FF]/35 transition-all transform active:scale-95 cursor-pointer shrink-0"
-                  title={`Direct Message Dr. ${profile.fullName}`}
-                >
-                  <MessageCircle className="w-3.5 h-3.5 sm:w-4 sm:h-4 fill-white/20" />
-                  <span>Message</span>
-                </button>
+                <>
+                  <SocialGraphActions
+                    myUserId={currentUser.id}
+                    myFullName={currentUser.fullName}
+                    targetUserId={profile.id}
+                    isLoggedIn={isLoggedIn}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (onStartMessage) {
+                        onStartMessage(profile);
+                      } else if (onNavigate) {
+                        onNavigate('messages');
+                      }
+                    }}
+                    className="inline-flex items-center gap-1.5 sm:gap-2 px-3.5 sm:px-4 py-1.5 sm:py-2 rounded-xl bg-gradient-to-r from-[#0084FF] to-[#00A3FF] hover:from-[#0073E6] hover:to-[#0090E6] text-white text-[11px] sm:text-xs font-bold shadow-md shadow-[#0084FF]/25 hover:shadow-lg hover:shadow-[#0084FF]/35 transition-all transform active:scale-95 cursor-pointer shrink-0"
+                    title={`Direct Message Dr. ${profile.fullName}`}
+                  >
+                    <MessageCircle className="w-3.5 h-3.5 sm:w-4 sm:h-4 fill-white/20" />
+                    <span>Message</span>
+                  </button>
+                  {isLoggedIn && (
+                    <>
+                      <button
+                        type="button"
+                        disabled={blockActionPending}
+                        onClick={async () => {
+                          setBlockActionPending(true);
+                          if (isProfileBlocked) {
+                            const res = await unblockUser(currentUser.id, profile.id);
+                            if (res.success) {
+                              setIsProfileBlocked(false);
+                              setSafetyBanner(`Unblocked ${profile.fullName}.`);
+                            }
+                          } else {
+                            const res = await blockUser({
+                              blockerId: currentUser.id,
+                              blockedUser: {
+                                id: profile.id,
+                                fullName: profile.fullName,
+                                avatarUrl: profile.avatarUrl,
+                                batchYear: profile.batchYear,
+                                profession: profile.profession,
+                              },
+                            });
+                            if (res.success) {
+                              setIsProfileBlocked(true);
+                              setSafetyBanner(
+                                `Blocked ${profile.fullName}. Their posts and notifications are now hidden.`
+                              );
+                            }
+                          }
+                          setBlockActionPending(false);
+                        }}
+                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 sm:py-2 rounded-xl border text-[11px] sm:text-xs font-semibold transition-colors cursor-pointer shrink-0 whitespace-nowrap ${
+                          isProfileBlocked
+                            ? 'bg-rose-600 border-rose-600 text-white hover:bg-rose-700'
+                            : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-rose-50 hover:border-rose-200 hover:text-rose-700 dark:hover:bg-rose-950/40 dark:hover:text-rose-300'
+                        }`}
+                        title={isProfileBlocked ? 'Unblock this account' : 'Block this account'}
+                      >
+                        <ShieldBan className="w-3.5 h-3.5" />
+                        <span>{isProfileBlocked ? 'Blocked' : 'Block'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setReportProfileOpen(true)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 sm:py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-amber-50 hover:border-amber-200 hover:text-amber-700 dark:hover:bg-amber-950/40 dark:hover:text-amber-300 text-[11px] sm:text-xs font-semibold transition-colors cursor-pointer shrink-0 whitespace-nowrap"
+                        title="Report this profile"
+                      >
+                        <Flag className="w-3.5 h-3.5" />
+                        <span>Report</span>
+                      </button>
+                    </>
+                  )}
+                </>
               )}
               {profile.whatsapp && (
                 <a
@@ -1137,6 +1226,19 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                   style={{ width: `${savedCompletion.percentage}%` }}
                 />
               </div>
+            </div>
+          )}
+
+          {/* Phase 5: Connections, Pending Requests, Followers & Following Panel (Own Profile) */}
+          {isMine && currentUser.id > 0 && (
+            <div className="mt-4">
+              <MyNetworkPanel
+                myUserId={currentUser.id}
+                myFullName={currentUser.fullName}
+                onViewProfile={(targetId) => {
+                  setProfile(resolveProfileById(targetId));
+                }}
+              />
             </div>
           )}
 
@@ -2530,6 +2632,9 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
             </div>
           </div>
 
+          {/* Phase 6: Blocked Accounts Management */}
+          <BlockedUsersPanel currentUserId={currentUser.id} />
+
           {/* Danger Zone: Permanent Profile Deletion */}
           <div className="bg-red-50/40 dark:bg-red-950/20 backdrop-blur-xl rounded-3xl p-6 border border-red-200/80 dark:border-red-900/60 shadow-xs space-y-4">
             <div className="flex items-start gap-3">
@@ -2685,6 +2790,32 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         postAuthor={lightboxState.postAuthor}
         postCaption={lightboxState.postCaption}
       />
+
+      {/* Phase 6: Report Profile Modal */}
+      <ReportContentModal
+        isOpen={reportProfileOpen}
+        reporterId={currentUser.id}
+        targetType="profile"
+        targetId={profile.id}
+        targetAuthorId={profile.id}
+        targetLabel={`${profile.fullName}'s profile`}
+        onClose={() => setReportProfileOpen(false)}
+        onSubmitted={(msg) => setSafetyBanner(msg)}
+      />
+
+      {safetyBanner && (
+        <div className="fixed bottom-5 right-5 z-50 max-w-sm bg-slate-900 text-white border border-slate-700 rounded-xl px-4 py-3 shadow-2xl flex items-center gap-3 text-xs font-medium">
+          <span className="flex-1">{safetyBanner}</span>
+          <button
+            type="button"
+            onClick={() => setSafetyBanner(null)}
+            className="text-slate-400 hover:text-white cursor-pointer"
+            aria-label="Dismiss notification"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
     </div>
   );
 };

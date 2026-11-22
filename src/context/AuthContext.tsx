@@ -1,12 +1,16 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import type { Session } from '@supabase/supabase-js';
-import { supabase, isSupabaseConfigured, ALUMNI_PUBLIC_COLUMNS } from '../lib/supabase';
+import {
+  supabase,
+  isSupabaseConfigured,
+  setInMemoryDirectAuthToken,
+  getInMemoryDirectAuthToken,
+} from '../lib/supabase';
 import {
   getOrCreateSupabaseProfile,
-  mapSupabaseRowToAlumniProfile,
 } from '../lib/supabase-auth';
 import { apiUrl } from '../lib/apiConfig';
-import { AlumniProfile, SUPER_ADMIN_EMAILS } from '../types';
+import { AlumniProfile, SUPER_ADMIN_EMAILS, isUserAnyAdmin } from '../types';
 import {
   DEFAULT_BLANK_USER,
   ALUMNI_PROFILES,
@@ -67,19 +71,13 @@ function saveDirectAuthUser(profile: AlumniProfile) {
 }
 
 function getDirectAuthToken(): string | null {
-  try {
-    if (typeof window !== 'undefined') {
-      const token = localStorage.getItem('szmc_direct_auth_token');
-      return token && token.trim() ? token.trim() : null;
-    }
-  } catch {}
-  return null;
+  return getInMemoryDirectAuthToken();
 }
 
 function getDirectAuthUser(): AlumniProfile | null {
   try {
     if (typeof window !== 'undefined') {
-      // Never restore an unauthenticated cached profile unless a server-issued token exists
+      // Never restore an unauthenticated cached profile unless a live in-memory session token exists
       if (!getDirectAuthToken()) {
         return null;
       }
@@ -95,6 +93,7 @@ function getDirectAuthUser(): AlumniProfile | null {
 }
 
 function clearDirectAuthUser() {
+  setInMemoryDirectAuthToken(null);
   try {
     if (typeof window !== 'undefined') {
       localStorage.removeItem(DIRECT_AUTH_STORAGE_KEY);
@@ -155,34 +154,39 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const directToken = getDirectAuthToken();
         const directUser = directToken ? getDirectAuthUser() : null;
         if (directUser && directToken) {
-          let verifiedAdmin = false;
           try {
-            const verifyRes = await fetch('/api/admin/verify-access', {
+            const verifyRes = await fetch('/api/auth/verify-session', {
               headers: { Authorization: `Bearer ${directToken}` },
             });
-            verifiedAdmin = verifyRes.ok;
-          } catch {
-            verifiedAdmin = false;
-          }
-          if (!active || requestId !== authResolutionIdRef.current) return;
+            if (verifyRes.ok) {
+              const verifyData = await verifyRes.json();
+              if (!active || requestId !== authResolutionIdRef.current) return;
 
-          resolvedAuthUserIdRef.current = directUser.authUserId || String(directUser.id);
-          const effectiveProfile: AlumniProfile = {
-            ...directUser,
-            role: verifiedAdmin ? 'admin' : 'member',
-            verificationStatus: verifiedAdmin ? 'verified' : (directUser.verificationStatus || 'unverified'),
-          };
-          setCurrentUser(effectiveProfile);
-          setIsAdminUser(verifiedAdmin);
-          setIsLoggedIn(true);
-          setAuthInitializationError(null);
-          setIsAuthInitializing(false);
-          return;
+              const verifiedRole = (verifyData?.user?.role || 'member') as AlumniProfile['role'];
+              const isPrivileged = Boolean(verifyData?.permissions?.canAccessAdminPortal);
+
+              resolvedAuthUserIdRef.current = directUser.authUserId || String(directUser.id);
+              const effectiveProfile: AlumniProfile = {
+                ...directUser,
+                role: verifiedRole,
+                verificationStatus: isPrivileged
+                  ? 'verified'
+                  : (directUser.verificationStatus || 'unverified'),
+              };
+              setCurrentUser(effectiveProfile);
+              setIsAdminUser(isPrivileged);
+              setIsLoggedIn(true);
+              setAuthInitializationError(null);
+              setIsAuthInitializing(false);
+              return;
+            }
+          } catch {
+            // Fall through to signed-out cleanup
+          }
         }
 
         clearDirectAuthUser();
 
-        // Only log out if there is NO stored directUser either
         resolvedAuthUserIdRef.current = null;
         inMemorySupabaseToken = null;
         setSupabaseToken(null);
@@ -248,18 +252,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         resolvedAuthUserIdRef.current = session.user.id;
         const userEmail = (profile.email || session.user.email || '').toLowerCase().trim();
-        const isAdmin =
-          profile.role === 'admin' ||
-          cleanEmailMatchAdmin(userEmail);
+        const isSuperAdmin =
+          profile.role === 'super_admin' || cleanEmailMatchAdmin(userEmail);
+        const isAnyPortalRole =
+          isSuperAdmin || profile.role === 'admin' || profile.role === 'moderator';
 
         const effectiveProfile: AlumniProfile = {
           ...profile,
-          role: isAdmin ? 'admin' : (profile.role || 'member'),
-          verificationStatus: isAdmin ? 'verified' : profile.verificationStatus,
+          role: isSuperAdmin ? 'super_admin' : (profile.role || 'member'),
+          verificationStatus: isSuperAdmin || profile.role === 'admin' ? 'verified' : profile.verificationStatus,
         };
 
         setCurrentUser(effectiveProfile);
-        setIsAdminUser(isAdmin);
+        setIsAdminUser(isAnyPortalRole);
         setIsLoggedIn(true);
         saveDirectAuthUser(effectiveProfile);
       } catch (err) {
@@ -408,10 +413,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return headers;
     }
 
-    const storedDirectToken =
-      typeof window !== 'undefined' ? localStorage.getItem('szmc_direct_auth_token') : null;
-    if (storedDirectToken) {
-      headers.Authorization = `Bearer ${storedDirectToken}`;
+    const directToken = getInMemoryDirectAuthToken();
+    if (directToken) {
+      headers.Authorization = `Bearer ${directToken}`;
       return headers;
     }
 
@@ -451,49 +455,54 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const cleanInput = phoneOrEmail.trim();
     const isEmail = cleanInput.includes('@');
 
-    // 1. Try Server-Verified Authentication First (verifies password hash on backend & issues HMAC token)
+    // 1. Try Server-Verified Authentication First (verifies credentials on backend)
     try {
       const loginRes = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ identifier: cleanInput, password: pass }),
       });
-      if (loginRes.status === 401) {
+      if (loginRes.status === 401 || loginRes.status === 403) {
         const errJson = await loginRes.json().catch(() => ({}));
-        throw new Error(errJson.error || 'Incorrect password. Access denied.');
+        throw new Error(errJson.error || 'Invalid credentials. Access denied.');
       }
       if (loginRes.ok) {
         const loginJson = await loginRes.json();
         if (loginJson.success && loginJson.profile) {
-          const returnedToken = loginJson.token || loginJson.session?.access_token || null;
-          if (returnedToken) {
-            inMemorySupabaseToken = returnedToken;
-            setSupabaseToken(returnedToken);
-            if (typeof window !== 'undefined') {
-              localStorage.setItem('szmc_direct_auth_token', returnedToken);
-            }
-          }
-          const profile: AlumniProfile = loginJson.profile;
-          const isAdmin = profile.role === 'admin' || cleanEmailMatchAdmin(profile.email);
-          resolvedAuthUserIdRef.current = profile.authUserId || String(profile.id);
-          setCurrentUser(profile);
-          setIsAdminUser(isAdmin);
-          setIsLoggedIn(true);
-          saveDirectAuthUser(profile);
-
-          if (profile.email) {
-            supabase.auth
-              .signInWithPassword({
-                email: profile.email.toLowerCase(),
-                password: pass,
+          if (loginJson.session?.access_token && loginJson.session?.refresh_token) {
+            await supabase.auth
+              .setSession({
+                access_token: loginJson.session.access_token,
+                refresh_token: loginJson.session.refresh_token,
               })
               .catch(() => {});
           }
+
+          const returnedToken = loginJson.session?.access_token || loginJson.token || null;
+          if (returnedToken) {
+            inMemorySupabaseToken = returnedToken;
+            setInMemoryDirectAuthToken(returnedToken);
+            setSupabaseToken(returnedToken);
+          }
+
+          const profile: AlumniProfile = loginJson.profile;
+          const hasPortalAccess =
+            isUserAnyAdmin(profile) || profile.role === 'moderator';
+          resolvedAuthUserIdRef.current = profile.authUserId || String(profile.id);
+          setCurrentUser(profile);
+          setIsAdminUser(hasPortalAccess);
+          setIsLoggedIn(true);
+          saveDirectAuthUser(profile);
           return true;
         }
       }
     } catch (serverAuthErr: any) {
-      if (serverAuthErr?.message?.includes('Access denied') || serverAuthErr?.message?.includes('Incorrect')) {
+      if (
+        serverAuthErr?.message?.includes('Access denied') ||
+        serverAuthErr?.message?.includes('Invalid') ||
+        serverAuthErr?.message?.includes('Incorrect') ||
+        serverAuthErr?.message?.includes('confirm your')
+      ) {
         throw serverAuthErr;
       }
     }
@@ -634,63 +643,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     if (authError) {
-      const msg = authError.message.toLowerCase();
+      const msg = (authError.message || '').toLowerCase();
       if (msg.includes('invalid login credentials') || msg.includes('invalid_credentials')) {
         throw new Error('Invalid email or password. Please verify your credentials or reset your password.');
       }
       if (msg.includes('email not confirmed') || msg.includes('not confirmed')) {
-        // Direct Login without Email Confirmation
-        // Since Supabase validated the credentials before returning email not confirmed,
-        // we directly log the user in without requiring any confirmation email!
-        let profile: AlumniProfile | null = null;
-        try {
-          const { data: profileRow } = await supabase
-            .from('alumni_profiles')
-            .select(ALUMNI_PUBLIC_COLUMNS)
-            .ilike('email', cleanInput)
-            .maybeSingle();
-
-          if (profileRow) {
-            profile = mapSupabaseRowToAlumniProfile(profileRow);
-          }
-        } catch (fetchErr) {
-          console.warn('Could not query alumni_profiles during unconfirmed bypass:', fetchErr);
-        }
-
-        if (!profile) {
-          profile = {
-            id: Date.now(),
-            userId: Date.now(),
-            authUserId: 'direct-user-' + Date.now(),
-            fullName: cleanInput.split('@')[0],
-            avatarUrl: '/assets/aistudio/images__1__2778177d.png',
-            batchYear: 25,
-            academicStream: 'MBBS',
-            academicGroup: null,
-            section: 'MBBS',
-            verificationStatus: 'unverified',
-            vouchesCount: 0,
-            vouchTargetCount: 2,
-            profession: 'Medical Doctor / Physician',
-            position: 'Physician',
-            institution: 'Shaheed Ziaur Rahman Medical College Hospital',
-            specialty: ['Internal Medicine'],
-            degree: ['MBBS'],
-            city: 'Bogura',
-            country: 'Bangladesh',
-            email: cleanInput.toLowerCase(),
-            role: 'member',
-            isPublic: true,
-            online: true,
-            badges: ['SZMCian'],
-          };
-        }
-
-        setCurrentUser(profile);
-        setIsAdminUser(profile.role === 'admin');
-        setIsLoggedIn(true);
-        saveDirectAuthUser(profile);
-        return true;
+        throw new Error(
+          'Your email address has not been confirmed yet. Please open the confirmation link sent to your inbox before signing in.'
+        );
       }
       throw new Error(authError.message || 'Login failed. Please check your credentials.');
     }
@@ -901,10 +861,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setSupabaseToken(inMemorySupabaseToken);
     }
 
-    // Direct Login after Registration:
-    // Build user profile and log in directly without requiring email confirmation!
+    // Require a valid authenticated Supabase session after signUp (do not bypass email confirmation)
+    if (!signUpData?.session) {
+      throw new Error(
+        'Registration successful! Please check your email inbox and click the verification link to activate your account before signing in.'
+      );
+    }
+
     let profile: AlumniProfile | null = null;
-    if (signUpData?.session && resolvedUser) {
+    if (resolvedUser) {
       profile = await getOrCreateSupabaseProfile(resolvedUser, {
         ...profileData,
         email: cleanEmail,
@@ -1126,15 +1091,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // 3. Fallback / Server-side synchronization to /api/profile/update
     let serverSuccess = false;
     try {
-      let authToken = typeof window !== 'undefined' ? localStorage.getItem('szmc_direct_auth_token') : null;
-      if (!authToken) {
-        const { data: sessionData } = await supabase.auth.getSession().catch(() => ({ data: null }));
-        authToken = sessionData?.session?.access_token || null;
-      }
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (authToken) {
-        headers.Authorization = `Bearer ${authToken}`;
-      }
+      const headers = await getAuthHeaders();
       const sRes = await fetch('/api/profile/update', {
         method: 'POST',
         headers,

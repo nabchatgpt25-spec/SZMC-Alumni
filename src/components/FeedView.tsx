@@ -43,6 +43,8 @@ import {
   ChevronRight,
   Eye,
   ArrowRight,
+  Repeat2,
+  ShieldBan,
 } from 'lucide-react';
 import { PostItem, PostComment, ReactionType } from '../types';
 import { CreatePostModal } from './CreatePostModal';
@@ -85,6 +87,32 @@ import { supabase } from '../lib/supabase';
 import { realtimeManager } from '../services/supabaseRealtimeService';
 import { usePostCommentsChannel } from '../hooks/useChannel';
 import { notifyPostLike, notifyPostComment } from '../utils/notificationService';
+import { fetchQuadFeedPage } from '../services/postService';
+import {
+  DEFAULT_FEED_RANKING_WEIGHTS,
+  dedupeAndRankFeedPosts,
+  fetchFeedRankingWeights,
+  getPostPriorityTier,
+  type FeedCursor,
+  type FeedRankingWeights,
+} from '../services/feedRankingService';
+import {
+  QUAD_POST_CATEGORIES,
+  matchesQuadCategory,
+  type QuadFeedFilter,
+  type QuadPostCategory,
+  type QuadPostsSummary,
+} from './community/quadConstants';
+import { fetchFollowedUserIds } from '../services/socialGraphService';
+import { upsertPostReaction } from '../services/richInteractionsService';
+import { buildCommentTree } from '../services/richInteractionsUtils';
+import { ReactionPickerButton } from './community/ReactionPickerButton';
+import { RichTextWithMentions } from './community/RichTextWithMentions';
+import { InlinePostPollCard } from './community/InlinePostPollCard';
+import { RepostModal } from './community/RepostModal';
+import { ReportContentModal } from './community/SafetyActionModal';
+import { blockUser, fetchBlockedUserIds } from '../services/communitySafetyService';
+import { filterBlockedPosts } from '../services/communitySafetyUtils';
 
 function formatFacebookRelativeTime(raw?: string): string {
   if (!raw || raw === 'Just now') return 'Just now';
@@ -112,6 +140,11 @@ interface FeedViewProps {
   onViewProfile?: (userId: number) => void;
   onOpenVerificationCenter?: (initialTab?: 'status' | 'vouch_others') => void;
   onNavigate?: (route: string) => void;
+  embeddedInQuad?: boolean;
+  quadFeedTab?: QuadFeedFilter;
+  quadCategoryFilter?: QuadPostCategory;
+  onClearQuadFilters?: () => void;
+  onPostsSummaryChange?: (summary: QuadPostsSummary) => void;
 }
 
 type PostCategory = 'General Update' | 'Tech & Innovation' | 'Professional Insights' | 'Reunion' | 'Achievement';
@@ -128,9 +161,14 @@ export const FeedView: React.FC<FeedViewProps> = ({
   onViewProfile,
   onOpenVerificationCenter,
   onNavigate,
+  embeddedInQuad = false,
+  quadFeedTab = 'for_you',
+  quadCategoryFilter = 'All',
+  onClearQuadFilters,
+  onPostsSummaryChange,
 }) => {
   const isOnline = useOnlineStatus();
-  const { currentUser, updateProfile, isAdminUser } = useAuth();
+  const { currentUser, isLoggedIn, updateProfile, isAdminUser } = useAuth();
   const [pendingVouchesCount, setPendingVouchesCount] = useState<number>(() => {
     try {
       return loadVouchRequests().filter((r) => r.status === 'pending').length;
@@ -153,16 +191,172 @@ export const FeedView: React.FC<FeedViewProps> = ({
 
   const [posts, setPosts] = useState<PostItem[]>([]);
   const [isLoadingPosts, setIsLoadingPosts] = useState<boolean>(true);
+  const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
+  const [hasMorePosts, setHasMorePosts] = useState<boolean>(false);
+  const [feedCursor, setFeedCursor] = useState<FeedCursor | null>(null);
+  const [fallbackOffset, setFallbackOffset] = useState<number>(0);
+  const [rankingWeights, setRankingWeights] = useState<FeedRankingWeights>(
+    DEFAULT_FEED_RANKING_WEIGHTS
+  );
+  const [followedPageIds, setFollowedPageIds] = useState<Set<number>>(new Set());
+  const [followedUserIds, setFollowedUserIds] = useState<Set<number>>(new Set());
+  const [blockedUserIds, setBlockedUserIds] = useState<Set<number>>(new Set());
+  const [repostTarget, setRepostTarget] = useState<PostItem | null>(null);
+  const [userToBlock, setUserToBlock] = useState<{
+    id: number;
+    fullName: string;
+    avatarUrl?: string;
+    batchYear?: number;
+    profession?: string;
+  } | null>(null);
   const [isSubmittingPost, setIsSubmittingPost] = useState<boolean>(false);
 
-  // Supabase is the ONLY source of truth: load from Supabase on mount
+  // Load configurable For You ranking weights, followed Official Pages, followed alumni & blocked accounts
+  useEffect(() => {
+    let mounted = true;
+    void fetchFeedRankingWeights().then((w) => {
+      if (mounted) setRankingWeights(w);
+    });
+    const loadBlocks = () => {
+      if (!currentUser.id) return;
+      void fetchBlockedUserIds(currentUser.id).then((ids) => {
+        if (mounted) setBlockedUserIds(new Set(ids));
+      });
+    };
+    if (currentUser.id) {
+      loadBlocks();
+      void fetchFollowedUserIds(currentUser.id).then((ids) => {
+        if (mounted) setFollowedUserIds(new Set(ids));
+      });
+      supabase
+        .from('official_page_followers')
+        .select('page_id')
+        .eq('profile_id', currentUser.id)
+        .then(({ data, error }) => {
+          if (mounted && !error && Array.isArray(data)) {
+            setFollowedPageIds(new Set(data.map((r: any) => Number(r.page_id))));
+          }
+        });
+    }
+    window.addEventListener('szmc_blocks_updated', loadBlocks);
+    return () => {
+      mounted = false;
+      window.removeEventListener('szmc_blocks_updated', loadBlocks);
+    };
+  }, [currentUser.id]);
+
+  // Report live post counts to QuadCommunityShell (real DB posts only)
+  useEffect(() => {
+    if (!onPostsSummaryChange) return;
+    const myBatchNum = normalizeToBatchNumber(currentUser.batchYear);
+    let myBatchCount = 0;
+    let followingCount = 0;
+    const categoryCounts: Record<string, number> = { All: posts.length };
+
+    for (const cat of QUAD_POST_CATEGORIES) {
+      if (cat !== 'All') categoryCounts[cat] = 0;
+    }
+
+    for (const p of posts) {
+      const pBatch = normalizeToBatchNumber((p as any).batchLoungeYear ?? (p as any).authorBatch ?? p.batchYear);
+      const isBatchmate = Boolean((p as any).isBatchmate) || (myBatchNum !== null && pBatch === myBatchNum);
+      const isFriend =
+        Boolean((p as any).isFriend) ||
+        Boolean(p.isFollowing) ||
+        followedUserIds.has(p.userId) ||
+        (p as any).authorId === currentUser.id ||
+        p.userId === currentUser.userId ||
+        Boolean(p.officialPageId && followedPageIds.has(p.officialPageId));
+      if (isBatchmate) myBatchCount += 1;
+      if (isFriend) followingCount += 1;
+      for (const cat of QUAD_POST_CATEGORIES) {
+        if (
+          cat !== 'All' &&
+          (p.communityCategory === cat || matchesQuadCategory(p.category, cat))
+        ) {
+          categoryCounts[cat] = (categoryCounts[cat] || 0) + 1;
+        }
+      }
+    }
+
+    onPostsSummaryChange({
+      total: posts.length,
+      myBatchCount,
+      followingCount,
+      categoryCounts,
+    });
+  }, [posts, currentUser.batchYear, currentUser.id, currentUser.userId, followedPageIds, followedUserIds, onPostsSummaryChange]);
+
+  const PAGE_SIZE = 20;
+
+  const handleLoadMorePosts = async () => {
+    if (isLoadingMore || !hasMorePosts) return;
+    setIsLoadingMore(true);
+    try {
+      const myBatchNum = normalizeToBatchNumber(currentUser.batchYear);
+      const isStaff = Boolean(
+        isAdminUser ||
+          currentUser.role === 'admin' ||
+          currentUser.role === 'moderator' ||
+          (currentUser as any).role === 'super_admin'
+      );
+      const page = await fetchQuadFeedPage({
+        currentUserId: currentUser.id,
+        myBatchYear: myBatchNum,
+        isStaff,
+        feedTab: embeddedInQuad ? quadFeedTab : 'for_you',
+        category: embeddedInQuad ? quadCategoryFilter : 'All',
+        limit: PAGE_SIZE,
+        cursor: feedCursor,
+        fallbackOffset,
+      });
+
+      setPosts((prev) => {
+        const map = new Map<number, PostItem>();
+        prev.forEach((p) => map.set(p.id, p));
+        page.posts.forEach((p) => {
+          if (!map.has(p.id)) map.set(p.id, p);
+        });
+        return Array.from(map.values());
+      });
+      setFeedCursor(page.nextCursor);
+      setHasMorePosts(page.hasMore);
+      setFallbackOffset((prev) => prev + PAGE_SIZE);
+    } catch (err) {
+      console.warn('FeedView load more notice:', err);
+    } finally {
+      setIsLoadingMore(false);
+    }
+  };
+
+  // Supabase is the ONLY source of truth: load initial cursor page on mount
   useEffect(() => {
     let isMounted = true;
     setIsLoadingPosts(true);
-    fetchFeedPostsFromDb(50, currentUser.id)
-      .then((dbPosts) => {
+    const myBatchNum = normalizeToBatchNumber(currentUser.batchYear);
+    const isStaff = Boolean(
+      isAdminUser ||
+        currentUser.role === 'admin' ||
+        currentUser.role === 'moderator' ||
+        (currentUser as any).role === 'super_admin'
+    );
+
+    fetchQuadFeedPage({
+      currentUserId: currentUser.id,
+      myBatchYear: myBatchNum,
+      isStaff,
+      feedTab: 'for_you',
+      category: 'All',
+      limit: PAGE_SIZE,
+      cursor: null,
+      fallbackOffset: 0,
+    })
+      .then((page) => {
         if (isMounted) {
-          setPosts(dbPosts || []);
+          setPosts(page.posts || []);
+          setFeedCursor(page.nextCursor);
+          setHasMorePosts(page.hasMore);
+          setFallbackOffset(PAGE_SIZE);
           setIsLoadingPosts(false);
         }
       })
@@ -470,7 +664,6 @@ export const FeedView: React.FC<FeedViewProps> = ({
 
   // Report Post Modal state
   const [postToReport, setPostToReport] = useState<PostItem | null>(null);
-  const [reportReason, setReportReason] = useState('Inappropriate / Unprofessional');
 
   // Lightbox Modal state
   const [lightboxState, setLightboxState] = useState<{
@@ -867,35 +1060,51 @@ export const FeedView: React.FC<FeedViewProps> = ({
     setEditVideos((prev) => prev.filter((_, idx) => idx !== indexToRemove));
   };
 
-  // Toggle Like
-  const handleToggleLike = (postId: number) => {
-    togglePostLikeInDb(postId, currentUser.id).catch((err) => {
-      console.warn('togglePostLikeInDb error:', err);
-    });
-
+  // Multi-Reaction Handler (Phase 5)
+  const handleReactToPost = (postId: number, nextReaction: ReactionType | null) => {
     const targetPost = posts.find((p) => p.id === postId);
-    if (targetPost && !targetPost.likedByMe && targetPost.userId !== currentUser.id) {
+    if (targetPost && nextReaction && !targetPost.likedByMe && targetPost.userId !== currentUser.id) {
       notifyPostLike(targetPost, {
         id: currentUser.id,
         fullName: currentUser.fullName,
         avatarUrl: currentUser.avatarUrl,
       });
     }
+    if (nextReaction) playSound('like');
 
     setPosts((prev) =>
       prev.map((p) => {
-        if (p.id === postId) {
-          const willLike = !p.likedByMe;
-          if (willLike) playSound('like');
-          return {
-            ...p,
-            likedByMe: willLike,
-            likesCount: willLike ? p.likesCount + 1 : Math.max(0, p.likesCount - 1),
-          };
+        if (p.id !== postId) return p;
+        const prevReaction = p.userReaction || (p.likedByMe ? 'love' : null);
+        let nextCount = p.likesCount || 0;
+        if (!prevReaction && nextReaction) nextCount += 1;
+        else if (prevReaction && !nextReaction) nextCount = Math.max(0, nextCount - 1);
+
+        const nextSummary: Partial<Record<ReactionType, number>> = { ...(p.reactionsSummary || {}) };
+        if (prevReaction && nextSummary[prevReaction]) {
+          nextSummary[prevReaction] = Math.max(0, Number(nextSummary[prevReaction]) - 1);
+          if (nextSummary[prevReaction] === 0) delete nextSummary[prevReaction];
         }
-        return p;
+        if (nextReaction) {
+          nextSummary[nextReaction] = (Number(nextSummary[nextReaction]) || 0) + 1;
+        }
+
+        return {
+          ...p,
+          likedByMe: Boolean(nextReaction),
+          userReaction: nextReaction,
+          reactionsSummary: nextSummary,
+          likesCount: nextCount,
+        };
       })
     );
+
+    void upsertPostReaction({
+      postId,
+      userId: currentUser.id,
+      reaction: nextReaction,
+      reactorName: currentUser.fullName,
+    });
   };
 
   // Create Post
@@ -1080,25 +1289,22 @@ export const FeedView: React.FC<FeedViewProps> = ({
     }
   };
 
-  // Submit Report
-  const handleSubmitReport = () => {
-    if (!postToReport) return;
-    try {
-      const storageKey = 'szmc_admin_reported_content_v2';
-      const raw = localStorage.getItem(storageKey);
-      const reports = raw ? JSON.parse(raw) : {};
-      const currentReasons = reports[String(postToReport.id)]?.reasons || [];
-      reports[String(postToReport.id)] = {
-        reasons: Array.from(new Set([...currentReasons, reportReason || 'Inappropriate / Unprofessional'])),
-        reported_at: new Date().toISOString(),
-        status: 'pending_review',
-      };
-      localStorage.setItem(storageKey, JSON.stringify(reports));
-    } catch (e) {
-      console.warn('Could not save post report to storage', e);
+  // Confirm Block Author (hides their posts, comments & notifications immediately)
+  const handleConfirmBlockUser = async () => {
+    if (!userToBlock || !currentUser.id) return;
+    const target = userToBlock;
+    setUserToBlock(null);
+    const res = await blockUser({
+      blockerId: currentUser.id,
+      blockedUser: target,
+    });
+    if (res.success) {
+      setBlockedUserIds((prev) => new Set([...Array.from(prev), target.id]));
+      setPosts((prev) => prev.filter((p) => Number(p.userId) !== Number(target.id)));
+      showToast(`Blocked ${target.fullName}. Their posts and notifications are now hidden.`);
+    } else {
+      showToast(res.error || 'Could not block this account.');
     }
-    setPostToReport(null);
-    showToast('Thank you. This post has been reported to the SZMC moderation team.');
   };
 
   // Open Lightbox
@@ -1300,7 +1506,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
   };
 
   return (
-    <div className="max-w-6xl mx-auto space-y-6">
+    <div className={embeddedInQuad ? 'w-full space-y-5' : 'max-w-6xl mx-auto space-y-6'}>
       {/* Toast Notification */}
       {toastMessage && (
         <div className="fixed top-16 sm:top-20 right-3 sm:right-5 max-w-[calc(100vw-1.5rem)] sm:max-w-md z-50 flex items-center gap-2.5 px-3.5 sm:px-4 py-2.5 sm:py-3 bg-slate-900/95 text-white dark:bg-white/95 dark:text-slate-900 rounded-2xl shadow-xl border border-slate-700/50 dark:border-slate-200 text-xs font-semibold animate-fade-in">
@@ -1323,42 +1529,44 @@ export const FeedView: React.FC<FeedViewProps> = ({
         </div>
       )}
 
-      {/* Mobile/Tablet Compact Event Alert Banner: SZMC DAY 2026 is on 4, 5th November */}
-      <div className="xl:hidden">
-        <button
-          type="button"
-          onClick={() => onNavigate && onNavigate('events')}
-          className="w-full text-left p-3 sm:p-3.5 rounded-2xl bg-gradient-to-r from-blue-700 via-indigo-700 to-sky-700 text-white shadow-md shadow-blue-900/20 border border-blue-400/40 flex items-center justify-between gap-3 cursor-pointer group transition-all hover:scale-[1.01]"
-        >
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="w-11 h-11 rounded-xl overflow-hidden shrink-0 border border-white/25 shadow-xs bg-slate-900">
-              <img
-                src="/assets/aistudio/844630102_122141641941179457_1692878458464947990_n_99cb78bb.jpg"
-                alt="SZMC DAY 2026 is on 4, 5th November"
-                className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300"
-              />
-            </div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="px-2 py-0.5 rounded-md bg-amber-400 text-slate-950 font-black text-[9px] uppercase tracking-wider">
-                  Event
-                </span>
-                <span className="text-[10px] text-amber-200 font-bold">4, 5th November, 2026</span>
+      {/* Mobile/Tablet Compact Event Alert Banner (Standalone mode only) */}
+      {!embeddedInQuad && (
+        <div className="xl:hidden">
+          <button
+            type="button"
+            onClick={() => onNavigate && onNavigate('events')}
+            className="w-full text-left p-3 sm:p-3.5 rounded-2xl bg-gradient-to-r from-blue-700 via-indigo-700 to-sky-700 text-white shadow-md shadow-blue-900/20 border border-blue-400/40 flex items-center justify-between gap-3 cursor-pointer group transition-all hover:scale-[1.01]"
+          >
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-11 h-11 rounded-xl overflow-hidden shrink-0 border border-white/25 shadow-xs bg-slate-900">
+                <img
+                  src="/assets/aistudio/844630102_122141641941179457_1692878458464947990_n_99cb78bb.jpg"
+                  alt="SZMC DAY 2026 is on 4, 5th November"
+                  className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300"
+                />
               </div>
-              <h4 className="font-black text-xs sm:text-sm text-white truncate">
-                SZMC DAY 2026 is on 4, 5th November
-              </h4>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="px-2 py-0.5 rounded-md bg-amber-400 text-slate-950 font-black text-[9px] uppercase tracking-wider">
+                    Event
+                  </span>
+                  <span className="text-[10px] text-amber-200 font-bold">4, 5th November, 2026</span>
+                </div>
+                <h4 className="font-black text-xs sm:text-sm text-white truncate">
+                  SZMC DAY 2026 is on 4, 5th November
+                </h4>
+              </div>
             </div>
-          </div>
-          <span className="shrink-0 px-2.5 py-1.5 rounded-xl bg-white/20 hover:bg-white/30 text-white text-[11px] font-bold transition-colors whitespace-nowrap">
-            View Event →
-          </span>
-        </button>
-      </div>
+            <span className="shrink-0 px-2.5 py-1.5 rounded-xl bg-white/20 hover:bg-white/30 text-white text-[11px] font-bold transition-colors whitespace-nowrap">
+              View Event →
+            </span>
+          </button>
+        </div>
+      )}
 
-      <div className="xl:grid xl:grid-cols-12 xl:gap-6 items-start">
+      <div className={embeddedInQuad ? 'w-full' : 'xl:grid xl:grid-cols-12 xl:gap-6 items-start'}>
         {/* Main Feed Column */}
-        <div className="xl:col-span-8 space-y-6">
+        <div className={embeddedInQuad ? 'space-y-5' : 'xl:col-span-8 space-y-6'}>
 
       {/* Offline Notice Banner */}
       {!isOnline && (
@@ -1602,18 +1810,26 @@ export const FeedView: React.FC<FeedViewProps> = ({
         authorId={currentUser.id}
         authorName={currentUser.fullName}
         authorAvatar={currentUser.avatarUrl}
+        authorBatchYear={normalizeToBatchNumber(currentUser.batchYear) || undefined}
+        canMarkEditorial={Boolean(
+          isAdminUser ||
+            currentUser.role === 'admin' ||
+            currentUser.role === 'moderator' ||
+            (currentUser as any).role === 'super_admin'
+        )}
         initialTab={composerInitialTab}
         initialImages={composerInitialImages}
         initialVideos={composerInitialVideos}
         onPostCreated={(newPost) => {
-          setPosts((prev) => [newPost as any, ...prev]);
+          setPosts((prev) => [newPost as any, ...prev.filter((p) => p.id !== newPost.id)]);
           playSound('post');
-          showToast('✨ Post published successfully to SZMC Alumni feed!');
+          showToast('Post published to The Quad.');
         }}
       />
 
 
-      {/* Category Filter Interactive Dropdown Menu + Scroll Auto-Play Video Toggle */}
+      {/* Category Filter Interactive Dropdown Menu (Standalone mode only; QuadShell provides 8-category filter bar) */}
+      {!embeddedInQuad && (
       <div className="relative z-20 flex flex-wrap items-center justify-between gap-2.5">
         <div className="relative inline-block" ref={filterDropdownRef}>
           <button
@@ -1760,6 +1976,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
           </button>
         )}
       </div>
+      )}
 
       {/* Posts Stream */}
       <div className="space-y-5">
@@ -1773,23 +1990,56 @@ export const FeedView: React.FC<FeedViewProps> = ({
             );
           }
 
-          const displayedPosts =
-            activeFilterCategory !== 'All'
-              ? posts.filter((p) => p.category === activeFilterCategory)
-              : posts;
+          const myBatchNum = normalizeToBatchNumber(currentUser.batchYear);
+          const isStaffUser = Boolean(
+            isAdminUser ||
+              currentUser.role === 'admin' ||
+              currentUser.role === 'moderator' ||
+              (currentUser as any).role === 'super_admin'
+          );
+
+          const safetyFilteredPosts = filterBlockedPosts(posts, blockedUserIds);
+
+          let displayedPosts = embeddedInQuad
+            ? dedupeAndRankFeedPosts(safetyFilteredPosts, {
+                feedTab: quadFeedTab,
+                category: quadCategoryFilter,
+                myUserId: currentUser.id,
+                myBatchYear: myBatchNum,
+                isStaff: isStaffUser,
+                followedUserIds,
+                followedPageIds,
+                weights: rankingWeights,
+              })
+            : activeFilterCategory !== 'All'
+            ? safetyFilteredPosts.filter((p) => p.category === activeFilterCategory)
+            : [...safetyFilteredPosts];
 
           if (displayedPosts.length === 0) {
+            const hasActiveQuadFilter =
+              embeddedInQuad && (quadCategoryFilter !== 'All' || quadFeedTab !== 'for_you');
             return (
-              <div className="bg-white dark:bg-slate-900 rounded-3xl p-10 border border-slate-200/80 dark:border-slate-800 text-center shadow-xs">
+              <div className="bg-white dark:bg-slate-900 rounded-2xl p-10 border border-slate-200/80 dark:border-slate-800 text-center">
                 <div className="w-12 h-12 mx-auto rounded-2xl bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400 flex items-center justify-center mb-3">
                   <MessageSquare className="w-6 h-6" />
                 </div>
                 <h3 className="text-base font-bold text-slate-800 dark:text-slate-200">
-                  Welcome to the Alumni Feed
+                  {hasActiveQuadFilter ? 'No matching posts in this view' : 'Welcome to The Quad'}
                 </h3>
                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-md mx-auto">
-                  No posts have been published yet. Share a professional milestone, career update, or reunion announcement using the box above!
+                  {hasActiveQuadFilter
+                    ? 'There are no posts matching your current feed filter yet. Reset filters to view all community updates or start a new discussion above.'
+                    : 'No posts have been published yet. Share a professional milestone, career update, or reunion announcement using the box above!'}
                 </p>
+                {hasActiveQuadFilter && onClearQuadFilters && (
+                  <button
+                    type="button"
+                    onClick={onClearQuadFilters}
+                    className="mt-4 px-4 py-2 rounded-xl bg-slate-900 dark:bg-blue-600 text-white text-xs font-semibold hover:opacity-90 transition-opacity cursor-pointer"
+                  >
+                    Show All Posts
+                  </button>
+                )}
               </div>
             );
           }
@@ -1849,6 +2099,58 @@ export const FeedView: React.FC<FeedViewProps> = ({
                     </button>
                   </div>
                 )}
+
+                {/* Phase 4 Dedicated Priority Placement Strip (Independent of engagement ranking) */}
+                {(() => {
+                  const pTier =
+                    typeof post.priorityTier === 'number'
+                      ? post.priorityTier
+                      : getPostPriorityTier(post);
+                  if (pTier === 3) {
+                    return (
+                      <div className="mb-3 pb-2 border-b border-rose-200/80 dark:border-rose-900/60 flex items-center justify-between gap-2 text-xs font-semibold text-rose-700 dark:text-rose-300">
+                        <span>Urgent Blood Request · Priority Lifeline Placement</span>
+                        {onNavigate && (
+                          <button
+                            type="button"
+                            onClick={() => onNavigate('emergency')}
+                            className="underline hover:no-underline whitespace-nowrap cursor-pointer"
+                          >
+                            Blood Network →
+                          </button>
+                        )}
+                      </div>
+                    );
+                  }
+                  if (pTier === 2) {
+                    return (
+                      <div className="mb-3 pb-2 border-b border-blue-200/80 dark:border-blue-900/60 flex items-center justify-between gap-2 text-xs font-semibold text-blue-700 dark:text-blue-300">
+                        <span>
+                          {post.officialPageName
+                            ? `Official Announcement · ${post.officialPageName}`
+                            : 'Official Announcement'}
+                        </span>
+                        {post.officialPageSlug && onNavigate && (
+                          <button
+                            type="button"
+                            onClick={() => onNavigate(`page/${post.officialPageSlug}`)}
+                            className="underline hover:no-underline whitespace-nowrap cursor-pointer"
+                          >
+                            View Page →
+                          </button>
+                        )}
+                      </div>
+                    );
+                  }
+                  if (pTier === 1) {
+                    return (
+                      <div className="mb-3 pb-2 border-b border-amber-200/80 dark:border-amber-900/60 text-xs font-semibold text-amber-700 dark:text-amber-300">
+                        Featured Community Post
+                      </div>
+                    );
+                  }
+                  return null;
+                })()}
 
                 {/* Post Header */}
                 <div className="flex items-start justify-between gap-2 mb-3">
@@ -1993,6 +2295,25 @@ export const FeedView: React.FC<FeedViewProps> = ({
                               <Flag className="w-3.5 h-3.5" />
                               <span>Report Post</span>
                             </button>
+                            {isLoggedIn && post.userId && Number(post.userId) !== Number(currentUser.id) && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setActiveMenuPostId(null);
+                                  setUserToBlock({
+                                    id: Number(post.userId),
+                                    fullName: post.fullName || 'SZMC Alumnus',
+                                    avatarUrl: post.avatarUrl,
+                                    batchYear: post.batchYear,
+                                    profession: post.profession,
+                                  });
+                                }}
+                                className="w-full px-3.5 py-2 text-left flex items-center gap-2 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer"
+                              >
+                                <ShieldBan className="w-3.5 h-3.5" />
+                                <span>Block Author</span>
+                              </button>
+                            )}
                             <button
                               type="button"
                               onClick={() => {
@@ -2022,11 +2343,11 @@ export const FeedView: React.FC<FeedViewProps> = ({
                   </div>
                 </div>
 
-                {/* Post Body with Clickable Full-Visibility Links */}
+                {/* Post Body with Safe Clickable Links & Interactive @Mentions */}
                 {post.content && (
                   <div className="mb-3.5">
                     <p className="text-sm text-slate-800 dark:text-slate-200 leading-relaxed whitespace-pre-line break-words">
-                      {renderTextWithClickableLinks(displayedText)}
+                      <RichTextWithMentions text={displayedText} />
                     </p>
                     {isLongContent && (
                       <button
@@ -2037,6 +2358,52 @@ export const FeedView: React.FC<FeedViewProps> = ({
                         {isExpanded ? 'Show less' : 'Read more'}
                       </button>
                     )}
+                  </div>
+                )}
+
+                {/* Quoted / Reposted Original Post Preview */}
+                {post.repostedPost && (
+                  <div className="mb-3.5 p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700/80 space-y-2">
+                    <div className="flex items-center gap-2 text-xs">
+                      <Repeat2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                      <img
+                        src={post.repostedPost.avatarUrl}
+                        alt={post.repostedPost.fullName}
+                        className="w-5 h-5 rounded-full object-cover shrink-0"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => onViewProfile && onViewProfile(post.repostedPost!.userId)}
+                        className="font-semibold text-slate-900 dark:text-slate-100 hover:text-blue-600 dark:hover:text-blue-400 truncate cursor-pointer"
+                      >
+                        {post.repostedPost.fullName}
+                      </button>
+                      {post.repostedPost.batchYear && (
+                        <span className="font-mono text-[11px] text-slate-500 dark:text-slate-400 shrink-0">
+                          · SZMC-{String(post.repostedPost.batchYear).padStart(2, '0')}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-slate-700 dark:text-slate-300 whitespace-pre-line leading-relaxed line-clamp-5">
+                      {post.repostedPost.content}
+                    </p>
+                  </div>
+                )}
+
+                {/* Inline Community Poll */}
+                {post.poll && (
+                  <div className="mb-3">
+                    <InlinePostPollCard
+                      poll={post.poll}
+                      currentUserId={currentUser.id}
+                      onPollUpdated={(updatedPoll) =>
+                        setPosts((prev) =>
+                          prev.map((item) =>
+                            item.id === post.id ? { ...item, poll: updatedPoll } : item
+                          )
+                        )
+                      }
+                    />
                   </div>
                 )}
 
@@ -2075,31 +2442,16 @@ export const FeedView: React.FC<FeedViewProps> = ({
                   </div>
                 )}
 
-                {/* Action Buttons: Clean Facebook-style Icon-Only Bar */}
+                {/* Action Buttons: Multi-Reactions, Nested Comments, Repost, Save & Share */}
                 <div className="flex items-center justify-between sm:justify-start gap-1 sm:gap-2 pt-2 mt-1 border-t border-slate-100 dark:border-slate-800/80">
-                  {/* Like / React */}
-                  <button
-                    type="button"
-                    onClick={() => handleToggleLike(post.id)}
-                    aria-label={post.likedByMe ? 'Unlike' : 'Like'}
-                    title={post.likedByMe ? 'Liked' : 'Like'}
-                    className={`flex-1 sm:flex-initial flex items-center justify-center gap-1.5 py-2 px-2.5 sm:px-3.5 rounded-xl sm:rounded-full text-xs font-bold transition-all active:scale-90 cursor-pointer ${
-                      post.likedByMe
-                        ? 'text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/40 ring-1 ring-rose-200 dark:ring-rose-900/50 shadow-xs'
-                        : 'text-slate-600 dark:text-slate-400 hover:text-rose-600 hover:bg-slate-100 dark:hover:bg-slate-800/80'
-                    }`}
-                  >
-                    <Heart
-                      className={`w-4.5 h-4.5 sm:w-5 sm:h-5 shrink-0 transition-transform ${
-                        post.likedByMe ? 'fill-rose-500 text-rose-500 scale-110' : ''
-                      }`}
-                    />
-                    {post.likesCount > 0 && (
-                      <span className="text-xs font-bold leading-none">
-                        {post.likesCount}
-                      </span>
-                    )}
-                  </button>
+                  {/* Multi-Reaction Picker */}
+                  <ReactionPickerButton
+                    likedByMe={post.likedByMe}
+                    userReaction={post.userReaction}
+                    likesCount={post.likesCount}
+                    reactionsSummary={post.reactionsSummary}
+                    onReact={(reaction) => handleReactToPost(post.id, reaction)}
+                  />
 
                   {/* Comment */}
                   <button
@@ -2111,16 +2463,32 @@ export const FeedView: React.FC<FeedViewProps> = ({
                     }
                     aria-label="Comments"
                     title="Comments"
-                    className={`flex-1 sm:flex-initial flex items-center justify-center gap-1.5 py-2 px-2.5 sm:px-3.5 rounded-xl sm:rounded-full text-xs font-bold transition-all active:scale-90 cursor-pointer ${
+                    className={`flex-1 sm:flex-initial min-h-[38px] flex items-center justify-center gap-1.5 py-2 px-2.5 sm:px-3.5 rounded-xl text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
                       activeCommentPostId === post.id
-                        ? 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/40 ring-1 ring-blue-200 dark:ring-blue-900/50 shadow-xs'
+                        ? 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/40 ring-1 ring-blue-200 dark:ring-blue-900/50'
                         : 'text-slate-600 dark:text-slate-400 hover:text-blue-600 hover:bg-slate-100 dark:hover:bg-slate-800/80'
                     }`}
                   >
-                    <MessageCircle className="w-4.5 h-4.5 sm:w-5 sm:h-5 shrink-0" />
+                    <MessageCircle className="w-4 h-4 shrink-0" />
                     {Math.max(post.commentsCount || 0, post.comments?.length || 0) > 0 && (
-                      <span className="text-xs font-bold leading-none">
+                      <span className="text-xs font-mono tabular-nums leading-none">
                         {Math.max(post.commentsCount || 0, post.comments?.length || 0)}
+                      </span>
+                    )}
+                  </button>
+
+                  {/* Repost */}
+                  <button
+                    type="button"
+                    onClick={() => setRepostTarget(post)}
+                    aria-label="Repost"
+                    title="Repost to The Quad"
+                    className="flex-1 sm:flex-initial min-h-[38px] flex items-center justify-center gap-1.5 py-2 px-2.5 sm:px-3.5 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-400 hover:text-emerald-600 hover:bg-slate-100 dark:hover:bg-slate-800/80 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    <Repeat2 className="w-4 h-4 shrink-0" />
+                    {(post.repostCount || 0) > 0 && (
+                      <span className="text-xs font-mono tabular-nums leading-none">
+                        {post.repostCount}
                       </span>
                     )}
                   </button>
@@ -2166,7 +2534,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
 
                 {/* Comments Thread */}
                 <div className="mt-3.5 space-y-3 pt-3 border-t border-slate-100 dark:border-slate-800/60">
-                  {Array.isArray(post.comments) && post.comments.map((comment) => (
+                  {Array.isArray(post.comments) && buildCommentTree(post.comments).map((comment) => (
                     <div key={comment.id} className="space-y-2">
                       <div className="flex items-start gap-2.5">
                         <img
@@ -2180,7 +2548,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
                               {comment.fullName || 'Alumnus'}
                             </span>
                             <p className="text-xs text-slate-700 dark:text-slate-300 break-words mt-0.5">
-                              {comment.content}
+                              <RichTextWithMentions text={comment.content} />
                             </p>
                           </div>
 
@@ -2291,10 +2659,32 @@ export const FeedView: React.FC<FeedViewProps> = ({
             );
           });
         })()}
+
+        {/* Cursor-Based Pagination Control */}
+        {!isLoadingPosts && hasMorePosts && (
+          <div className="pt-2 flex justify-center">
+            <button
+              type="button"
+              disabled={isLoadingMore}
+              onClick={handleLoadMorePosts}
+              className="min-h-[44px] px-5 py-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 hover:border-blue-400 dark:hover:border-blue-500 text-xs font-semibold text-slate-700 dark:text-slate-200 inline-flex items-center gap-2 transition-colors cursor-pointer disabled:opacity-60"
+            >
+              {isLoadingMore ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin text-blue-600" />
+                  <span>Loading older posts...</span>
+                </>
+              ) : (
+                <span>Load More Posts</span>
+              )}
+            </button>
+          </div>
+        )}
       </div>
     </div>
 
-        {/* Right Events Sidebar */}
+        {/* Right Events Sidebar (Standalone mode only; QuadCommunityShell renders right discovery rail) */}
+        {!embeddedInQuad && (
         <aside className="hidden xl:block xl:col-span-4 space-y-4 sticky top-20 self-start">
           <div className="p-5 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xs space-y-4">
             <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800">
@@ -2386,6 +2776,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
             </button>
           </div>
         </aside>
+        )}
       </div>
 
       {/* EDIT POST MODAL */}
@@ -2590,77 +2981,80 @@ export const FeedView: React.FC<FeedViewProps> = ({
         </div>
       )}
 
-      {/* REPORT POST MODAL */}
-      {postToReport && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs">
-          <div className="bg-white dark:bg-slate-900 w-full max-w-md rounded-3xl p-6 border border-slate-200 dark:border-slate-800 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800">
-              <div className="flex items-center gap-2">
-                <Flag className="w-5 h-5 text-amber-500" />
-                <h3 className="font-bold text-base text-slate-900 dark:text-slate-100">
-                  Report Post
-                </h3>
+      {/* PHASE 6: REAL DB-BACKED REPORT CONTENT MODAL */}
+      <ReportContentModal
+        isOpen={Boolean(postToReport)}
+        reporterId={currentUser.id}
+        targetType="post"
+        targetId={postToReport?.id || 0}
+        targetAuthorId={postToReport?.userId || null}
+        targetLabel={postToReport ? `${postToReport.fullName}'s post` : undefined}
+        onClose={() => setPostToReport(null)}
+        onSubmitted={(msg) => showToast(msg)}
+      />
+
+      {/* PHASE 6: CONFIRM BLOCK AUTHOR MODAL */}
+      {userToBlock && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/65 backdrop-blur-xs"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="bg-white dark:bg-slate-900 w-full max-w-sm rounded-2xl p-5 border border-slate-200 dark:border-slate-800 shadow-2xl space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-50 dark:bg-rose-950/50 text-rose-600 dark:text-rose-400 flex items-center justify-center shrink-0">
+                <ShieldBan className="w-5 h-5" />
               </div>
+              <div className="min-w-0">
+                <h3 className="font-bold text-sm text-slate-900 dark:text-slate-100">
+                  Block {userToBlock.fullName}?
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 leading-relaxed">
+                  Their posts, comments, and notifications will be hidden from your Quad experience, and any existing connection or follow will be removed. You can unblock them anytime in Profile Settings.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-1">
               <button
                 type="button"
-                onClick={() => setPostToReport(null)}
-                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <p className="text-xs text-slate-600 dark:text-slate-300">
-              Help maintain a high standard of professional medical etiquette and collegiate integrity in the SZMC Alumni Network.
-            </p>
-
-            <div className="space-y-2">
-              {[
-                'Inappropriate / Unprofessional',
-                'Spam or Commercial Promotion',
-                'Misleading or Fraudulent Information',
-                'Harassment or Offensive Language',
-                'Other Violation'
-              ].map((reason) => (
-                <label
-                  key={reason}
-                  className={`flex items-center gap-2.5 p-2.5 rounded-xl border text-xs font-semibold cursor-pointer transition-colors ${
-                    reportReason === reason
-                      ? 'bg-blue-50 dark:bg-blue-950/40 border-blue-400 text-blue-700 dark:text-blue-300'
-                      : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
-                  }`}
-                >
-                  <input
-                    type="radio"
-                    name="reportReason"
-                    checked={reportReason === reason}
-                    onChange={() => setReportReason(reason)}
-                    className="accent-blue-600"
-                  />
-                  <span>{reason}</span>
-                </label>
-              ))}
-            </div>
-
-            <div className="flex items-center justify-end gap-2.5 pt-2">
-              <button
-                type="button"
-                onClick={() => setPostToReport(null)}
-                className="px-4 py-2 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                onClick={() => setUserToBlock(null)}
+                className="px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 type="button"
-                onClick={handleSubmitReport}
-                className="px-5 py-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-xl shadow-md transition-colors cursor-pointer"
+                onClick={handleConfirmBlockUser}
+                className="px-4 py-2 rounded-xl text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white transition-colors cursor-pointer"
               >
-                Submit Report
+                Block Account
               </button>
             </div>
           </div>
         </div>
       )}
+
+      {/* PHASE 5: REPOST MODAL */}
+      <RepostModal
+        isOpen={Boolean(repostTarget)}
+        targetPost={repostTarget}
+        authorId={currentUser.id}
+        authorName={currentUser.fullName}
+        authorAvatar={currentUser.avatarUrl}
+        onClose={() => setRepostTarget(null)}
+        onRepostCreated={(newPost, originalPostId) => {
+          setPosts((prev) => [
+            newPost,
+            ...prev.map((p) =>
+              p.id === originalPostId
+                ? { ...p, repostCount: (p.repostCount || 0) + 1 }
+                : p
+            ),
+          ]);
+          playSound('post');
+          showToast('Reposted to The Quad!');
+        }}
+      />
 
       {/* FULL-SCREEN LIGHTBOX MODAL FOR ATTACHED MEDIA */}
       <PostLightboxModal

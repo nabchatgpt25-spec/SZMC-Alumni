@@ -17,6 +17,8 @@ import {
   Check,
   CheckCheck,
   ExternalLink,
+  Ban,
+  AlertCircle,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useMessagingProfileId } from '../../hooks/useMessagingProfileId';
@@ -25,9 +27,14 @@ import {
   listMessages,
   sendMessage,
   markConversationRead,
+  getPeerLastReadAt,
   subscribeToMessageChanges,
   subscribeToTypingStatus,
+  subscribeToReadReceipts,
+  subscribeToOnlinePresence,
+  subscribeToRealtimeReconnect,
   sendTypingIndicator,
+  getMessengerBlockState,
 } from '../../services/messagingService';
 import type { ChatMessage } from '../../types/messaging';
 import type { AlumniProfile } from '../../types';
@@ -71,6 +78,10 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [callToast, setCallToast] = useState<string | null>(null);
+  const [dockError, setDockError] = useState<string | null>(null);
+  const [isBlocked, setIsBlocked] = useState(false);
+  const [isPeerOnline, setIsPeerOnline] = useState(false);
+  const [peerLastReadAt, setPeerLastReadAt] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -83,23 +94,47 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
     messagesEndRef.current?.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto' });
   }, []);
 
-  // 1. Initialize or find direct conversation with peer
+  // 1. Initialize or find direct conversation with peer (and enforce block status)
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setDockError(null);
+    setIsBlocked(false);
 
     (async () => {
       try {
+        const blockState = await getMessengerBlockState(myId);
+        if (cancelled) return;
+        if (blockState.blockedEitherWay.has(peer.id)) {
+          setIsBlocked(true);
+          setDockError(
+            blockState.blockedByMe.has(peer.id)
+              ? 'You blocked this account. Unblock them in Messenger Settings to resume messaging.'
+              : 'Messaging is unavailable with this account.'
+          );
+          return;
+        }
+
         const convId = await findOrCreateDirectConversation(myId, peer.id);
         if (cancelled) return;
         setConversationId(convId);
-        const initialMessages = await listMessages(convId);
+        const [initialMessages, lastRead] = await Promise.all([
+          listMessages(convId, 50),
+          getPeerLastReadAt(convId, myId),
+        ]);
         if (cancelled) return;
         setMessages(initialMessages);
+        setPeerLastReadAt(lastRead);
         await markConversationRead(convId, myId);
         setTimeout(() => scrollToBottom(false), 80);
       } catch (err) {
-        console.warn('Failed to initialize Facebook dock chat:', err);
+        if (!cancelled) {
+          const message = err instanceof Error ? err.message : 'Unable to open this conversation.';
+          if (/blocked|unavailable/i.test(message)) {
+            setIsBlocked(true);
+          }
+          setDockError(message);
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -110,16 +145,83 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
     };
   }, [myId, peer.id, scrollToBottom]);
 
-  // 2. Real-Time incoming message listener
+  // 1b. Sync block status live when the user blocks/unblocks accounts anywhere in the app
   useEffect(() => {
-    const unsub = subscribeToMessageChanges((incoming) => {
+    const syncBlockState = async () => {
+      try {
+        const blockState = await getMessengerBlockState(myId);
+        const blocked = blockState.blockedEitherWay.has(peer.id);
+        setIsBlocked(blocked);
+        if (blocked) {
+          setDockError(
+            blockState.blockedByMe.has(peer.id)
+              ? 'You blocked this account. Unblock them in Messenger Settings to resume messaging.'
+              : 'Messaging is unavailable with this account.'
+          );
+        } else {
+          setDockError((prev) => (prev && /blocked|unavailable/i.test(prev) ? null : prev));
+        }
+      } catch {
+        /* ignore transient errors */
+      }
+    };
+    window.addEventListener('szmc_blocks_updated', syncBlockState);
+    return () => window.removeEventListener('szmc_blocks_updated', syncBlockState);
+  }, [myId, peer.id]);
+
+  // 1c. Subscribe to real online presence for the peer
+  useEffect(() => {
+    if (!myId) return;
+    return subscribeToOnlinePresence(
+      {
+        profileId: myId,
+        fullName: currentUser.fullName || 'SZMC Alumnus',
+        avatarUrl: currentUser.avatarUrl || '/szmc-logo.png',
+        batchYear: currentUser.batchYear || 20,
+      },
+      (users) => {
+        setIsPeerOnline(users.some((u) => u.profileId === peer.id));
+      }
+    );
+  }, [myId, peer.id, currentUser.fullName, currentUser.avatarUrl, currentUser.batchYear]);
+
+  // 1d. Live read receipts for this dock conversation
+  useEffect(() => {
+    return subscribeToReadReceipts((receipt) => {
+      if (receipt.conversationId === conversationIdRef.current && receipt.profileId !== myId) {
+        setPeerLastReadAt((prev) => (!prev || receipt.lastReadAt > prev ? receipt.lastReadAt : prev));
+      }
+    });
+  }, [myId]);
+
+  // 1e. Resync dock messages when Realtime reconnects or tab returns from background
+  useEffect(() => {
+    return subscribeToRealtimeReconnect(() => {
+      const convId = conversationIdRef.current;
+      if (!convId) return;
+      void listMessages(convId, 50)
+        .then((latest) => {
+          if (conversationIdRef.current === convId) setMessages(latest);
+        })
+        .catch(() => {});
+    });
+  }, []);
+
+  // 2. Real-Time incoming message listener (handles INSERT, UPDATE edits, and DELETE)
+  useEffect(() => {
+    const unsub = subscribeToMessageChanges((incoming, meta) => {
       if (incoming.conversationId === conversationIdRef.current) {
         setMessages((prev) => {
-          if (prev.some((m) => m.id === incoming.id)) return prev;
+          const idx = prev.findIndex((m) => m.id === incoming.id);
+          if (idx !== -1) {
+            const next = [...prev];
+            next[idx] = incoming;
+            return next;
+          }
           return [...prev, incoming];
         });
 
-        if (incoming.senderId !== myId) {
+        if (meta.eventType === 'INSERT' && incoming.senderId !== myId) {
           if (isMinimized) {
             setUnreadCount((c) => c + 1);
           } else {
@@ -130,19 +232,22 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
           }
         }
 
-        setTimeout(() => scrollToBottom(true), 60);
+        if (meta.eventType === 'INSERT') {
+          setTimeout(() => scrollToBottom(true), 60);
+        }
       }
     });
 
     return () => unsub();
   }, [myId, isMinimized, soundEnabled, scrollToBottom]);
 
-  // 3. Real-Time typing indicators
+  // 3. Per-conversation scoped real-time typing indicators (never global)
   useEffect(() => {
+    if (!conversationId) return;
     let timer: any = null;
-    const unsub = subscribeToTypingStatus((data) => {
-      if (data.conversationId === conversationIdRef.current && data.profileId === peer.id) {
-        setPeerTyping(`${peer.fullName.split(' ')[0]} is typing...`);
+    const unsub = subscribeToTypingStatus(conversationId, (data) => {
+      if (data.conversationId === conversationId && data.profileId !== myId) {
+        setPeerTyping(`${(data.fullName || peer.fullName).split(' ')[0]} is typing...`);
         clearTimeout(timer);
         timer = setTimeout(() => setPeerTyping(null), 3000);
       }
@@ -152,7 +257,7 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
       unsub();
       clearTimeout(timer);
     };
-  }, [peer.id, peer.fullName]);
+  }, [conversationId, myId, peer.fullName]);
 
   // Auto focus input when restored
   useEffect(() => {
@@ -169,7 +274,7 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
     const text = (textToSend ?? inputText).trim();
     const hasImage = Boolean(pendingImage);
 
-    if ((!text && !hasImage) || !conversationId || sending) return;
+    if ((!text && !hasImage) || !conversationId || sending || isBlocked) return;
 
     if (!textToSend) setInputText('');
     const imageToSend = pendingImage;
@@ -191,9 +296,10 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
         if (prev.some((m) => m.id === sent.id)) return prev;
         return [...prev, sent];
       });
+      setDockError(null);
       setTimeout(() => scrollToBottom(true), 40);
     } catch (err) {
-      console.warn('Failed to send dock message:', err);
+      setDockError(err instanceof Error ? err.message : 'Message could not be sent.');
       if (!textToSend) setInputText(text);
       if (imageToSend) setPendingImage(imageToSend);
     } finally {
@@ -275,7 +381,9 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
             alt={peer.fullName}
             className="w-13 h-13 rounded-full object-cover"
           />
-          <span className="absolute bottom-1 right-1 w-3.5 h-3.5 rounded-full bg-emerald-500 border-2 border-white dark:border-slate-900" />
+          {isPeerOnline && !isBlocked && (
+            <span className="absolute bottom-1 right-1 w-3.5 h-3.5 rounded-full bg-emerald-500 border-2 border-white dark:border-slate-900" />
+          )}
           {unreadCount > 0 && (
             <span className="absolute -top-1 -right-1 px-1.5 py-0.5 rounded-full bg-rose-600 text-white text-[10px] font-black animate-pulse shadow-xs">
               {unreadCount}
@@ -305,7 +413,9 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
               alt={peer.fullName}
               className="w-9 h-9 rounded-full object-cover ring-2 ring-white/30"
             />
-            <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-400 border-2 border-white" />
+            {isPeerOnline && !isBlocked && (
+              <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-400 border-2 border-white" />
+            )}
           </div>
 
           <div className="min-w-0">
@@ -320,8 +430,10 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
             <p className="text-[11px] text-white/80 truncate">
               {peerTyping ? (
                 <span className="text-amber-200 font-semibold animate-pulse">{peerTyping}</span>
-              ) : (
+              ) : isPeerOnline && !isBlocked ? (
                 `MBBS Batch ${peer.batchYear} • Active now`
+              ) : (
+                `MBBS Batch ${peer.batchYear} • ${peer.profession || 'SZMC Doctor'}`
               )}
             </p>
           </div>
@@ -404,6 +516,20 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
             <Loader2 className="w-6 h-6 animate-spin text-[#0084FF]" />
             <p className="text-[11px] font-semibold">Connecting to Messenger...</p>
           </div>
+        ) : !conversationId && dockError ? (
+          <div className="flex flex-col items-center justify-center h-full text-center p-5 space-y-3">
+            <div className="w-14 h-14 rounded-full bg-rose-50 dark:bg-rose-950/40 text-rose-500 flex items-center justify-center ring-4 ring-rose-100 dark:ring-rose-900/40">
+              {isBlocked ? <Ban className="w-6 h-6" /> : <AlertCircle className="w-6 h-6" />}
+            </div>
+            <div>
+              <h4 className="font-bold text-slate-900 dark:text-white text-sm">
+                {isBlocked ? 'Messaging Blocked' : 'Conversation Unavailable'}
+              </h4>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 leading-relaxed">
+                {dockError}
+              </p>
+            </div>
+          </div>
         ) : messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center p-4 space-y-3">
             <div className="w-16 h-16 rounded-full bg-blue-50 dark:bg-blue-950/40 text-[#0084FF] flex items-center justify-center ring-4 ring-blue-100 dark:ring-blue-900/40">
@@ -474,37 +600,53 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
                   key={m.id}
                   className={`flex flex-col ${fromMe ? 'items-end' : 'items-start'} space-y-0.5`}
                 >
-                  {imagePayload && (
-                    <div className="max-w-[78%] rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 shadow-sm my-0.5">
-                      <img
-                        src={imagePayload}
-                        alt="Attachment"
-                        className="w-full max-h-48 object-cover cursor-pointer hover:opacity-95"
-                        onClick={() => window.open(imagePayload, '_blank')}
-                      />
+                  {m.deletedAt ? (
+                    <div className="max-w-[78%] px-3.5 py-2 rounded-2xl italic text-slate-500 dark:text-slate-400 bg-slate-200/60 dark:bg-slate-800">
+                      This message was deleted
                     </div>
-                  )}
+                  ) : (
+                    <>
+                      {imagePayload && (
+                        <div className="max-w-[78%] rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 shadow-sm my-0.5">
+                          <img
+                            src={imagePayload}
+                            alt="Attachment"
+                            className="w-full max-h-48 object-cover hover:opacity-95"
+                          />
+                        </div>
+                      )}
 
-                  {textContent && (
-                    <div
-                      className={`max-w-[78%] px-3.5 py-2 rounded-2xl leading-relaxed break-words shadow-2xs ${
-                        isLike
-                          ? 'bg-transparent text-3xl shadow-none p-0'
-                          : fromMe
-                          ? 'bg-[#0084FF] text-white rounded-br-xs'
-                          : 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 border border-slate-200/70 dark:border-slate-700/60 rounded-bl-xs'
-                      }`}
-                    >
-                      {textContent}
-                    </div>
+                      {textContent && (
+                        <div
+                          className={`max-w-[78%] px-3.5 py-2 rounded-2xl leading-relaxed break-words shadow-2xs ${
+                            isLike
+                              ? 'bg-transparent text-3xl shadow-none p-0'
+                              : fromMe
+                              ? 'bg-[#0084FF] text-white rounded-br-xs'
+                              : 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 border border-slate-200/70 dark:border-slate-700/60 rounded-bl-xs'
+                          }`}
+                        >
+                          {textContent}
+                        </div>
+                      )}
+                    </>
                   )}
 
                   <div className="flex items-center gap-1 text-[9px] text-slate-400 px-1">
-                    <span>{formatMessageTime(m.createdAt)}</span>
-                    {fromMe && (
-                      <span title="Delivered">
-                        <CheckCheck className="w-3 h-3 text-[#0084FF]" />
-                      </span>
+                    <span>
+                      {formatMessageTime(m.createdAt)}
+                      {m.editedAt && !m.deletedAt ? ' · edited' : ''}
+                    </span>
+                    {fromMe && !m.deletedAt && (
+                      peerLastReadAt && m.createdAt <= peerLastReadAt ? (
+                        <span title="Seen">
+                          <CheckCheck className="w-3 h-3 text-[#0084FF]" />
+                        </span>
+                      ) : (
+                        <span title="Delivered">
+                          <Check className="w-3 h-3 text-slate-400" />
+                        </span>
+                      )
                     )}
                   </div>
                 </div>
@@ -567,69 +709,95 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
         </div>
       )}
 
+      {/* Inline Error Banner (non-blocking errors inside an active thread) */}
+      {dockError && conversationId && !isBlocked && (
+        <div className="px-3 py-1.5 bg-rose-50 dark:bg-rose-950/60 border-t border-rose-200 dark:border-rose-800 text-[11px] font-semibold text-rose-700 dark:text-rose-300 flex items-center justify-between gap-2">
+          <span className="truncate">{dockError}</span>
+          <button
+            type="button"
+            onClick={() => setDockError(null)}
+            className="text-rose-500 hover:text-rose-700 dark:hover:text-rose-200 shrink-0 cursor-pointer"
+            aria-label="Dismiss error"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
       {/* Input Composer Footer */}
-      <div className="p-2.5 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 flex items-center gap-1.5">
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="image/*"
-          onChange={handleImageSelect}
-          className="hidden"
-        />
+      {isBlocked || (!loading && !conversationId) ? (
+        <div className="px-3 py-2.5 bg-slate-100 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 flex items-center justify-center gap-2 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+          <Ban className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+          <span className="truncate">
+            {isBlocked
+              ? 'You cannot message this account.'
+              : 'Conversation unavailable.'}
+          </span>
+        </div>
+      ) : (
+        <div className="p-2.5 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 flex items-center gap-1.5">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            onChange={handleImageSelect}
+            className="hidden"
+          />
 
-        <button
-          type="button"
-          onClick={() => fileInputRef.current?.click()}
-          title="Attach photo or report"
-          aria-label="Attach photo or report"
-          className="w-8 h-8 rounded-full text-slate-500 hover:text-[#0084FF] hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center transition-colors cursor-pointer shrink-0"
-        >
-          <ImageIcon className="w-4 h-4" />
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-          title="Pick emoji"
-          aria-label="Pick emoji"
-          className="w-8 h-8 rounded-full text-slate-500 hover:text-[#0084FF] hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center transition-colors cursor-pointer shrink-0"
-        >
-          <Smile className="w-4 h-4" />
-        </button>
-
-        <input
-          ref={inputRef}
-          type="text"
-          value={inputText}
-          onChange={handleInputChange}
-          onKeyDown={handleKeyDown}
-          placeholder="Aa"
-          disabled={loading || sending}
-          className="flex-1 px-3.5 py-2 rounded-full bg-slate-100 dark:bg-slate-800 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 outline-none focus:ring-2 focus:ring-[#0084FF]/40 border-none transition-all"
-        />
-
-        {inputText.trim() || pendingImage ? (
           <button
             type="button"
-            onClick={() => handleSend()}
-            disabled={sending}
-            aria-label="Send message"
-            className="w-8 h-8 rounded-full bg-[#0084FF] hover:bg-[#0073E6] text-white flex items-center justify-center transition-transform active:scale-90 cursor-pointer shadow-xs disabled:opacity-50 shrink-0"
+            onClick={() => fileInputRef.current?.click()}
+            title="Attach photo or report"
+            aria-label="Attach photo or report"
+            className="w-8 h-8 rounded-full text-slate-500 hover:text-[#0084FF] hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center transition-colors cursor-pointer shrink-0"
           >
-            {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+            <ImageIcon className="w-4 h-4" />
           </button>
-        ) : (
+
           <button
             type="button"
-            onClick={() => handleSend('👍')}
-            aria-label="Send Thumbs Up Like"
-            title="Send Like"
-            className="w-8 h-8 rounded-full text-[#0084FF] hover:bg-blue-50 dark:hover:bg-slate-800 flex items-center justify-center transition-transform active:scale-125 cursor-pointer shrink-0"
+            onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+            title="Pick emoji"
+            aria-label="Pick emoji"
+            className="w-8 h-8 rounded-full text-slate-500 hover:text-[#0084FF] hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center transition-colors cursor-pointer shrink-0"
           >
-            <ThumbsUp className="w-4 h-4 fill-[#0084FF]" />
+            <Smile className="w-4 h-4" />
           </button>
-        )}
-      </div>
+
+          <input
+            ref={inputRef}
+            type="text"
+            value={inputText}
+            onChange={handleInputChange}
+            onKeyDown={handleKeyDown}
+            placeholder="Aa"
+            disabled={loading || sending}
+            className="flex-1 px-3.5 py-2 rounded-full bg-slate-100 dark:bg-slate-800 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 outline-none focus:ring-2 focus:ring-[#0084FF]/40 border-none transition-all"
+          />
+
+          {inputText.trim() || pendingImage ? (
+            <button
+              type="button"
+              onClick={() => handleSend()}
+              disabled={sending}
+              aria-label="Send message"
+              className="w-8 h-8 rounded-full bg-[#0084FF] hover:bg-[#0073E6] text-white flex items-center justify-center transition-transform active:scale-90 cursor-pointer shadow-xs disabled:opacity-50 shrink-0"
+            >
+              {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => handleSend('👍')}
+              aria-label="Send Thumbs Up Like"
+              title="Send Like"
+              className="w-8 h-8 rounded-full text-[#0084FF] hover:bg-blue-50 dark:hover:bg-slate-800 flex items-center justify-center transition-transform active:scale-125 cursor-pointer shrink-0"
+            >
+              <ThumbsUp className="w-4 h-4 fill-[#0084FF]" />
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 };

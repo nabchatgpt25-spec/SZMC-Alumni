@@ -9,12 +9,48 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "GET, POST, PATCH, PUT, DELETE, OPTIONS",
-  "Content-Type": "application/json",
-};
+function isAllowedOrigin(origin: string): boolean {
+  const normalized = origin.trim().replace(/\/+$/, "");
+  const extraOrigins = (Deno.env.get("ALLOWED_ORIGINS") || "")
+    .split(",")
+    .map((o) => o.trim().replace(/\/+$/, ""))
+    .filter(Boolean);
+
+  if (extraOrigins.includes(normalized)) return true;
+
+  return (
+    normalized === "https://szmcalumni.net" ||
+    normalized === "https://www.szmcalumni.net" ||
+    /^https:\/\/([a-zA-Z0-9-]+\.)*szmcalumni\.net$/.test(normalized) ||
+    /^https:\/\/([a-zA-Z0-9-]+\.)*alumniworld\.xyz$/.test(normalized) ||
+    /^https:\/\/([a-zA-Z0-9-]+\.)*run\.app$/.test(normalized) ||
+    /^https:\/\/([a-zA-Z0-9-]+\.)*googleusercontent\.com$/.test(normalized) ||
+    /^https?:\/\/(localhost|127\.0\.0\.1)(:[0-9]+)?$/.test(normalized)
+  );
+}
+
+function buildCorsHeaders(req: Request): { allowed: boolean; headers: Record<string, string> } {
+  const origin = req.headers.get("Origin");
+  const baseHeaders: Record<string, string> = {
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Allow-Methods": "GET, POST, PATCH, PUT, DELETE, OPTIONS",
+    "Content-Type": "application/json",
+    "Vary": "Origin",
+  };
+  if (!origin) {
+    return { allowed: true, headers: baseHeaders };
+  }
+  if (!isAllowedOrigin(origin)) {
+    return { allowed: false, headers: baseHeaders };
+  }
+  return {
+    allowed: true,
+    headers: {
+      ...baseHeaders,
+      "Access-Control-Allow-Origin": origin,
+    },
+  };
+}
 
 function formatToE164(raw: string): string {
   const cleaned = raw.trim();
@@ -49,6 +85,14 @@ async function recordAuditLog(
 }
 
 serve(async (req: Request) => {
+  const { allowed: originAllowed, headers: corsHeaders } = buildCorsHeaders(req);
+  if (!originAllowed) {
+    return new Response(
+      JSON.stringify({ error: "Forbidden: Origin not permitted." }),
+      { status: 403, headers: corsHeaders }
+    );
+  }
+
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
@@ -90,19 +134,21 @@ serve(async (req: Request) => {
     const caller = userData.user;
     const callerEmail = (caller.email || "").toLowerCase().trim();
 
-    // 2. Authorize Admin Privileges strictly via database role
+    // 2. Authorize Privileges strictly via database role (distinct super_admin / admin / moderator tiers)
     const { data: callerProfile } = await supabaseAdmin
       .from("alumni_profiles")
       .select("id, role")
       .eq("auth_user_id", caller.id)
       .maybeSingle();
 
-    const isAdmin = callerProfile?.role === "admin";
-    const isAuthorized = isAdmin || callerProfile?.role === "moderator";
+    const callerRole = (callerProfile?.role || "member") as string;
+    const isSuperAdmin = callerRole === "super_admin";
+    const isAdmin = isSuperAdmin || callerRole === "admin";
+    const isAuthorized = isAdmin || callerRole === "moderator";
 
     if (!isAuthorized) {
       return new Response(
-        JSON.stringify({ error: "Forbidden: Administrator permissions required." }),
+        JSON.stringify({ error: "Forbidden: Governance permissions required." }),
         { status: 403, headers: corsHeaders }
       );
     }
@@ -148,9 +194,15 @@ serve(async (req: Request) => {
     }
 
     // -------------------------------------------------------------------------
-    // ROUTE: OVERVIEW METRICS
+    // ROUTE: OVERVIEW METRICS (Admin & Super Admin Only)
     // -------------------------------------------------------------------------
     if (action === "overview" || action === "") {
+      if (!isAdmin) {
+        return new Response(
+          JSON.stringify({ error: "Forbidden: Administrator clearance required for overview metrics." }),
+          { status: 403, headers: corsHeaders }
+        );
+      }
       const [
         totalRes,
         verifiedRes,
@@ -225,9 +277,16 @@ serve(async (req: Request) => {
     }
 
     // -------------------------------------------------------------------------
-    // ROUTE: ALUMNI DIRECTORY QUERY (with Admin Sensitive PII)
+    // ROUTE: ALUMNI DIRECTORY QUERY (with Admin Sensitive PII — Admin & Super Admin Only)
     // -------------------------------------------------------------------------
     if (action.startsWith("alumni")) {
+      if (!isAdmin) {
+        return new Response(
+          JSON.stringify({ error: "Forbidden: Administrator clearance required for alumni governance." }),
+          { status: 403, headers: corsHeaders }
+        );
+      }
+
       // Check if specific profile ID requested (e.g. alumni/123)
       const profileIdMatch = action.match(/^alumni\/(\d+)$/);
       if (profileIdMatch) {
@@ -237,10 +296,17 @@ serve(async (req: Request) => {
           // Update profile governance
           const { verificationStatus, role, accountStatus, academicStream, academicGroup, adminReviewNote } = rawBody;
 
-          const allowedRoles = ["member", "moderator", "admin"];
-          if (role !== undefined && (!isAdmin || !allowedRoles.includes(role))) {
+          const allowedRoles = ["member", "batch_representative", "moderator", "admin", "super_admin"];
+          if (role !== undefined && !allowedRoles.includes(role)) {
             return new Response(
-              JSON.stringify({ error: "Forbidden: Only administrators can assign a supported database role." }),
+              JSON.stringify({ error: "Forbidden: Unsupported database role." }),
+              { status: 403, headers: corsHeaders }
+            );
+          }
+
+          if ((role === "admin" || role === "super_admin") && !isSuperAdmin) {
+            return new Response(
+              JSON.stringify({ error: "Forbidden: Only Super Administrators can assign admin or super_admin roles." }),
               { status: 403, headers: corsHeaders }
             );
           }
@@ -251,9 +317,9 @@ serve(async (req: Request) => {
             .eq("id", targetId)
             .maybeSingle();
 
-          if (targetCheck?.role === "admin" && !isAdmin) {
+          if ((targetCheck?.role === "admin" || targetCheck?.role === "super_admin") && !isSuperAdmin) {
             return new Response(
-              JSON.stringify({ error: "Forbidden: Moderator accounts cannot modify administrator profiles." }),
+              JSON.stringify({ error: "Forbidden: Only Super Administrators can modify administrator profiles." }),
               { status: 403, headers: corsHeaders }
             );
           }
@@ -312,19 +378,19 @@ serve(async (req: Request) => {
         }
 
         if (method === "DELETE") {
-          // Delete alumnus
-          if (!isAdmin) {
+          // Delete alumnus (Admin/Super Admin; deleting an admin requires Super Admin)
+          const { data: target } = await supabaseAdmin
+            .from("alumni_profiles")
+            .select("id, full_name, auth_user_id, role")
+            .eq("id", targetId)
+            .single();
+
+          if ((target?.role === "admin" || target?.role === "super_admin") && !isSuperAdmin) {
             return new Response(
-              JSON.stringify({ error: "Forbidden: Super Administrator rights required to delete profiles." }),
+              JSON.stringify({ error: "Forbidden: Super Administrator rights required to delete administrator profiles." }),
               { status: 403, headers: corsHeaders }
             );
           }
-
-          const { data: target } = await supabaseAdmin
-            .from("alumni_profiles")
-            .select("id, full_name, auth_user_id")
-            .eq("id", targetId)
-            .single();
 
           await supabaseAdmin.from("alumni_profiles").delete().eq("id", targetId);
 
@@ -429,9 +495,12 @@ serve(async (req: Request) => {
     }
 
     // -------------------------------------------------------------------------
-    // ROUTE: VERIFY PHONE OWNERSHIP
+    // ROUTE: VERIFY PHONE OWNERSHIP (Admin & Super Admin Only)
     // -------------------------------------------------------------------------
     if (action === "verify-phone") {
+      if (!isAdmin) {
+        return new Response(JSON.stringify({ error: "Forbidden: Administrator clearance required." }), { status: 403, headers: corsHeaders });
+      }
       const { profileId, notes } = rawBody;
       if (!profileId) {
         return new Response(JSON.stringify({ error: "profileId is required." }), { status: 400, headers: corsHeaders });
@@ -528,9 +597,12 @@ serve(async (req: Request) => {
     }
 
     // -------------------------------------------------------------------------
-    // ROUTE: REVOKE PHONE VERIFICATION
+    // ROUTE: REVOKE PHONE VERIFICATION (Admin & Super Admin Only)
     // -------------------------------------------------------------------------
     if (action === "revoke-phone-verification") {
+      if (!isAdmin) {
+        return new Response(JSON.stringify({ error: "Forbidden: Administrator clearance required." }), { status: 403, headers: corsHeaders });
+      }
       const { profileId, notes } = rawBody;
       if (!profileId) {
         return new Response(JSON.stringify({ error: "profileId is required." }), { status: 400, headers: corsHeaders });
@@ -858,6 +930,9 @@ serve(async (req: Request) => {
     if (action.startsWith("stream-groups")) {
       const sgMatch = action.match(/^stream-groups\/([^\/]+)$/);
       if (sgMatch && (method === "PATCH" || method === "PUT")) {
+        if (!isAdmin) {
+          return new Response(JSON.stringify({ error: "Forbidden: Administrator clearance required." }), { status: 403, headers: corsHeaders });
+        }
         const sgId = sgMatch[1];
         const { isActive } = rawBody;
 
@@ -889,11 +964,11 @@ serve(async (req: Request) => {
     }
 
     // -------------------------------------------------------------------------
-    // ROUTE: BULK COHORT SAMPLE SEEDER (Guarded)
+    // ROUTE: BULK COHORT SAMPLE SEEDER (Strict Super Admin Only)
     // -------------------------------------------------------------------------
     if (action === "bulk-cohort") {
-      if (!isAdmin) {
-        return new Response(JSON.stringify({ error: "Forbidden: Super Administrator required." }), { status: 403, headers: corsHeaders });
+      if (!isSuperAdmin) {
+        return new Response(JSON.stringify({ error: "Forbidden: Super Administrator clearance required." }), { status: 403, headers: corsHeaders });
       }
 
       await recordAuditLog(supabaseAdmin, {
@@ -915,7 +990,7 @@ serve(async (req: Request) => {
     // ROUTE: DATABASE BACKUP EXPORT (Strict Super Admin Only)
     // -------------------------------------------------------------------------
     if (action === "export-full-backup") {
-      if (!isAdmin) {
+      if (!isSuperAdmin) {
         return new Response(
           JSON.stringify({ error: "Forbidden: Strict Super Administrator clearance required for full database export." }),
           { status: 403, headers: corsHeaders }
@@ -955,7 +1030,7 @@ serve(async (req: Request) => {
     // ROUTE: SQL MIGRATIONS BUNDLE EXPORT (Strict Super Admin Only)
     // -------------------------------------------------------------------------
     if (action === "export-sql-bundle") {
-      if (!isAdmin) {
+      if (!isSuperAdmin) {
         return new Response(
           JSON.stringify({ error: "Forbidden: Strict Super Administrator clearance required for SQL bundle export." }),
           { status: 403, headers: corsHeaders }
@@ -1050,6 +1125,12 @@ GRANT EXECUTE ON FUNCTION public.check_and_increment_rate_limit(TEXT, INTEGER, I
       }
 
       if (method === "POST" || method === "PUT" || method === "PATCH") {
+        if (!isAdmin) {
+          return new Response(
+            JSON.stringify({ error: "Forbidden: Administrator clearance required to modify site configuration." }),
+            { status: 403, headers: corsHeaders }
+          );
+        }
         const nowIso = new Date().toISOString();
         const incomingConfig = rawBody.config || rawBody;
 

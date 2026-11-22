@@ -17,14 +17,20 @@ import {
   Trash2,
   Globe,
   UploadCloud,
+  BarChart3,
+  AtSign,
 } from 'lucide-react';
 import { extractFirstUrl, fetchLinkPreview } from '../services/linkPreviewService';
 import { createPost } from '../services/postService';
 import { uploadVideoToStorage, VideoMetadata } from '../services/videoUploadService';
-import { LinkMetadata, PostItem } from '../types/post';
+import { LinkMetadata, PostItem, PostAudience } from '../types/post';
 import { LinkPreview } from './LinkPreview';
 import { PostMediaCarousel, CarouselTemplate } from './PostMediaCarousel';
 import { VideoUploadPicker } from './feed/VideoUploadPicker';
+import { POST_AUDIENCE_OPTIONS } from '../services/feedRankingService';
+import { QUAD_POST_CATEGORIES } from './community/quadConstants';
+import { searchAlumniForMention } from '../services/richInteractionsService';
+import type { MentionCandidate } from '../services/richInteractionsUtils';
 
 interface CreatePostModalProps {
   isOpen: boolean;
@@ -32,23 +38,15 @@ interface CreatePostModalProps {
   authorId: number;
   authorName?: string;
   authorAvatar?: string;
+  authorBatchYear?: number;
+  canMarkEditorial?: boolean;
   initialTab?: 'text' | 'photo' | 'video' | 'link';
   initialImages?: string[];
   initialVideos?: string[];
   onPostCreated: (post: PostItem) => void;
 }
 
-const CATEGORIES = [
-  'General Update',
-  'Clinical Discussion',
-  'Medical Research',
-  'Campus Memories',
-  'Career & Fellowship',
-  'Blood Donation Aid',
-  'Emergency Help',
-  'Alumni Achievement',
-  'Reunion & Events',
-];
+const CATEGORIES = QUAD_POST_CATEGORIES.filter((c) => c !== 'All');
 
 export const CreatePostModal: React.FC<CreatePostModalProps> = ({
   isOpen,
@@ -56,13 +54,19 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
   authorId,
   authorName = 'SZMC Alumnus',
   authorAvatar = '/assets/aistudio/images__1__2778177d.png',
+  authorBatchYear,
+  canMarkEditorial = false,
   initialTab = 'text',
   initialImages = [],
   initialVideos = [],
   onPostCreated,
 }) => {
   const [content, setContent] = useState('');
-  const [category, setCategory] = useState('General Update');
+  const [category, setCategory] = useState<string>('General Discussion');
+  const [audience, setAudience] = useState<PostAudience>('public');
+  const [postToMyBatchLounge, setPostToMyBatchLounge] = useState(false);
+  const [isOfficial, setIsOfficial] = useState(false);
+  const [isFeatured, setIsFeatured] = useState(false);
   const [images, setImages] = useState<string[]>(initialImages);
   const [videos, setVideos] = useState<string[]>(initialVideos);
   const [videoUrlInput, setVideoUrlInput] = useState('');
@@ -77,6 +81,13 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
   const [showVideoUploadPicker, setShowVideoUploadPicker] = useState(initialTab === 'video');
   const [selectedVideoFile, setSelectedVideoFile] = useState<File | null>(null);
   const [selectedVideoPreviewUrl, setSelectedVideoPreviewUrl] = useState<string | null>(null);
+
+  // Phase 5: Inline Poll Builder & @Mentions
+  const [showPollBuilder, setShowPollBuilder] = useState(false);
+  const [pollQuestion, setPollQuestion] = useState('');
+  const [pollOptions, setPollOptions] = useState<string[]>(['', '']);
+  const [mentionSuggestions, setMentionSuggestions] = useState<MentionCandidate[]>([]);
+  const [mentionedUserIds, setMentionedUserIds] = useState<number[]>([]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const videoFileInputRef = useRef<HTMLInputElement>(null);
@@ -113,6 +124,15 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
     const val = e.target.value;
     setContent(val);
 
+    // Detect active @mention query at the end of the text
+    const mentionMatch = val.match(/(?:^|\s)@([A-Za-z][A-Za-z0-9.\s]{0,24})$/);
+    if (mentionMatch && mentionMatch[1].trim().length >= 1) {
+      const candidates = await searchAlumniForMention(mentionMatch[1].trim());
+      setMentionSuggestions(candidates);
+    } else if (mentionSuggestions.length > 0) {
+      setMentionSuggestions([]);
+    }
+
     const firstUrl = extractFirstUrl(val);
     if (firstUrl && firstUrl !== detectedUrl) {
       setDetectedUrl(firstUrl);
@@ -122,6 +142,14 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
       setDetectedUrl(null);
       setUrlMetadata(null);
     }
+  };
+
+  const handleInsertMention = (candidate: MentionCandidate) => {
+    setContent((prev) =>
+      prev.replace(/(^|\s)@([A-Za-z][A-Za-z0-9.\s]{0,24})$/, `$1@[${candidate.fullName}] `)
+    );
+    setMentionedUserIds((prev) => Array.from(new Set([...prev, candidate.id])));
+    setMentionSuggestions([]);
   };
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -252,15 +280,35 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
     setShowVideoInputDrawer(false);
   };
 
+  const validPollOptions = pollOptions.map((o) => o.trim()).filter(Boolean);
+  const hasValidPoll = showPollBuilder && pollQuestion.trim().length > 0 && validPollOptions.length >= 2;
+
   const handlePublish = async () => {
-    if (!content.trim() && totalMediaCount === 0 && !detectedUrl) return;
+    if (!content.trim() && totalMediaCount === 0 && !detectedUrl && !hasValidPoll) return;
 
     setErrorMessage(null);
     setIsSubmitting(true);
     const result = await createPost({
       authorId,
-      content,
+      content: content.trim() || (hasValidPoll ? pollQuestion.trim() : ''),
       category,
+      communityCategory: category,
+      audience,
+      isOfficial: canMarkEditorial && isOfficial,
+      isFeatured: canMarkEditorial && isFeatured,
+      priorityLevel:
+        category === 'Blood Request'
+          ? 3
+          : canMarkEditorial && isOfficial
+          ? 2
+          : canMarkEditorial && isFeatured
+          ? 1
+          : 0,
+      batchLoungeYear: postToMyBatchLounge && authorBatchYear ? authorBatchYear : null,
+      mentionedUserIds,
+      poll: hasValidPoll
+        ? { question: pollQuestion.trim(), options: validPollOptions }
+        : null,
       images,
       videos,
       layout_template: layoutTemplate,
@@ -277,6 +325,14 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
       setVideos([]);
       setDetectedUrl(null);
       setUrlMetadata(null);
+      setIsOfficial(false);
+      setIsFeatured(false);
+      setPostToMyBatchLounge(false);
+      setShowPollBuilder(false);
+      setPollQuestion('');
+      setPollOptions(['', '']);
+      setMentionedUserIds([]);
+      setMentionSuggestions([]);
       setErrorMessage(null);
     } else {
       setErrorMessage(result.error || 'Failed to publish post to database. Please check connection and try again.');
@@ -304,7 +360,9 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
               <h3 className="font-bold text-slate-900 dark:text-white text-sm">Create Post</h3>
               <p className="text-[11px] text-slate-400 flex items-center gap-1">
                 <Globe className="w-3 h-3 text-blue-500" />
-                <span>Public to SZMC Alumni Network</span>
+                <span>
+                  {POST_AUDIENCE_OPTIONS.find((a) => a.id === audience)?.label || 'Public (The Quad)'}
+                </span>
               </p>
             </div>
           </div>
@@ -416,32 +474,200 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
             /* EDITOR MODE                                               */
             /* ========================================================= */
             <>
-              {/* Category Dropdown */}
-              <div className="flex items-center justify-between gap-3">
-                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider shrink-0">
-                  Category:
-                </label>
-                <select
-                  value={category}
-                  onChange={(e) => setCategory(e.target.value)}
-                  className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-semibold text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  {CATEGORIES.map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
-                </select>
+              {/* Audience & 8-Category Selectors */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <div className="space-y-1">
+                  <label className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 block">
+                    Category
+                  </label>
+                  <select
+                    value={category}
+                    onChange={(e) => setCategory(e.target.value)}
+                    className="w-full min-h-[38px] px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-semibold text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    {CATEGORIES.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 block">
+                    Audience
+                  </label>
+                  <select
+                    value={audience}
+                    onChange={(e) => setAudience(e.target.value as PostAudience)}
+                    className="w-full min-h-[38px] px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-semibold text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    {POST_AUDIENCE_OPTIONS.map((opt) => (
+                      <option key={opt.id} value={opt.id}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
-              {/* Text Input */}
-              <textarea
-                rows={3}
-                value={content}
-                onChange={handleTextChange}
-                placeholder="What's on your mind? Share updates, clinical notes, or paste any video/web link..."
-                className="w-full p-3.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-2xl text-sm text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none min-h-[90px]"
-              />
+              {/* Community Space & Editorial Placement Controls */}
+              <div className="flex flex-wrap items-center gap-4 text-xs text-slate-600 dark:text-slate-300">
+                {authorBatchYear && authorBatchYear >= 1 && authorBatchYear <= 35 && (
+                  <label className="inline-flex items-center gap-1.5 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={postToMyBatchLounge}
+                      onChange={(e) => setPostToMyBatchLounge(e.target.checked)}
+                      className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    <span>
+                      Also publish in SZMC-{String(authorBatchYear).padStart(2, '0')} Lounge
+                    </span>
+                  </label>
+                )}
+
+                {canMarkEditorial && (
+                  <>
+                    <label className="inline-flex items-center gap-1.5 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={isOfficial}
+                        onChange={(e) => {
+                          setIsOfficial(e.target.checked);
+                          if (e.target.checked) setCategory('Announcement');
+                        }}
+                        className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                      />
+                      <span className="font-semibold text-blue-700 dark:text-blue-300">
+                        Official Announcement
+                      </span>
+                    </label>
+
+                    <label className="inline-flex items-center gap-1.5 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={isFeatured}
+                        onChange={(e) => setIsFeatured(e.target.checked)}
+                        className="rounded border-slate-300 text-amber-600 focus:ring-amber-500"
+                      />
+                      <span className="font-semibold text-amber-700 dark:text-amber-300">
+                        Featured Post
+                      </span>
+                    </label>
+                  </>
+                )}
+              </div>
+
+              {/* Text Input with @mention autocomplete */}
+              <div className="relative">
+                <textarea
+                  rows={3}
+                  value={content}
+                  onChange={handleTextChange}
+                  placeholder="Share updates, clinical notes, paste a link, or type @name to mention an alumnus..."
+                  className="w-full p-3.5 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-2xl text-sm text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none min-h-[90px]"
+                />
+                {mentionSuggestions.length > 0 && (
+                  <div className="mt-1.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 shadow-lg divide-y divide-slate-100 dark:divide-slate-800 overflow-hidden">
+                    <div className="px-3 py-1.5 text-[11px] font-medium text-slate-500 flex items-center gap-1.5 bg-slate-50 dark:bg-slate-800/60">
+                      <AtSign className="w-3 h-3" />
+                      <span>Mention an SZMC alumnus</span>
+                    </div>
+                    {mentionSuggestions.map((cand) => (
+                      <button
+                        key={cand.id}
+                        type="button"
+                        onClick={() => handleInsertMention(cand)}
+                        className="w-full px-3 py-2 flex items-center gap-2.5 text-left hover:bg-blue-50 dark:hover:bg-blue-950/30 transition-colors cursor-pointer"
+                      >
+                        <img
+                          src={cand.avatarUrl || '/assets/aistudio/images__1__2778177d.png'}
+                          alt={cand.fullName}
+                          className="w-6 h-6 rounded-full object-cover shrink-0"
+                        />
+                        <span className="text-xs font-semibold text-slate-900 dark:text-slate-100 truncate">
+                          {cand.fullName}
+                        </span>
+                        {cand.batchYear && (
+                          <span className="text-[11px] font-mono text-slate-500 shrink-0">
+                            · SZMC-{String(cand.batchYear).padStart(2, '0')}
+                          </span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Phase 5: Inline Poll Builder */}
+              {showPollBuilder && (
+                <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-slate-800 dark:text-slate-100 flex items-center gap-1.5">
+                      <BarChart3 className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+                      <span>Community Poll</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowPollBuilder(false);
+                        setPollQuestion('');
+                        setPollOptions(['', '']);
+                      }}
+                      className="text-xs text-slate-400 hover:text-rose-500 cursor-pointer"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                  <input
+                    type="text"
+                    value={pollQuestion}
+                    onChange={(e) => setPollQuestion(e.target.value)}
+                    placeholder="Ask a question (e.g., Preferred venue for SZMC Reunion?)"
+                    className="w-full px-3 py-2 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <div className="space-y-1.5">
+                    {pollOptions.map((opt, idx) => (
+                      <div key={idx} className="flex items-center gap-1.5">
+                        <input
+                          type="text"
+                          value={opt}
+                          onChange={(e) =>
+                            setPollOptions((prev) =>
+                              prev.map((v, i) => (i === idx ? e.target.value : v))
+                            )
+                          }
+                          placeholder={`Option ${idx + 1}`}
+                          className="flex-1 px-3 py-1.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                        {pollOptions.length > 2 && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setPollOptions((prev) => prev.filter((_, i) => i !== idx))
+                            }
+                            aria-label="Remove poll option"
+                            className="p-1.5 text-slate-400 hover:text-rose-500 cursor-pointer"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  {pollOptions.length < 4 && (
+                    <button
+                      type="button"
+                      onClick={() => setPollOptions((prev) => [...prev, ''])}
+                      className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Add Option</span>
+                    </button>
+                  )}
+                </div>
+              )}
 
               {/* ========================================================= */}
               {/* CAROUSEL LAYOUT TEMPLATES PICKER (When 2+ media attached) */}
@@ -719,11 +945,26 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
             <button
               type="button"
               onClick={() => setShowVideoInputDrawer(true)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-slate-700 dark:text-slate-300 hover:bg-blue-50 hover:text-blue-700 dark:hover:bg-blue-950/40 dark:hover:text-blue-300 text-xs font-bold transition-colors cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-slate-700 dark:text-slate-300 hover:bg-blue-50 hover:text-blue-700 dark:hover:bg-blue-950/40 dark:hover:text-blue-300 text-xs font-bold transition-colors cursor-pointer"
               title="Attach Link"
             >
               <LinkIcon className="w-4 h-4 text-blue-500 shrink-0" />
-              <span>Link</span>
+              <span className="hidden sm:inline">Link</span>
+            </button>
+
+            {/* Poll Button */}
+            <button
+              type="button"
+              onClick={() => setShowPollBuilder((prev) => !prev)}
+              className={`inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-bold transition-colors cursor-pointer ${
+                showPollBuilder
+                  ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300'
+                  : 'text-slate-700 dark:text-slate-300 hover:bg-indigo-50 hover:text-indigo-700 dark:hover:bg-indigo-950/40 dark:hover:text-indigo-300'
+              }`}
+              title="Attach a Community Poll"
+            >
+              <BarChart3 className="w-4 h-4 text-indigo-500 shrink-0" />
+              <span className="hidden sm:inline">Poll</span>
             </button>
           </div>
 
@@ -732,7 +973,7 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
             disabled={
               isSubmitting ||
               isProcessingMedia ||
-              (!content.trim() && totalMediaCount === 0 && !detectedUrl)
+              (!content.trim() && totalMediaCount === 0 && !detectedUrl && !hasValidPoll)
             }
             className="px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-sm active:scale-95"
           >

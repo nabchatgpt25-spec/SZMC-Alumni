@@ -9,11 +9,11 @@ var __require = /* @__PURE__ */ ((x) => typeof require !== "undefined" ? require
 import express from "express";
 import compression from "compression";
 import { createServer as createHttpServer } from "http";
-import { existsSync, writeFileSync, readFileSync } from "fs";
+import { existsSync as existsSync2, writeFileSync as writeFileSync2, readFileSync as readFileSync2 } from "fs";
 import { readFile } from "fs/promises";
-import path from "path";
-import { fileURLToPath } from "url";
-import crypto2 from "crypto";
+import path2 from "path";
+import { fileURLToPath as fileURLToPath2 } from "url";
+import crypto3 from "crypto";
 import * as dotenv2 from "dotenv";
 
 // server/lib/supabase-server.ts
@@ -22,7 +22,6 @@ import { createClient } from "@supabase/supabase-js";
 dotenv.config({ quiet: true });
 var DEFAULT_SUPABASE_URL = "https://hjuyiqyviohinbhzaipl.supabase.co";
 var DEFAULT_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhqdXlpcXl2aW9oaW5iaHphaXBsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE2MjQ2NzIsImV4cCI6MjEwNzIwMDY3Mn0.fppNXVPWcsWGsUIBwvirhjEkdDyUCX-SyydNWExbwk8";
-var DEFAULT_SUPABASE_SERVICE_ROLE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhqdXlpcXl2aW9oaW5iaHphaXBsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc5MTYyNDY3MiwiZXhwIjoyMTA3MjAwNjcyfQ.ue8jWRc6WYUf6LBDk7hKk_00JFmHL18cLxkoXv4U5SY";
 var urlCandidates = [
   process.env.SUPABASE_URL,
   process.env.VITE_SUPABASE_URL
@@ -30,16 +29,22 @@ var urlCandidates = [
 var rawUrl = (urlCandidates.find(
   (u) => typeof u === "string" && (u.trim().startsWith("http://") || u.trim().startsWith("https://")) && !u.includes("placeholder.supabase.co")
 ) || DEFAULT_SUPABASE_URL).trim();
+var envServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+if (!envServiceRoleKey) {
+  console.warn(
+    "[SupabaseServer] SUPABASE_SERVICE_ROLE_KEY is not set in environment; falling back to anon key (privileged admin writes will be subject to RLS)."
+  );
+}
 var keyCandidates = [
-  process.env.SUPABASE_SERVICE_ROLE_KEY,
-  DEFAULT_SUPABASE_SERVICE_ROLE_KEY,
+  envServiceRoleKey,
   process.env.SUPABASE_ANON_KEY,
   process.env.VITE_SUPABASE_URL && !process.env.VITE_SUPABASE_URL.startsWith("http") ? process.env.VITE_SUPABASE_URL : void 0,
   process.env.VITE_SUPABASE_ANON_KEY
 ];
 var rawKey = (keyCandidates.find(
   (k) => typeof k === "string" && (k.trim().startsWith("eyJ") || k.trim().startsWith("sb_") || k.trim().length > 30)
-) || DEFAULT_SUPABASE_SERVICE_ROLE_KEY).trim();
+) || DEFAULT_SUPABASE_ANON_KEY).trim();
+var isSupabaseServiceRoleConfigured = Boolean(envServiceRoleKey);
 var isSupabaseServerConfigured = Boolean(
   rawUrl && rawKey && rawUrl.startsWith("http") && !rawUrl.includes("placeholder.supabase.co")
 );
@@ -51,8 +56,71 @@ var supabaseServer = createClient(effectiveUrl, effectiveKey, {
     autoRefreshToken: false
   }
 });
+var UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+async function findAuthUserByEmailOrPhone(params) {
+  if (!isSupabaseServerConfigured || !isSupabaseServiceRoleConfigured) {
+    return null;
+  }
+  const cleanAuthId = params.authUserId?.trim();
+  if (cleanAuthId && UUID_REGEX.test(cleanAuthId)) {
+    try {
+      const { data, error } = await supabaseServer.auth.admin.getUserById(cleanAuthId);
+      if (!error && data?.user) {
+        return data.user;
+      }
+    } catch {
+    }
+  }
+  const cleanEmail = params.email?.trim().toLowerCase() || "";
+  const cleanPhone = params.phone?.trim() || "";
+  if (!cleanEmail && !cleanPhone) {
+    return null;
+  }
+  try {
+    let profileQuery = supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).select("auth_user_id");
+    if (cleanEmail) {
+      profileQuery = profileQuery.ilike("email", cleanEmail);
+    } else if (cleanPhone) {
+      profileQuery = profileQuery.eq("phone", cleanPhone);
+    }
+    const { data: profileRow } = await profileQuery.maybeSingle();
+    if (profileRow?.auth_user_id && UUID_REGEX.test(profileRow.auth_user_id)) {
+      const { data: authRes, error: authErr } = await supabaseServer.auth.admin.getUserById(
+        profileRow.auth_user_id
+      );
+      if (!authErr && authRes?.user) {
+        return authRes.user;
+      }
+    }
+  } catch {
+  }
+  const maxPages = Math.min(Math.max(params.maxPages ?? 20, 1), 50);
+  const perPage = Math.min(Math.max(params.perPage ?? 100, 10), 1e3);
+  for (let page = 1; page <= maxPages; page += 1) {
+    try {
+      const { data, error } = await supabaseServer.auth.admin.listUsers({ page, perPage });
+      if (error || !Array.isArray(data?.users) || data.users.length === 0) {
+        break;
+      }
+      const matched = data.users.find(
+        (u) => cleanEmail && u.email?.toLowerCase() === cleanEmail || cleanPhone && u.phone === cleanPhone
+      );
+      if (matched) {
+        return matched;
+      }
+      if (data.users.length < perPage) {
+        break;
+      }
+    } catch {
+      break;
+    }
+  }
+  return null;
+}
 var SUPABASE_TABLES = {
   ALUMNI_PROFILES: "alumni_profiles",
+  PROFILES: "profiles",
+  CONNECTIONS: "connections",
   BATCHES: "batches",
   ACADEMIC_STREAM_GROUPS: "academic_stream_groups",
   POSTS: "posts",
@@ -75,68 +143,448 @@ var SUPABASE_TABLES = {
   GALLERY_PHOTOS: "gallery_photos",
   OFFICIAL_NOTICES: "official_notices",
   CONTACT_INQUIRIES: "contact_inquiries",
-  AUDIT_LOGS: "audit_logs"
+  AUDIT_LOGS: "audit_logs",
   // Reconciled: audit_logs (not security_audit_logs)
+  SITE_SETTINGS: "site_settings",
+  FEATURED_ALUMNI: "featured_alumni",
+  HALL_OF_FAME: "hall_of_fame",
+  CAREER_OPPORTUNITIES: "career_opportunities",
+  MENTORSHIP_REQUESTS: "mentorship_requests",
+  MENTOR_OFFERS: "mentor_offers",
+  EVENTS: "events",
+  EVENT_REGISTRATIONS: "event_registrations",
+  APP_FEATURE_FLAGS: "app_feature_flags",
+  BATCH_LOUNGES: "batch_lounges",
+  BATCH_LOUNGE_MODERATORS: "batch_lounge_moderators",
+  OFFICIAL_PAGES: "official_pages",
+  OFFICIAL_PAGE_ROLES: "official_page_roles",
+  OFFICIAL_PAGE_FOLLOWERS: "official_page_followers",
+  COMMUNITY_POLLS: "community_polls",
+  COMMUNITY_POLL_VOTES: "community_poll_votes",
+  FEED_RANKING_WEIGHTS: "feed_ranking_weights",
+  CONTENT_REPORTS: "content_reports",
+  USER_BLOCKS: "user_blocks"
 };
+
+// server/lib/safeFetch.ts
+import dns from "dns/promises";
+import net from "net";
+var MAX_UNFURL_HTML_BYTES = 512 * 1024;
+var ALLOWED_PORTS = /* @__PURE__ */ new Set(["", "80", "443", "8080", "8443"]);
+var BLOCKED_HOSTNAMES = /* @__PURE__ */ new Set([
+  "localhost",
+  "localhost.localdomain",
+  "0.0.0.0",
+  "127.0.0.1",
+  "::1",
+  "metadata.google.internal",
+  "metadata.goog",
+  "169.254.169.254",
+  "100.100.100.200"
+  // Alibaba Cloud metadata
+]);
+function normalizeIpv6MappedIpv4(ip) {
+  const lower = ip.toLowerCase().trim();
+  const dotted = lower.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+  if (dotted) return dotted[1];
+  const hex = lower.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (hex) {
+    const hi = parseInt(hex[1], 16);
+    const lo = parseInt(hex[2], 16);
+    return `${hi >> 8 & 255}.${hi & 255}.${lo >> 8 & 255}.${lo & 255}`;
+  }
+  return null;
+}
+function isPrivateOrNonRoutableIp(rawIp) {
+  const ip = rawIp.trim().replace(/^\[|\]$/g, "").toLowerCase();
+  if (!ip) return true;
+  const mappedV4 = normalizeIpv6MappedIpv4(ip);
+  if (mappedV4) {
+    return isPrivateOrNonRoutableIp(mappedV4);
+  }
+  if (net.isIPv4(ip)) {
+    const parts = ip.split(".").map(Number);
+    if (parts.length !== 4 || parts.some((n) => Number.isNaN(n) || n < 0 || n > 255)) {
+      return true;
+    }
+    const [a, b, c] = parts;
+    if (a === 0) return true;
+    if (a === 10) return true;
+    if (a === 100 && b >= 64 && b <= 127) return true;
+    if (a === 127) return true;
+    if (a === 169 && b === 254) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 0 && (c === 0 || c === 2)) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 198 && (b === 18 || b === 19)) return true;
+    if (a === 198 && b === 51 && c === 100) return true;
+    if (a === 203 && b === 0 && c === 113) return true;
+    if (a >= 224) return true;
+    return false;
+  }
+  if (net.isIPv6(ip)) {
+    if (ip === "::" || ip === "::1") return true;
+    if (ip.startsWith("fe8") || ip.startsWith("fe9") || ip.startsWith("fea") || ip.startsWith("feb")) {
+      return true;
+    }
+    if (ip.startsWith("fc") || ip.startsWith("fd")) return true;
+    if (ip.startsWith("ff")) return true;
+    if (ip.startsWith("2001:db8:")) return true;
+    if (ip.startsWith("100::")) return true;
+    return false;
+  }
+  if (/^(0x[0-9a-f]+|\d+)$/i.test(ip)) {
+    return true;
+  }
+  return false;
+}
+function isSafeTargetUrl(rawUrl2) {
+  try {
+    const parsed = new URL(rawUrl2.trim());
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return { safe: false, error: "Only HTTP and HTTPS URLs are permitted." };
+    }
+    if (parsed.username || parsed.password) {
+      return { safe: false, error: "URLs containing embedded credentials are not allowed." };
+    }
+    if (!ALLOWED_PORTS.has(parsed.port)) {
+      return { safe: false, error: "Non-standard network port is not allowed." };
+    }
+    const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+    if (!host) {
+      return { safe: false, error: "Missing hostname." };
+    }
+    if (BLOCKED_HOSTNAMES.has(host) || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal") || host.endsWith(".home.arpa") || host.includes("metadata.google")) {
+      return { safe: false, error: "Requests to internal or localhost addresses are blocked." };
+    }
+    if (isPrivateOrNonRoutableIp(host)) {
+      return { safe: false, error: "Requests to private or non-routable IP addresses are blocked." };
+    }
+    return { safe: true, parsed };
+  } catch {
+    return { safe: false, error: "Malformed URL." };
+  }
+}
+async function validateHostDns(hostname) {
+  const cleanHost = hostname.toLowerCase().trim().replace(/^\[|\]$/g, "");
+  if (!cleanHost) {
+    return { safe: false, error: "Missing hostname." };
+  }
+  if (net.isIP(cleanHost)) {
+    if (isPrivateOrNonRoutableIp(cleanHost)) {
+      return { safe: false, error: "Private or non-routable IP address is blocked." };
+    }
+    return { safe: true };
+  }
+  const resolvedIps = /* @__PURE__ */ new Set();
+  try {
+    const records = await dns.lookup(cleanHost, { all: true, verbatim: true });
+    for (const r of records) {
+      if (r?.address) resolvedIps.add(r.address);
+    }
+  } catch {
+  }
+  const [v4Res, v6Res] = await Promise.allSettled([
+    dns.resolve4(cleanHost),
+    dns.resolve6(cleanHost)
+  ]);
+  if (v4Res.status === "fulfilled") {
+    for (const ip of v4Res.value) resolvedIps.add(ip);
+  }
+  if (v6Res.status === "fulfilled") {
+    for (const ip of v6Res.value) resolvedIps.add(ip);
+  }
+  if (resolvedIps.size === 0) {
+    return { safe: false, error: "Unable to resolve destination hostname." };
+  }
+  for (const ip of resolvedIps) {
+    if (isPrivateOrNonRoutableIp(ip)) {
+      return {
+        safe: false,
+        error: "Destination resolves to a private or non-routable IP address."
+      };
+    }
+  }
+  return { safe: true };
+}
+async function safeFetchHtml(targetUrl, options) {
+  const maxRedirects = options?.maxRedirects ?? 4;
+  const timeoutMs = options?.timeoutMs ?? 6e3;
+  const maxBytes = options?.maxBytes ?? MAX_UNFURL_HTML_BYTES;
+  const userAgent = options?.userAgent || "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+  let currentUrl = targetUrl.trim();
+  let redirectsRemaining = maxRedirects;
+  while (redirectsRemaining >= 0) {
+    const urlCheck = isSafeTargetUrl(currentUrl);
+    if (!urlCheck.safe || !urlCheck.parsed) {
+      throw new Error(urlCheck.error || "Target URL is not permitted.");
+    }
+    const dnsCheck = await validateHostDns(urlCheck.parsed.hostname);
+    if (!dnsCheck.safe) {
+      throw new Error(dnsCheck.error || "Destination host resolution blocked.");
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let resp;
+    try {
+      resp = await fetch(currentUrl, {
+        signal: controller.signal,
+        redirect: "manual",
+        headers: {
+          "User-Agent": userAgent,
+          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "Accept-Language": "en-US,en;q=0.9,bn;q=0.8",
+          "Cache-Control": "no-cache"
+        }
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    if ([301, 302, 303, 307, 308].includes(resp.status)) {
+      redirectsRemaining -= 1;
+      const location = resp.headers.get("location");
+      if (!location) {
+        throw new Error("Redirect response missing Location header.");
+      }
+      currentUrl = new URL(location, currentUrl).toString();
+      continue;
+    }
+    if (!resp.ok) {
+      throw new Error(`Upstream returned HTTP ${resp.status}`);
+    }
+    const contentType = resp.headers.get("content-type") || "";
+    const reader = resp.body?.getReader();
+    if (!reader) {
+      return { html: "", finalUrl: currentUrl, contentType };
+    }
+    const chunks = [];
+    let receivedBytes = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        const remaining = maxBytes - receivedBytes;
+        if (remaining <= 0) {
+          await reader.cancel().catch(() => {
+          });
+          break;
+        }
+        const slice = value.length > remaining ? value.subarray(0, remaining) : value;
+        chunks.push(slice);
+        receivedBytes += slice.length;
+        if (receivedBytes >= maxBytes) {
+          await reader.cancel().catch(() => {
+          });
+          break;
+        }
+      }
+    }
+    const merged = new Uint8Array(receivedBytes);
+    let offset = 0;
+    for (const chunk of chunks) {
+      merged.set(chunk, offset);
+      offset += chunk.length;
+    }
+    const html = new TextDecoder("utf-8", { fatal: false, ignoreBOM: true }).decode(merged);
+    return { html, finalUrl: currentUrl, contentType };
+  }
+  throw new Error("Too many redirects.");
+}
 
 // server/middleware/auth.ts
 import crypto from "crypto";
-var envAdminEmails = (process.env.ADMIN_EMAILS || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
-var SUPER_ADMIN_EMAILS = Array.from(/* @__PURE__ */ new Set([
-  "admin@szmcalumni.net",
-  "nabchatgpt25@gmail.com",
-  "firstaidnetworkbd@gmail.com",
-  "support@szmcalumni.net",
-  "nurulanambashir25@gmail.com",
-  "nurulanambashir20@gmail.com",
-  ...envAdminEmails
-]));
-var ADMIN_SESSION_SECRET = process.env.ADMIN_SESSION_SECRET || crypto.createHash("sha256").update(`szmc_runtime_secret:${process.cwd()}`).digest("hex");
-var ADMIN_PHONE_SUFFIX_DIGEST = "752c91e0a1047c99f82ee8eff19f0234f12b2818db5fe0695ac961315b4f4bae";
-function isAdminPhoneDigestMatch(rawPhone) {
-  const suffix = (rawPhone || "").replace(/\D/g, "").slice(-10);
-  if (!suffix) return false;
-  const digest = crypto.createHash("sha256").update(`szmc_id_salt:${suffix}`).digest("hex");
-  return digest === ADMIN_PHONE_SUFFIX_DIGEST;
+var envSuperAdminEmails = (process.env.SUPER_ADMIN_EMAILS || process.env.ADMIN_EMAILS || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
+var SUPER_ADMIN_EMAILS = Array.from(
+  /* @__PURE__ */ new Set([
+    "admin@szmcalumni.net",
+    "nabchatgpt25@gmail.com",
+    "firstaidnetworkbd@gmail.com",
+    "support@szmcalumni.net",
+    "nurulanambashir25@gmail.com",
+    "nurulanambashir20@gmail.com",
+    ...envSuperAdminEmails
+  ])
+);
+var ADMIN_SESSION_SECRET = process.env.ADMIN_SESSION_SECRET?.trim() || crypto.randomBytes(32).toString("hex");
+var ADMIN_TOKEN_PREFIX = "szmc-admin-session:";
+var MEMBER_TOKEN_PREFIX = "szmc-member-session:";
+var SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
+function isSuperAdminEmail(email) {
+  if (!email) return false;
+  const clean = email.trim().toLowerCase();
+  return SUPER_ADMIN_EMAILS.some((e) => e.toLowerCase() === clean);
 }
-function signAdminToken(email) {
-  const payload = `${email.toLowerCase().trim()}:${Date.now()}`;
-  const hmac = crypto.createHmac("sha256", ADMIN_SESSION_SECRET).update(payload).digest("hex");
-  return `szmc-admin-session:${Buffer.from(payload).toString("base64")}:${hmac}`;
+function normalizeRole(rawRole, email) {
+  const clean = (rawRole || "").trim().toLowerCase();
+  if (clean === "super_admin" || isSuperAdminEmail(email)) return "super_admin";
+  if (clean === "admin") return "admin";
+  if (clean === "moderator") return "moderator";
+  if (clean === "batch_representative") return "batch_representative";
+  return "member";
 }
-function verifyAdminToken(token) {
-  if (!token || !token.startsWith("szmc-admin-session:")) return { valid: false };
-  const parts = token.split(":");
-  if (parts.length !== 3) return { valid: false };
+function getRolePermissions(role) {
+  const isSuperAdmin = role === "super_admin";
+  const isAdmin = isSuperAdmin || role === "admin";
+  const isModerator = isAdmin || role === "moderator";
+  return {
+    isSuperAdmin,
+    isAdmin,
+    isModerator,
+    canAccessAdminPortal: isModerator,
+    canModerateContent: isModerator,
+    canManageUsers: isAdmin,
+    canManageSettings: isAdmin,
+    canAssignAdminRoles: isSuperAdmin,
+    canAccessTelemetry: isSuperAdmin,
+    canExportBackups: isSuperAdmin
+  };
+}
+function signPayload(prefix, payloadObj) {
+  const encoded = Buffer.from(JSON.stringify(payloadObj), "utf-8").toString("base64url");
+  const hmac = crypto.createHmac("sha256", ADMIN_SESSION_SECRET).update(`${prefix}${encoded}`).digest("hex");
+  return `${prefix}${encoded}:${hmac}`;
+}
+function verifySignedPayload(token, expectedPrefix) {
+  if (!token || !token.startsWith(expectedPrefix)) return { valid: false };
+  const rest = token.slice(expectedPrefix.length);
+  const sepIdx = rest.lastIndexOf(":");
+  if (sepIdx <= 0) return { valid: false };
+  const encoded = rest.slice(0, sepIdx);
+  const providedHmac = rest.slice(sepIdx + 1);
   try {
-    const rawPayload = Buffer.from(parts[1], "base64").toString("utf-8");
-    const expectedHmac = crypto.createHmac("sha256", ADMIN_SESSION_SECRET).update(rawPayload).digest("hex");
-    const providedBuf = Buffer.from(parts[2], "utf-8");
+    const expectedHmac = crypto.createHmac("sha256", ADMIN_SESSION_SECRET).update(`${expectedPrefix}${encoded}`).digest("hex");
+    const providedBuf = Buffer.from(providedHmac, "utf-8");
     const expectedBuf = Buffer.from(expectedHmac, "utf-8");
     if (providedBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(providedBuf, expectedBuf)) {
       return { valid: false };
     }
-    const [email, timestamp] = rawPayload.split(":");
-    const ageMs = Date.now() - Number(timestamp);
-    if (isNaN(ageMs) || ageMs < 0 || ageMs > 30 * 24 * 60 * 60 * 1e3) return { valid: false };
-    return { valid: true, email };
+    const parsed = JSON.parse(Buffer.from(encoded, "base64url").toString("utf-8"));
+    const ageMs = Date.now() - Number(parsed?.iat);
+    if (!Number.isFinite(ageMs) || ageMs < 0 || ageMs > SESSION_MAX_AGE_MS) {
+      return { valid: false };
+    }
+    return { valid: true, payload: parsed };
   } catch {
     return { valid: false };
   }
 }
+function signAdminToken(email, role = "admin", meta) {
+  const cleanEmail = email.toLowerCase().trim();
+  if (!cleanEmail) {
+    throw new Error("Cannot sign admin token without a valid administrator email.");
+  }
+  if (role === "super_admin" && !isSuperAdminEmail(cleanEmail)) {
+    throw new Error("Cannot issue super_admin session for a non-super-admin email.");
+  }
+  const effectiveRole = isSuperAdminEmail(cleanEmail) ? "super_admin" : "admin";
+  const payload = {
+    email: cleanEmail,
+    role: effectiveRole,
+    userId: Number(meta?.userId || 1),
+    uid: meta?.uid || `admin:${cleanEmail}`,
+    fullName: meta?.fullName || "SZMC Administrator",
+    iat: Date.now()
+  };
+  return signPayload(ADMIN_TOKEN_PREFIX, payload);
+}
+function signMemberSessionToken(params) {
+  const cleanEmail = params.email.toLowerCase().trim();
+  const payload = {
+    email: cleanEmail,
+    role: "member",
+    userId: Number(params.userId),
+    uid: params.uid || `member:${params.userId}`,
+    fullName: params.fullName || "SZMC Alumnus",
+    iat: Date.now()
+  };
+  return signPayload(MEMBER_TOKEN_PREFIX, payload);
+}
+function verifyAdminToken(token) {
+  const result = verifySignedPayload(token, ADMIN_TOKEN_PREFIX);
+  if (!result.valid || !result.payload?.email) {
+    return { valid: false };
+  }
+  const cleanEmail = result.payload.email.toLowerCase().trim();
+  if (result.payload.role !== "admin" && result.payload.role !== "super_admin") {
+    return { valid: false };
+  }
+  if (result.payload.role === "super_admin" && !isSuperAdminEmail(cleanEmail)) {
+    return { valid: false };
+  }
+  return {
+    valid: true,
+    email: cleanEmail,
+    role: result.payload.role,
+    userId: Number(result.payload.userId || 1),
+    uid: result.payload.uid || `admin:${cleanEmail}`,
+    fullName: result.payload.fullName || "SZMC Administrator"
+  };
+}
+function verifyMemberSessionToken(token) {
+  const result = verifySignedPayload(token, MEMBER_TOKEN_PREFIX);
+  if (!result.valid || !result.payload?.email || result.payload.role !== "member") {
+    return { valid: false };
+  }
+  return {
+    valid: true,
+    email: result.payload.email.toLowerCase().trim(),
+    userId: Number(result.payload.userId),
+    uid: result.payload.uid,
+    fullName: result.payload.fullName || "SZMC Alumnus"
+  };
+}
 async function verifyAuthToken(token) {
   if (!token) return null;
-  const adminCheck = verifyAdminToken(token);
-  if (adminCheck.valid && adminCheck.email) {
+  if (token.startsWith(ADMIN_TOKEN_PREFIX)) {
+    const adminCheck = verifyAdminToken(token);
+    if (!adminCheck.valid || !adminCheck.email) {
+      return null;
+    }
     const adminEmail = adminCheck.email.toLowerCase().trim();
+    let resolvedRole = isSuperAdminEmail(adminEmail) ? "super_admin" : null;
+    let resolvedId = adminCheck.userId || 1;
+    let resolvedUid = adminCheck.uid || `admin:${adminEmail}`;
+    let resolvedFullName = adminCheck.fullName || "SZMC Administrator";
+    if (!resolvedRole && isSupabaseServerConfigured) {
+      try {
+        const { data: profile } = await supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).select("id, auth_user_id, full_name, role, is_public").ilike("email", adminEmail).maybeSingle();
+        if (profile && (profile.role === "admin" || profile.role === "super_admin")) {
+          resolvedRole = normalizeRole(profile.role, adminEmail);
+          resolvedId = Number(profile.id);
+          resolvedUid = profile.auth_user_id || resolvedUid;
+          resolvedFullName = profile.full_name || resolvedFullName;
+        }
+      } catch {
+      }
+    }
+    if (!resolvedRole) {
+      return null;
+    }
     return {
-      user: { id: "super-admin-nurul", email: adminEmail },
+      user: { id: resolvedUid, email: adminEmail },
       dbUser: {
-        id: 1,
-        uid: "super-admin-nurul",
+        id: resolvedId,
+        uid: resolvedUid,
         email: adminEmail,
-        fullName: "Dr. Nurul Anam Bashir",
-        role: "admin",
+        fullName: resolvedFullName,
+        role: resolvedRole,
+        accountStatus: "active"
+      }
+    };
+  }
+  if (token.startsWith(MEMBER_TOKEN_PREFIX)) {
+    const memberCheck = verifyMemberSessionToken(token);
+    if (!memberCheck.valid || !memberCheck.email) {
+      return null;
+    }
+    return {
+      user: { id: memberCheck.uid, email: memberCheck.email },
+      dbUser: {
+        id: Number(memberCheck.userId || 0),
+        uid: memberCheck.uid || `member:${memberCheck.userId}`,
+        email: memberCheck.email,
+        fullName: memberCheck.fullName || "SZMC Alumnus",
+        role: "member",
         accountStatus: "active"
       }
     };
@@ -151,21 +599,29 @@ async function verifyAuthToken(token) {
     }
     const user = data.user;
     const cleanEmail = (user.email || "").toLowerCase().trim();
-    const cleanPhone = (user.phone || "").trim();
-    const isVerifiedSuperAdmin = SUPER_ADMIN_EMAILS.some((e) => e.toLowerCase() === cleanEmail) || isAdminPhoneDigestMatch(cleanPhone);
     const metadataRole = user.app_metadata?.role || (user.app_metadata?.claims_admin ? "admin" : void 0);
-    const { data: profile } = await supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).select("id, auth_user_id, email, full_name, role").eq("auth_user_id", user.id).maybeSingle();
+    const { data: profile } = await supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).select("id, auth_user_id, email, full_name, role, is_public").eq("auth_user_id", user.id).maybeSingle();
     const profileRole = profile?.role;
-    const resolvedRole = isVerifiedSuperAdmin || metadataRole === "admin" || profileRole === "admin" ? "admin" : metadataRole === "moderator" || profileRole === "moderator" ? "moderator" : "member";
+    let resolvedRole = "member";
+    if (isSuperAdminEmail(cleanEmail) || metadataRole === "super_admin" || profileRole === "super_admin") {
+      resolvedRole = "super_admin";
+    } else if (metadataRole === "admin" || profileRole === "admin") {
+      resolvedRole = "admin";
+    } else if (metadataRole === "moderator" || profileRole === "moderator") {
+      resolvedRole = "moderator";
+    } else if (profileRole === "batch_representative") {
+      resolvedRole = "batch_representative";
+    }
     return {
       user,
       dbUser: {
-        id: Number(profile?.id || 1),
+        id: Number(profile?.id || 0),
         uid: user.id,
         email: cleanEmail || `${user.id}@szmcalumni.net`,
         fullName: profile?.full_name || user.user_metadata?.full_name || "SZMC Alumnus",
         role: resolvedRole,
-        accountStatus: "active"
+        accountStatus: profile?.is_public === false ? "suspended" : "active",
+        auth_user_id: user.id
       }
     };
   } catch (err) {
@@ -173,44 +629,85 @@ async function verifyAuthToken(token) {
     return null;
   }
 }
-var requireAuth = async (req, res, next) => {
+async function authenticateBearerRequest(req, res, missingMsg, invalidMsg) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return res.status(401).json({ error: "Unauthorized: Missing token" });
+    res.status(401).json({ error: missingMsg });
+    return null;
   }
-  const token = authHeader.split("Bearer ")[1].trim();
-  const authResult = await verifyAuthToken(token);
-  if (authResult) {
-    req.supabaseUser = authResult.user;
-    req.user = authResult.user;
-    req.dbUser = authResult.dbUser;
-    return next();
-  }
-  return res.status(401).json({ error: "Unauthorized: Invalid token" });
-};
-var requireAdmin = async (req, res, next) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return res.status(401).json({ error: "Unauthorized: Valid administrator authorization token required." });
-  }
-  const token = authHeader.split("Bearer ")[1].trim();
+  const token = authHeader.slice("Bearer ".length).trim();
   const authResult = await verifyAuthToken(token);
   if (!authResult) {
-    return res.status(401).json({ error: "Unauthorized: Invalid or expired administrator session token." });
+    res.status(401).json({ error: invalidMsg });
+    return null;
   }
   req.supabaseUser = authResult.user;
   req.user = authResult.user;
   req.dbUser = authResult.dbUser;
-  const isAuthorizedAdmin = authResult.dbUser.role === "admin" || authResult.dbUser.role === "super_admin" || authResult.dbUser.role === "moderator";
-  if (!isAuthorizedAdmin) {
-    return res.status(403).json({ error: "Forbidden: Admin access restricted to verified administrators." });
+  return authResult;
+}
+var requireAuth = async (req, res, next) => {
+  const authResult = await authenticateBearerRequest(
+    req,
+    res,
+    "Unauthorized: Missing token",
+    "Unauthorized: Invalid token"
+  );
+  if (!authResult) return;
+  return next();
+};
+var requireModerator = async (req, res, next) => {
+  const authResult = await authenticateBearerRequest(
+    req,
+    res,
+    "Unauthorized: Valid moderation authorization token required.",
+    "Unauthorized: Invalid or expired session token."
+  );
+  if (!authResult) return;
+  const perms = getRolePermissions(authResult.dbUser.role);
+  if (!perms.isModerator) {
+    return res.status(403).json({
+      error: "Forbidden: Moderation access restricted to verified moderators and administrators."
+    });
+  }
+  return next();
+};
+var requireAdmin = async (req, res, next) => {
+  const authResult = await authenticateBearerRequest(
+    req,
+    res,
+    "Unauthorized: Valid administrator authorization token required.",
+    "Unauthorized: Invalid or expired administrator session token."
+  );
+  if (!authResult) return;
+  const perms = getRolePermissions(authResult.dbUser.role);
+  if (!perms.isAdmin) {
+    return res.status(403).json({
+      error: "Forbidden: Admin access restricted to verified administrators."
+    });
+  }
+  return next();
+};
+var requireSuperAdmin = async (req, res, next) => {
+  const authResult = await authenticateBearerRequest(
+    req,
+    res,
+    "Unauthorized: Super Administrator authorization token required.",
+    "Unauthorized: Invalid or expired Super Administrator session token."
+  );
+  if (!authResult) return;
+  const perms = getRolePermissions(authResult.dbUser.role);
+  if (!perms.isSuperAdmin) {
+    return res.status(403).json({
+      error: "Forbidden: Super Administrator clearance is strictly required for this operation."
+    });
   }
   return next();
 };
 var optionalAuth = async (req, _res, next) => {
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith("Bearer ")) {
-    const token = authHeader.split("Bearer ")[1].trim();
+    const token = authHeader.slice("Bearer ".length).trim();
     const authResult = await verifyAuthToken(token);
     if (authResult) {
       req.supabaseUser = authResult.user;
@@ -583,17 +1080,9 @@ async function createOrRegisterAlumniProfile(input) {
   if (isSupabaseServerConfigured) {
     try {
       if (!effectiveAuthUid && cleanEmail) {
-        const { data: usersData } = await supabaseServer.auth.admin.listUsers();
-        const existingAuthUser = usersData?.users?.find(
-          (u) => u.email?.toLowerCase() === cleanEmail
-        );
+        const existingAuthUser = await findAuthUserByEmailOrPhone({ email: cleanEmail });
         if (existingAuthUser) {
           effectiveAuthUid = existingAuthUser.id;
-          if (!existingAuthUser.email_confirmed_at) {
-            await supabaseServer.auth.admin.updateUserById(existingAuthUser.id, {
-              email_confirm: true
-            });
-          }
         }
       }
       if (!effectiveAuthUid && cleanEmail && (input.rawPassword || input.passwordHash)) {
@@ -602,7 +1091,7 @@ async function createOrRegisterAlumniProfile(input) {
           const { data: createdAuthUser, error: createAuthErr } = await supabaseServer.auth.admin.createUser({
             email: cleanEmail,
             password: initialPass,
-            email_confirm: true,
+            email_confirm: false,
             user_metadata: {
               full_name: input.fullName.trim(),
               batch_year: batchNum,
@@ -635,12 +1124,6 @@ async function createOrRegisterAlumniProfile(input) {
         }
       }
       if (effectiveAuthUid) {
-        try {
-          await supabaseServer.auth.admin.updateUserById(effectiveAuthUid, {
-            email_confirm: true
-          });
-        } catch {
-        }
         const { data, error } = await supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).upsert(
           {
             auth_user_id: effectiveAuthUid,
@@ -803,20 +1286,12 @@ async function findAlumniByCredential(credential) {
         };
       }
       if (clean.includes("@")) {
-        const { data: usersData } = await supabaseServer.auth.admin.listUsers();
-        const matched = usersData?.users?.find(
-          (u) => u.email?.toLowerCase() === clean
-        );
-        if (matched) {
-          if (!matched.email_confirmed_at) {
-            await supabaseServer.auth.admin.updateUserById(matched.id, {
-              email_confirm: true
-            });
-          }
+        const matched = await findAuthUserByEmailOrPhone({ email: clean });
+        if (matched && matched.email_confirmed_at) {
           const restored = await createOrRegisterAlumniProfile({
             userUid: matched.id,
             fullName: matched.user_metadata?.full_name || matched.user_metadata?.name || clean.split("@")[0],
-            batchYear: Number(matched.user_metadata?.batch_year) || 68,
+            batchYear: Number(matched.user_metadata?.batch_year) || 25,
             email: clean,
             phone: matched.user_metadata?.phone || null
           });
@@ -1296,6 +1771,1088 @@ async function generateBulkBatchCohortSample(params) {
   return { insertedCount: 0 };
 }
 
+// server/db/telemetryRepository.ts
+import { existsSync, readFileSync, writeFileSync } from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
+import crypto2 from "crypto";
+var __filename = fileURLToPath(import.meta.url);
+var __dirname = path.dirname(__filename);
+var LOCAL_TELEMETRY_FILE = path.resolve(__dirname, "..", "..", "szmc-telemetry-store.json");
+var ALLOWED_TELEMETRY_EVENT_TYPES = /* @__PURE__ */ new Set([
+  "session_start",
+  "session_heartbeat",
+  "page_view",
+  "page_leave",
+  "click",
+  "rage_click",
+  "scroll_milestone",
+  "search",
+  "profile_view",
+  "post_interaction",
+  "ad_impression",
+  "ad_click"
+]);
+var MAX_LOCAL_EVENTS = 8e3;
+var MAX_LOCAL_SESSIONS = 2e3;
+var ONLINE_WINDOW_MS = 2 * 60 * 1e3;
+var ROUTE_INTEREST_MAP = {
+  feed: "Community & Newsfeed",
+  dashboard: "Community & Newsfeed",
+  alumni: "Alumni Networking",
+  directory: "Alumni Networking",
+  find: "Alumni Search & Lookup",
+  batches: "Batch Cohorts",
+  map: "Global Physicians Map",
+  "map-directory": "Global Physicians Map",
+  careers: "Medical Careers & Recruitment",
+  mentorship: "Mentorship & Coaching",
+  events: "Reunions & CME Events",
+  gallery: "Campus Heritage & Media",
+  messages: "Direct Messaging",
+  emergency: "Blood Donation & Emergency",
+  blood: "Blood Donation & Emergency",
+  "blood-network": "Blood Donation & Emergency",
+  profile: "Doctor Profiles",
+  saved: "Saved Posts & Resources",
+  settings: "Account & Personalization",
+  contact: "Institutional Support",
+  admin: "Admin Operations",
+  landing: "Portal Discovery"
+};
+var ROUTE_LABELS = {
+  feed: "The Quad (Feed)",
+  dashboard: "The Quad (Feed)",
+  alumni: "Alumni Directory",
+  directory: "Alumni Directory",
+  find: "Find Alumni",
+  batches: "MBBS Batches",
+  map: "Global Alumni Map",
+  "map-directory": "Global Alumni Map",
+  careers: "Medical Careers",
+  mentorship: "Mentorship Hub",
+  events: "Events & Reunions",
+  gallery: "Heritage Gallery",
+  messages: "Messenger",
+  emergency: "Blood Lifeline",
+  blood: "Blood Lifeline",
+  "blood-network": "Blood Lifeline",
+  profile: "Doctor Profile",
+  saved: "Saved Posts",
+  settings: "Profile Settings",
+  "profile-settings": "Profile Settings",
+  contact: "Contact Secretariat",
+  admin: "Admin Console",
+  landing: "Landing Page",
+  entry: "Direct Entry",
+  exit: "Session Exit"
+};
+var store = {
+  sessions: {},
+  events: [],
+  segments: [
+    {
+      id: "seg-high-engagement-feed",
+      name: "High-Engagement Feed Readers",
+      description: "Alumni who actively browse The Quad feed with 5+ clicks and 60s+ dwell time.",
+      target_routes: ["feed", "dashboard"],
+      target_interests: ["Community & Newsfeed"],
+      target_devices: [],
+      min_clicks: 5,
+      min_dwell_sec: 60,
+      min_batch: null,
+      max_batch: null,
+      created_by: "System Preset",
+      created_at: (/* @__PURE__ */ new Date()).toISOString(),
+      updated_at: (/* @__PURE__ */ new Date()).toISOString()
+    },
+    {
+      id: "seg-career-seekers",
+      name: "Medical Careers & Fellowship Prospects",
+      description: "Doctors spending time on Medical Careers or Mentorship pages (ideal for hospital & CME ads).",
+      target_routes: ["careers", "mentorship"],
+      target_interests: ["Medical Careers & Recruitment", "Mentorship & Coaching"],
+      target_devices: [],
+      min_clicks: 2,
+      min_dwell_sec: 30,
+      min_batch: null,
+      max_batch: null,
+      created_by: "System Preset",
+      created_at: (/* @__PURE__ */ new Date()).toISOString(),
+      updated_at: (/* @__PURE__ */ new Date()).toISOString()
+    },
+    {
+      id: "seg-events-reunion",
+      name: "Events, Reunions & Heritage Enthusiasts",
+      description: "Members engaging with Events and Gallery albums (ideal for sponsorship & event tickets).",
+      target_routes: ["events", "gallery"],
+      target_interests: ["Reunions & CME Events", "Campus Heritage & Media"],
+      target_devices: [],
+      min_clicks: 2,
+      min_dwell_sec: 20,
+      min_batch: null,
+      max_batch: null,
+      created_by: "System Preset",
+      created_at: (/* @__PURE__ */ new Date()).toISOString(),
+      updated_at: (/* @__PURE__ */ new Date()).toISOString()
+    }
+  ]
+};
+var supabaseTablesAvailable = null;
+var flushDiskTimer = null;
+function loadLocalStore() {
+  try {
+    if (existsSync(LOCAL_TELEMETRY_FILE)) {
+      const raw = readFileSync(LOCAL_TELEMETRY_FILE, "utf-8");
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") {
+        store = {
+          sessions: parsed.sessions && typeof parsed.sessions === "object" ? parsed.sessions : {},
+          events: Array.isArray(parsed.events) ? parsed.events.slice(0, MAX_LOCAL_EVENTS) : [],
+          segments: Array.isArray(parsed.segments) && parsed.segments.length > 0 ? parsed.segments : store.segments
+        };
+      }
+    }
+  } catch (err) {
+    console.warn("[Telemetry] Could not load local telemetry store:", err);
+  }
+}
+function scheduleDiskFlush() {
+  if (flushDiskTimer) return;
+  flushDiskTimer = setTimeout(() => {
+    flushDiskTimer = null;
+    try {
+      const sessionKeys = Object.keys(store.sessions);
+      if (sessionKeys.length > MAX_LOCAL_SESSIONS) {
+        const sorted = sessionKeys.sort(
+          (a, b) => (store.sessions[b]?.last_active_at || "").localeCompare(store.sessions[a]?.last_active_at || "")
+        );
+        const keep = new Set(sorted.slice(0, MAX_LOCAL_SESSIONS));
+        for (const k of sessionKeys) {
+          if (!keep.has(k)) delete store.sessions[k];
+        }
+      }
+      writeFileSync(LOCAL_TELEMETRY_FILE, JSON.stringify(store), "utf-8");
+    } catch (err) {
+      console.warn("[Telemetry] Disk flush skipped:", err);
+    }
+  }, 1500);
+}
+loadLocalStore();
+function clampString(val, maxLen) {
+  if (typeof val !== "string") return null;
+  const cleaned = val.replace(/[\u0000-\u001F\u007F]/g, " ").replace(/\s+/g, " ").trim();
+  if (!cleaned) return null;
+  return cleaned.slice(0, maxLen);
+}
+function clampInt(val, min, max, fallback = 0) {
+  const num = Number(val);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(num)));
+}
+function clampFloat(val, min, max) {
+  if (val === null || val === void 0 || val === "") return null;
+  const num = Number(val);
+  if (!Number.isFinite(num)) return null;
+  return Math.round(Math.max(min, Math.min(max, num)) * 100) / 100;
+}
+function getRouteLabel(route) {
+  const normalized = (route || "landing").split(":")[0].split("?")[0].toLowerCase().trim();
+  return ROUTE_LABELS[normalized] || normalized.charAt(0).toUpperCase() + normalized.slice(1);
+}
+function getRouteInterest(route) {
+  const normalized = (route || "landing").split(":")[0].split("?")[0].toLowerCase().trim();
+  return ROUTE_INTEREST_MAP[normalized] || "General Portal Activity";
+}
+async function ingestTelemetryBatch(input, verifiedDbUser) {
+  const sessionId = clampString(input?.session?.sessionId, 80);
+  if (!sessionId) {
+    return { accepted: 0, supabaseSynced: false };
+  }
+  const rawEvents = Array.isArray(input.events) ? input.events.slice(0, 50) : [];
+  const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+  const profileId = verifiedDbUser?.id ?? (Number.isFinite(Number(input.session.profileId)) && Number(input.session.profileId) > 0 ? Number(input.session.profileId) : null);
+  const authUserId = verifiedDbUser?.uid || clampString(input.session.authUserId, 80);
+  const userName = verifiedDbUser?.fullName || clampString(input.session.userName, 80) || "Guest Visitor";
+  const userEmail = verifiedDbUser?.email || clampString(input.session.userEmail, 120);
+  const rawDevice = (input.session.deviceType || "desktop").toLowerCase();
+  const deviceType = rawDevice === "mobile" ? "mobile" : rawDevice === "tablet" ? "tablet" : "desktop";
+  const existing = store.sessions[sessionId];
+  const sessionRecord = {
+    session_id: sessionId,
+    profile_id: profileId ?? existing?.profile_id ?? null,
+    auth_user_id: authUserId ?? existing?.auth_user_id ?? null,
+    user_name: userName !== "Guest Visitor" ? userName : existing?.user_name || "Guest Visitor",
+    user_email: userEmail ?? existing?.user_email ?? null,
+    batch_year: input.session.batchYear && Number.isFinite(Number(input.session.batchYear)) ? clampInt(input.session.batchYear, 1, 100) : existing?.batch_year ?? null,
+    specialty: clampString(input.session.specialty, 80) ?? existing?.specialty ?? null,
+    city: clampString(input.session.city, 60) ?? existing?.city ?? null,
+    country: clampString(input.session.country, 60) ?? existing?.country ?? null,
+    device_type: deviceType,
+    browser: clampString(input.session.browser, 40) || existing?.browser || "Unknown",
+    os: clampString(input.session.os, 40) || existing?.os || "Unknown",
+    screen_resolution: clampString(input.session.screenResolution, 30) ?? existing?.screen_resolution ?? null,
+    referrer: clampString(input.session.referrer, 160) ?? existing?.referrer ?? null,
+    timezone: clampString(input.session.timezone, 60) ?? existing?.timezone ?? null,
+    language: clampString(input.session.language, 30) ?? existing?.language ?? null,
+    connection_type: clampString(input.session.connectionType, 30) ?? existing?.connection_type ?? null,
+    utm_source: clampString(input.session.utmSource, 60) ?? existing?.utm_source ?? null,
+    utm_medium: clampString(input.session.utmMedium, 60) ?? existing?.utm_medium ?? null,
+    utm_campaign: clampString(input.session.utmCampaign, 80) ?? existing?.utm_campaign ?? null,
+    color_scheme: clampString(input.session.colorScheme, 20) ?? existing?.color_scheme ?? null,
+    current_route: clampString(input.session.currentRoute, 80) || existing?.current_route || "landing",
+    started_at: existing?.started_at || nowIso,
+    last_active_at: nowIso,
+    total_duration_sec: existing?.total_duration_sec || 0,
+    total_clicks: existing?.total_clicks || 0,
+    rage_clicks: existing?.rage_clicks || 0,
+    total_page_views: existing?.total_page_views || 0,
+    max_scroll_pct: existing?.max_scroll_pct || 0,
+    is_active: true
+  };
+  const sanitizedEvents = [];
+  for (const ev of rawEvents) {
+    if (!ev || typeof ev.eventType !== "string" || !ALLOWED_TELEMETRY_EVENT_TYPES.has(ev.eventType)) {
+      continue;
+    }
+    const eventType = ev.eventType;
+    const route = clampString(ev.route, 80) || sessionRecord.current_route || "landing";
+    const routeLabel = clampString(ev.routeLabel, 80) || getRouteLabel(route);
+    const durationSec = clampInt(ev.durationSec, 0, 7200, 0);
+    const scrollDepthPct = clampInt(ev.scrollDepthPct, 0, 100, 0);
+    const safeMetadata = {};
+    if (ev.metadata && typeof ev.metadata === "object" && !Array.isArray(ev.metadata)) {
+      let count = 0;
+      for (const [k, v] of Object.entries(ev.metadata)) {
+        if (count >= 10) break;
+        const cleanKey = clampString(k, 40);
+        if (!cleanKey || /pass|token|secret|auth|cookie/i.test(cleanKey)) continue;
+        if (typeof v === "string") safeMetadata[cleanKey] = clampString(v, 140);
+        else if (typeof v === "number" && Number.isFinite(v)) safeMetadata[cleanKey] = v;
+        else if (typeof v === "boolean") safeMetadata[cleanKey] = v;
+        count += 1;
+      }
+    }
+    const record = {
+      id: `${Date.now()}-${crypto2.randomBytes(4).toString("hex")}`,
+      session_id: sessionId,
+      profile_id: sessionRecord.profile_id,
+      auth_user_id: sessionRecord.auth_user_id,
+      user_name: sessionRecord.user_name,
+      event_type: eventType,
+      route,
+      route_label: routeLabel,
+      element_tag: clampString(ev.elementTag, 30),
+      element_label: clampString(ev.elementLabel, 90),
+      element_section: clampString(ev.elementSection, 80),
+      click_x_pct: clampFloat(ev.clickXPct, 0, 100),
+      click_y_pct: clampFloat(ev.clickYPct, 0, 100),
+      duration_sec: durationSec,
+      scroll_depth_pct: scrollDepthPct,
+      metadata: safeMetadata,
+      created_at: typeof ev.createdAt === "string" && !Number.isNaN(Date.parse(ev.createdAt)) ? ev.createdAt : nowIso
+    };
+    sanitizedEvents.push(record);
+    if (eventType === "click" || eventType === "ad_click" || eventType === "post_interaction") {
+      sessionRecord.total_clicks += 1;
+    }
+    if (eventType === "rage_click") {
+      sessionRecord.total_clicks += 1;
+      sessionRecord.rage_clicks += 1;
+    }
+    if (eventType === "page_view") {
+      sessionRecord.total_page_views += 1;
+      sessionRecord.current_route = route;
+    }
+    if (eventType === "page_leave" || eventType === "session_heartbeat") {
+      sessionRecord.total_duration_sec += durationSec;
+    }
+    if (scrollDepthPct > sessionRecord.max_scroll_pct) {
+      sessionRecord.max_scroll_pct = scrollDepthPct;
+    }
+  }
+  store.sessions[sessionId] = sessionRecord;
+  if (sanitizedEvents.length > 0) {
+    store.events = [...sanitizedEvents.reverse(), ...store.events].slice(0, MAX_LOCAL_EVENTS);
+  }
+  scheduleDiskFlush();
+  let supabaseSynced = false;
+  if (isSupabaseServerConfigured && supabaseTablesAvailable !== false) {
+    try {
+      const { error: sessErr } = await supabaseServer.from("user_activity_sessions").upsert(
+        {
+          session_id: sessionRecord.session_id,
+          profile_id: sessionRecord.profile_id,
+          auth_user_id: isUuid(sessionRecord.auth_user_id) ? sessionRecord.auth_user_id : null,
+          user_name: sessionRecord.user_name,
+          user_email: sessionRecord.user_email,
+          batch_year: sessionRecord.batch_year,
+          specialty: sessionRecord.specialty,
+          city: sessionRecord.city,
+          country: sessionRecord.country,
+          device_type: sessionRecord.device_type,
+          browser: sessionRecord.browser,
+          os: sessionRecord.os,
+          screen_resolution: sessionRecord.screen_resolution,
+          referrer: sessionRecord.referrer,
+          timezone: sessionRecord.timezone,
+          language: sessionRecord.language,
+          connection_type: sessionRecord.connection_type,
+          utm_source: sessionRecord.utm_source,
+          utm_medium: sessionRecord.utm_medium,
+          utm_campaign: sessionRecord.utm_campaign,
+          color_scheme: sessionRecord.color_scheme,
+          current_route: sessionRecord.current_route,
+          started_at: sessionRecord.started_at,
+          last_active_at: sessionRecord.last_active_at,
+          total_duration_sec: sessionRecord.total_duration_sec,
+          total_clicks: sessionRecord.total_clicks,
+          rage_clicks: sessionRecord.rage_clicks,
+          total_page_views: sessionRecord.total_page_views,
+          max_scroll_pct: sessionRecord.max_scroll_pct,
+          is_active: true
+        },
+        { onConflict: "session_id" }
+      );
+      if (sessErr) {
+        if (isMissingRelationError(sessErr)) {
+          supabaseTablesAvailable = false;
+        }
+      } else {
+        supabaseTablesAvailable = true;
+        if (sanitizedEvents.length > 0) {
+          const rows = sanitizedEvents.map((e) => ({
+            session_id: e.session_id,
+            profile_id: e.profile_id,
+            auth_user_id: isUuid(e.auth_user_id) ? e.auth_user_id : null,
+            user_name: e.user_name,
+            event_type: e.event_type,
+            route: e.route,
+            route_label: e.route_label,
+            element_tag: e.element_tag,
+            element_label: e.element_label,
+            element_section: e.element_section,
+            click_x_pct: e.click_x_pct,
+            click_y_pct: e.click_y_pct,
+            duration_sec: e.duration_sec,
+            scroll_depth_pct: e.scroll_depth_pct,
+            metadata: e.metadata,
+            created_at: e.created_at
+          }));
+          const { error: evErr } = await supabaseServer.from("user_activity_events").insert(rows);
+          if (!evErr) {
+            supabaseSynced = true;
+          }
+        } else {
+          supabaseSynced = true;
+        }
+      }
+    } catch {
+    }
+  }
+  return { accepted: sanitizedEvents.length, supabaseSynced };
+}
+function isUuid(val) {
+  if (!val) return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(val);
+}
+function isMissingRelationError(err) {
+  const msg = String(err?.message || err?.code || "").toLowerCase();
+  return msg.includes("does not exist") || msg.includes("42p01") || msg.includes("could not find the table");
+}
+async function fetchMergedTelemetryDataset() {
+  const sessionsMap = /* @__PURE__ */ new Map();
+  for (const s of Object.values(store.sessions)) {
+    sessionsMap.set(s.session_id, s);
+  }
+  let eventsList = [...store.events];
+  let supabaseConnected = false;
+  if (isSupabaseServerConfigured) {
+    try {
+      const [sessRes, evRes] = await Promise.all([
+        supabaseServer.from("user_activity_sessions").select("*").order("last_active_at", { ascending: false }).limit(600),
+        supabaseServer.from("user_activity_events").select("*").order("created_at", { ascending: false }).limit(2500)
+      ]);
+      if (!sessRes.error && !evRes.error) {
+        supabaseConnected = true;
+        supabaseTablesAvailable = true;
+        for (const row of sessRes.data || []) {
+          sessionsMap.set(String(row.session_id), {
+            session_id: String(row.session_id),
+            profile_id: row.profile_id ? Number(row.profile_id) : null,
+            auth_user_id: row.auth_user_id || null,
+            user_name: row.user_name || "Guest Visitor",
+            user_email: row.user_email || null,
+            batch_year: row.batch_year ? Number(row.batch_year) : null,
+            specialty: row.specialty || null,
+            city: row.city || null,
+            country: row.country || null,
+            device_type: row.device_type || "desktop",
+            browser: row.browser || "Unknown",
+            os: row.os || "Unknown",
+            screen_resolution: row.screen_resolution || null,
+            referrer: row.referrer || null,
+            timezone: row.timezone || null,
+            language: row.language || null,
+            connection_type: row.connection_type || null,
+            utm_source: row.utm_source || null,
+            utm_medium: row.utm_medium || null,
+            utm_campaign: row.utm_campaign || null,
+            color_scheme: row.color_scheme || null,
+            current_route: row.current_route || "landing",
+            started_at: row.started_at,
+            last_active_at: row.last_active_at,
+            total_duration_sec: Number(row.total_duration_sec || 0),
+            total_clicks: Number(row.total_clicks || 0),
+            rage_clicks: Number(row.rage_clicks || 0),
+            total_page_views: Number(row.total_page_views || 0),
+            max_scroll_pct: Number(row.max_scroll_pct || 0),
+            is_active: Boolean(row.is_active)
+          });
+        }
+        const remoteEvents = (evRes.data || []).map((e) => ({
+          id: `sb-${e.id}`,
+          session_id: String(e.session_id),
+          profile_id: e.profile_id ? Number(e.profile_id) : null,
+          auth_user_id: e.auth_user_id || null,
+          user_name: e.user_name || "Guest Visitor",
+          event_type: e.event_type,
+          route: e.route || "landing",
+          route_label: e.route_label || getRouteLabel(e.route || "landing"),
+          element_tag: e.element_tag || null,
+          element_label: e.element_label || null,
+          element_section: e.element_section || null,
+          click_x_pct: e.click_x_pct !== null && e.click_x_pct !== void 0 ? Number(e.click_x_pct) : null,
+          click_y_pct: e.click_y_pct !== null && e.click_y_pct !== void 0 ? Number(e.click_y_pct) : null,
+          duration_sec: Number(e.duration_sec || 0),
+          scroll_depth_pct: Number(e.scroll_depth_pct || 0),
+          metadata: e.metadata && typeof e.metadata === "object" ? e.metadata : {},
+          created_at: e.created_at
+        }));
+        if (remoteEvents.length > 0) {
+          eventsList = remoteEvents;
+        }
+      } else if (isMissingRelationError(sessRes.error) || isMissingRelationError(evRes.error)) {
+        supabaseTablesAvailable = false;
+      }
+    } catch {
+    }
+  }
+  const sessions = Array.from(sessionsMap.values()).sort(
+    (a, b) => (b.last_active_at || "").localeCompare(a.last_active_at || "")
+  );
+  eventsList.sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
+  return { sessions, events: eventsList, supabaseConnected };
+}
+function buildUserSummaries(sessions, events) {
+  const nowMs = Date.now();
+  const userMap = /* @__PURE__ */ new Map();
+  const keyFor = (profileId, email, sessionId) => {
+    if (profileId && profileId > 0) return `profile:${profileId}`;
+    if (email) return `email:${email.toLowerCase()}`;
+    return `guest:${sessionId}`;
+  };
+  for (const s of sessions) {
+    const key = keyFor(s.profile_id, s.user_email, s.session_id);
+    let entry = userMap.get(key);
+    if (!entry) {
+      entry = {
+        userKey: key,
+        profileId: s.profile_id,
+        userName: s.user_name,
+        userEmail: s.user_email,
+        batchYear: s.batch_year,
+        specialty: s.specialty,
+        city: s.city,
+        country: s.country,
+        lastActiveAt: s.last_active_at,
+        currentRoute: s.current_route,
+        sessionIds: /* @__PURE__ */ new Set(),
+        totalClicks: 0,
+        rageClicks: 0,
+        totalPageViews: 0,
+        totalDwellSec: 0,
+        maxScrollPct: 0,
+        deviceCounts: /* @__PURE__ */ new Map(),
+        browser: s.browser,
+        os: s.os,
+        screenResolution: s.screen_resolution,
+        timezone: s.timezone || null,
+        language: s.language || null,
+        connectionType: s.connection_type || null,
+        utmSource: s.utm_source || null,
+        colorScheme: s.color_scheme || null,
+        hourHistogram: new Array(24).fill(0),
+        routeStats: /* @__PURE__ */ new Map()
+      };
+      userMap.set(key, entry);
+    }
+    entry.sessionIds.add(s.session_id);
+    if (s.last_active_at > entry.lastActiveAt) {
+      entry.lastActiveAt = s.last_active_at;
+      entry.currentRoute = s.current_route;
+      entry.browser = s.browser;
+      entry.os = s.os;
+      if (s.screen_resolution) entry.screenResolution = s.screen_resolution;
+      if (s.timezone) entry.timezone = s.timezone;
+      if (s.language) entry.language = s.language;
+      if (s.connection_type) entry.connectionType = s.connection_type;
+      if (s.utm_source) entry.utmSource = s.utm_source;
+      if (s.color_scheme) entry.colorScheme = s.color_scheme;
+    }
+    if (s.user_name && s.user_name !== "Guest Visitor") entry.userName = s.user_name;
+    if (s.user_email && !entry.userEmail) entry.userEmail = s.user_email;
+    if (s.batch_year && !entry.batchYear) entry.batchYear = s.batch_year;
+    if (s.specialty && !entry.specialty) entry.specialty = s.specialty;
+    if (s.city && !entry.city) entry.city = s.city;
+    if (s.country && !entry.country) entry.country = s.country;
+    entry.totalClicks += s.total_clicks;
+    entry.rageClicks += s.rage_clicks || 0;
+    entry.totalPageViews += s.total_page_views;
+    entry.totalDwellSec += s.total_duration_sec;
+    entry.maxScrollPct = Math.max(entry.maxScrollPct, s.max_scroll_pct);
+    entry.deviceCounts.set(s.device_type, (entry.deviceCounts.get(s.device_type) || 0) + 1);
+  }
+  const sessionToKey = /* @__PURE__ */ new Map();
+  for (const s of sessions) {
+    sessionToKey.set(s.session_id, keyFor(s.profile_id, s.user_email, s.session_id));
+  }
+  for (const ev of events) {
+    const key = sessionToKey.get(ev.session_id) || keyFor(ev.profile_id, null, ev.session_id);
+    const entry = userMap.get(key);
+    if (!entry) continue;
+    const evDate = new Date(ev.created_at);
+    if (!Number.isNaN(evDate.getTime())) {
+      entry.hourHistogram[evDate.getHours()] += 1;
+    }
+    const rKey = (ev.route || "landing").split(":")[0].toLowerCase();
+    const rStat = entry.routeStats.get(rKey) || { dwellSec: 0, views: 0, clicks: 0 };
+    if (ev.event_type === "page_view") rStat.views += 1;
+    if (ev.event_type === "click" || ev.event_type === "rage_click" || ev.event_type === "post_interaction" || ev.event_type === "ad_click") {
+      rStat.clicks += 1;
+    }
+    if (ev.event_type === "page_leave" || ev.event_type === "session_heartbeat") {
+      rStat.dwellSec += ev.duration_sec;
+    }
+    entry.routeStats.set(rKey, rStat);
+  }
+  const summaries = [];
+  for (const entry of userMap.values()) {
+    const routeBreakdown = Array.from(entry.routeStats.entries()).map(([route, stats]) => ({
+      route,
+      routeLabel: getRouteLabel(route),
+      dwellSec: stats.dwellSec,
+      views: stats.views,
+      clicks: stats.clicks
+    })).sort((a, b) => b.dwellSec * 2 + b.clicks * 5 + b.views * 3 - (a.dwellSec * 2 + a.clicks * 5 + a.views * 3));
+    const topRouteObj = routeBreakdown[0] || {
+      route: entry.currentRoute || "feed",
+      routeLabel: getRouteLabel(entry.currentRoute || "feed")
+    };
+    const interestScores = /* @__PURE__ */ new Map();
+    for (const r of routeBreakdown) {
+      if (r.route === "admin") continue;
+      const interest = getRouteInterest(r.route);
+      const pts = r.dwellSec * 1.5 + r.clicks * 8 + r.views * 4;
+      interestScores.set(interest, (interestScores.get(interest) || 0) + pts);
+    }
+    const maxPts = Math.max(1, ...Array.from(interestScores.values()));
+    const inferredInterests = Array.from(interestScores.entries()).map(([label, pts]) => ({
+      label,
+      score: Math.min(99, Math.max(15, Math.round(pts / maxPts * 100)))
+    })).sort((a, b) => b.score - a.score).slice(0, 4);
+    let primaryDevice = "desktop";
+    let bestDeviceCount = -1;
+    for (const [dev, cnt] of entry.deviceCounts.entries()) {
+      if (cnt > bestDeviceCount) {
+        bestDeviceCount = cnt;
+        primaryDevice = dev;
+      }
+    }
+    const lastMs = Date.parse(entry.lastActiveAt || "");
+    const hoursSinceActive = Number.isFinite(lastMs) ? Math.max(0, (nowMs - lastMs) / 36e5) : 999;
+    const isOnlineNow = Number.isFinite(lastMs) && nowMs - lastMs <= ONLINE_WINDOW_MS;
+    const recencyPts = hoursSinceActive <= 24 ? 25 : hoursSinceActive <= 72 ? 18 : hoursSinceActive <= 168 ? 10 : 3;
+    const sessionPts = Math.min(20, entry.sessionIds.size * 6);
+    const clickPts = Math.min(25, entry.totalClicks * 1.4);
+    const dwellPts = Math.min(20, entry.totalDwellSec / 60 * 3.5);
+    const scrollPts = Math.min(10, entry.maxScrollPct / 100 * 10);
+    const engagementScore = Math.min(100, Math.round(recencyPts + sessionPts + clickPts + dwellPts + scrollPts));
+    let lifecycleStage = "New Visitor";
+    if (hoursSinceActive > 168 && entry.totalClicks >= 3) {
+      lifecycleStage = "At-Risk";
+    } else if (engagementScore >= 72) {
+      lifecycleStage = "Power User";
+    } else if (engagementScore >= 45) {
+      lifecycleStage = "Active Regular";
+    } else if (entry.totalPageViews >= 3 || entry.totalClicks >= 3) {
+      lifecycleStage = "Explorer";
+    }
+    const churnRisk = hoursSinceActive > 168 ? "High" : hoursSinceActive > 48 || engagementScore < 35 ? "Medium" : "Low";
+    let bestHour = 0;
+    let bestHourCount = -1;
+    entry.hourHistogram.forEach((cnt, hr) => {
+      if (cnt > bestHourCount) {
+        bestHourCount = cnt;
+        bestHour = hr;
+      }
+    });
+    const peakHourLabel = bestHourCount > 0 ? `${String(bestHour).padStart(2, "0")}:00\u2013${String((bestHour + 2) % 24).padStart(2, "0")}:00` : "Not enough data";
+    const recommendedActions = [];
+    if (inferredInterests[0]) {
+      recommendedActions.push(
+        `Target with "${inferredInterests[0].label}" campaigns (${inferredInterests[0].score}% behavioral fit).`
+      );
+    }
+    if (bestHourCount > 0) {
+      recommendedActions.push(`Best delivery window for ads & notices: ${peakHourLabel}.`);
+    }
+    if (churnRisk === "High") {
+      recommendedActions.push("Dormant >7 days \u2014 include in re-engagement digest or reunion email.");
+    } else if (lifecycleStage === "Power User") {
+      recommendedActions.push("High-influence member \u2014 strong candidate for ambassador/sponsor outreach.");
+    }
+    if (entry.rageClicks > 0) {
+      recommendedActions.push(
+        `Experienced ${entry.rageClicks} rage-click friction event(s) \u2014 review UX on ${topRouteObj.routeLabel}.`
+      );
+    }
+    summaries.push({
+      userKey: entry.userKey,
+      profileId: entry.profileId,
+      userName: entry.userName,
+      userEmail: entry.userEmail,
+      batchYear: entry.batchYear,
+      specialty: entry.specialty,
+      city: entry.city,
+      country: entry.country,
+      isOnlineNow,
+      lastActiveAt: entry.lastActiveAt,
+      currentRoute: entry.currentRoute,
+      currentRouteLabel: getRouteLabel(entry.currentRoute),
+      totalSessions: entry.sessionIds.size,
+      totalClicks: entry.totalClicks,
+      rageClicks: entry.rageClicks,
+      totalPageViews: entry.totalPageViews,
+      totalDwellSec: entry.totalDwellSec,
+      maxScrollPct: entry.maxScrollPct,
+      topRoute: topRouteObj.route,
+      topRouteLabel: topRouteObj.routeLabel,
+      primaryDevice,
+      browser: entry.browser,
+      os: entry.os,
+      screenResolution: entry.screenResolution,
+      timezone: entry.timezone,
+      language: entry.language,
+      connectionType: entry.connectionType,
+      utmSource: entry.utmSource,
+      colorScheme: entry.colorScheme,
+      routesVisited: routeBreakdown.map((r) => r.route),
+      engagementScore,
+      lifecycleStage,
+      churnRisk,
+      peakHourLabel,
+      recommendedActions: recommendedActions.slice(0, 3),
+      inferredInterests,
+      routeDwellBreakdown: routeBreakdown
+    });
+  }
+  return summaries.sort((a, b) => {
+    if (a.isOnlineNow !== b.isOnlineNow) return a.isOnlineNow ? -1 : 1;
+    return (b.lastActiveAt || "").localeCompare(a.lastActiveAt || "");
+  });
+}
+async function getTelemetryOverview(rangeHours = 168) {
+  const { sessions, events, supabaseConnected } = await fetchMergedTelemetryDataset();
+  const cutoffMs = rangeHours > 0 ? Date.now() - rangeHours * 3600 * 1e3 : 0;
+  const filteredSessions = cutoffMs ? sessions.filter((s) => Date.parse(s.last_active_at || "") >= cutoffMs) : sessions;
+  const filteredEvents = cutoffMs ? events.filter((e) => Date.parse(e.created_at || "") >= cutoffMs) : events;
+  const users = buildUserSummaries(filteredSessions, filteredEvents);
+  const onlineNowCount = users.filter((u) => u.isOnlineNow).length;
+  const totalClicks = filteredSessions.reduce((acc, s) => acc + s.total_clicks, 0);
+  const totalRageClicks = filteredSessions.reduce((acc, s) => acc + (s.rage_clicks || 0), 0);
+  const totalPageViews = filteredSessions.reduce((acc, s) => acc + s.total_page_views, 0);
+  const totalDwellSec = filteredSessions.reduce((acc, s) => acc + s.total_duration_sec, 0);
+  const avgSessionSec = filteredSessions.length > 0 ? Math.round(totalDwellSec / filteredSessions.length) : 0;
+  const avgEngagementScore = users.length > 0 ? Math.round(users.reduce((acc, u) => acc + u.engagementScore, 0) / users.length) : 0;
+  const routeMap = /* @__PURE__ */ new Map();
+  for (const ev of filteredEvents) {
+    const r = (ev.route || "landing").split(":")[0].toLowerCase();
+    let item = routeMap.get(r);
+    if (!item) {
+      item = {
+        route: r,
+        routeLabel: getRouteLabel(r),
+        views: 0,
+        clicks: 0,
+        dwellSec: 0,
+        uniqueUsers: /* @__PURE__ */ new Set()
+      };
+      routeMap.set(r, item);
+    }
+    item.uniqueUsers.add(ev.profile_id ? `p:${ev.profile_id}` : ev.session_id);
+    if (ev.event_type === "page_view") item.views += 1;
+    if (ev.event_type === "click" || ev.event_type === "rage_click" || ev.event_type === "post_interaction" || ev.event_type === "ad_click") {
+      item.clicks += 1;
+    }
+    if (ev.event_type === "page_leave" || ev.event_type === "session_heartbeat") {
+      item.dwellSec += ev.duration_sec;
+    }
+  }
+  const routeMetrics = Array.from(routeMap.values()).map((r) => ({
+    route: r.route,
+    routeLabel: r.routeLabel,
+    views: r.views,
+    clicks: r.clicks,
+    dwellSec: r.dwellSec,
+    uniqueUsers: r.uniqueUsers.size,
+    avgDwellSec: r.views > 0 ? Math.round(r.dwellSec / r.views) : r.dwellSec
+  })).sort((a, b) => b.dwellSec + b.clicks * 4 + b.views * 2 - (a.dwellSec + a.clicks * 4 + a.views * 2));
+  const hotspotMap = /* @__PURE__ */ new Map();
+  for (const ev of filteredEvents) {
+    if (ev.event_type !== "click" && ev.event_type !== "rage_click" && ev.event_type !== "post_interaction" && ev.event_type !== "ad_click") {
+      continue;
+    }
+    const label = ev.element_label || ev.element_tag || "Interactive Element";
+    const route = (ev.route || "landing").split(":")[0].toLowerCase();
+    const key = `${route}::${label.toLowerCase()}`;
+    const existing = hotspotMap.get(key);
+    if (!existing) {
+      hotspotMap.set(key, {
+        label,
+        tag: ev.element_tag || "button",
+        route,
+        routeLabel: getRouteLabel(route),
+        section: ev.element_section || getRouteLabel(route),
+        clicks: 1,
+        lastClickedAt: ev.created_at
+      });
+    } else {
+      existing.clicks += 1;
+      if (ev.created_at > existing.lastClickedAt) existing.lastClickedAt = ev.created_at;
+    }
+  }
+  const totalHotspotClicks = Math.max(
+    1,
+    Array.from(hotspotMap.values()).reduce((sum, h) => sum + h.clicks, 0)
+  );
+  const topClickHotspots = Array.from(hotspotMap.values()).sort((a, b) => b.clicks - a.clicks).slice(0, 15).map((h) => ({
+    ...h,
+    sharePct: Math.round(h.clicks / totalHotspotClicks * 1e3) / 10
+  }));
+  const heatmapPoints = filteredEvents.filter(
+    (ev) => (ev.event_type === "click" || ev.event_type === "rage_click") && ev.click_x_pct !== null && ev.click_y_pct !== null
+  ).slice(0, 400).map((ev) => ({
+    route: (ev.route || "landing").split(":")[0].toLowerCase(),
+    routeLabel: ev.route_label,
+    xPct: ev.click_x_pct,
+    yPct: ev.click_y_pct,
+    isRage: ev.event_type === "rage_click",
+    label: ev.element_label || ev.element_tag || "Click"
+  }));
+  const flowMap = /* @__PURE__ */ new Map();
+  for (const ev of filteredEvents) {
+    if (ev.event_type === "page_view" && ev.metadata?.fromRoute) {
+      const from = String(ev.metadata.fromRoute).split(":")[0].toLowerCase();
+      const to = (ev.route || "landing").split(":")[0].toLowerCase();
+      if (from === to) continue;
+      const key = `${from}->${to}`;
+      const existing = flowMap.get(key);
+      if (existing) existing.count += 1;
+      else {
+        flowMap.set(key, {
+          from,
+          fromLabel: getRouteLabel(from),
+          to,
+          toLabel: getRouteLabel(to),
+          count: 1
+        });
+      }
+    }
+  }
+  const navigationFlows = Array.from(flowMap.values()).sort((a, b) => b.count - a.count).slice(0, 12);
+  const rageMap = /* @__PURE__ */ new Map();
+  for (const ev of filteredEvents) {
+    if (ev.event_type !== "rage_click") continue;
+    const label = ev.element_label || ev.element_tag || "Unresponsive Element";
+    const key = `${ev.route}::${label}`;
+    const existing = rageMap.get(key);
+    if (existing) {
+      existing.count += 1;
+      if (ev.created_at > existing.lastSeen) existing.lastSeen = ev.created_at;
+    } else {
+      rageMap.set(key, { label, routeLabel: ev.route_label, count: 1, lastSeen: ev.created_at });
+    }
+  }
+  const rageClickAlerts = Array.from(rageMap.values()).sort((a, b) => b.count - a.count).slice(0, 8);
+  const lifecycleCounts = {
+    "Power User": 0,
+    "Active Regular": 0,
+    Explorer: 0,
+    "At-Risk": 0,
+    "New Visitor": 0
+  };
+  for (const u of users) {
+    lifecycleCounts[u.lifecycleStage] += 1;
+  }
+  const lifecycleDistribution = Object.entries(lifecycleCounts).map(([stage, count]) => ({
+    stage,
+    count
+  }));
+  const peakBlocks = [
+    { label: "00\u201303", start: 0, events: 0 },
+    { label: "03\u201306", start: 3, events: 0 },
+    { label: "06\u201309", start: 6, events: 0 },
+    { label: "09\u201312", start: 9, events: 0 },
+    { label: "12\u201315", start: 12, events: 0 },
+    { label: "15\u201318", start: 15, events: 0 },
+    { label: "18\u201321", start: 18, events: 0 },
+    { label: "21\u201324", start: 21, events: 0 }
+  ];
+  for (const ev of filteredEvents) {
+    const d = new Date(ev.created_at);
+    if (Number.isNaN(d.getTime())) continue;
+    const idx = Math.floor(d.getHours() / 3);
+    if (peakBlocks[idx]) peakBlocks[idx].events += 1;
+  }
+  const utmMap = /* @__PURE__ */ new Map();
+  const tzMap = /* @__PURE__ */ new Map();
+  const langMap = /* @__PURE__ */ new Map();
+  for (const s of filteredSessions) {
+    const src = s.utm_source || (s.referrer ? safeHost(s.referrer) : "Direct / Portal");
+    utmMap.set(src, (utmMap.get(src) || 0) + 1);
+    if (s.timezone) tzMap.set(s.timezone, (tzMap.get(s.timezone) || 0) + 1);
+    if (s.language) langMap.set(s.language, (langMap.get(s.language) || 0) + 1);
+  }
+  const acquisitionSources = Array.from(utmMap.entries()).map(([source, sessionsCount]) => ({ source, sessions: sessionsCount })).sort((a, b) => b.sessions - a.sessions).slice(0, 8);
+  const topTimezones = Array.from(tzMap.entries()).map(([timezone, count]) => ({ timezone, count })).sort((a, b) => b.count - a.count).slice(0, 6);
+  const topLanguages = Array.from(langMap.entries()).map(([language, count]) => ({ language, count })).sort((a, b) => b.count - a.count).slice(0, 6);
+  const hourlyMap = /* @__PURE__ */ new Map();
+  const now = /* @__PURE__ */ new Date();
+  for (let i = 11; i >= 0; i--) {
+    const slot = new Date(now.getTime() - i * 2 * 3600 * 1e3);
+    const key = `${slot.getFullYear()}-${slot.getMonth()}-${slot.getDate()}-${Math.floor(slot.getHours() / 2)}`;
+    const hourStr = `${String(Math.floor(slot.getHours() / 2) * 2).padStart(2, "0")}:00`;
+    hourlyMap.set(key, { label: hourStr, clicks: 0, pageViews: 0, dwellMin: 0 });
+  }
+  for (const ev of filteredEvents) {
+    const d = new Date(ev.created_at);
+    if (Number.isNaN(d.getTime())) continue;
+    const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}-${Math.floor(d.getHours() / 2)}`;
+    const bucket = hourlyMap.get(key);
+    if (!bucket) continue;
+    if (ev.event_type === "click" || ev.event_type === "rage_click" || ev.event_type === "post_interaction") {
+      bucket.clicks += 1;
+    }
+    if (ev.event_type === "page_view") bucket.pageViews += 1;
+    if (ev.event_type === "page_leave" || ev.event_type === "session_heartbeat") {
+      bucket.dwellMin = Math.round((bucket.dwellMin + ev.duration_sec / 60) * 10) / 10;
+    }
+  }
+  const deviceCounts = { desktop: 0, mobile: 0, tablet: 0 };
+  for (const s of filteredSessions) {
+    deviceCounts[s.device_type] = (deviceCounts[s.device_type] || 0) + 1;
+  }
+  const deviceBreakdown = Object.entries(deviceCounts).map(([name, value]) => ({
+    name: name.charAt(0).toUpperCase() + name.slice(1),
+    key: name,
+    value
+  }));
+  const interestTotals = /* @__PURE__ */ new Map();
+  for (const u of users) {
+    for (const intr of u.inferredInterests) {
+      interestTotals.set(intr.label, (interestTotals.get(intr.label) || 0) + 1);
+    }
+  }
+  const audienceInterests = Array.from(interestTotals.entries()).map(([interest, userCount]) => ({ interest, userCount })).sort((a, b) => b.userCount - a.userCount);
+  return {
+    supabaseConnected,
+    kpis: {
+      trackedUsers: users.length,
+      onlineNow: onlineNowCount,
+      totalSessions: filteredSessions.length,
+      totalEvents: filteredEvents.length,
+      totalClicks,
+      totalRageClicks,
+      totalPageViews,
+      totalDwellSec,
+      avgSessionSec,
+      avgEngagementScore
+    },
+    routeMetrics,
+    topClickHotspots,
+    heatmapPoints,
+    navigationFlows,
+    rageClickAlerts,
+    lifecycleDistribution,
+    peakBlocks,
+    acquisitionSources,
+    topTimezones,
+    topLanguages,
+    activityTimeline: Array.from(hourlyMap.values()),
+    deviceBreakdown,
+    audienceInterests,
+    users,
+    recentEvents: filteredEvents.slice(0, 140),
+    segments: await listAdSegments(users)
+  };
+}
+function safeHost(urlStr) {
+  try {
+    return new URL(urlStr).hostname || "Referral";
+  } catch {
+    return urlStr.slice(0, 40) || "Referral";
+  }
+}
+async function getUserTelemetryDossier(userKey) {
+  const { sessions, events, supabaseConnected } = await fetchMergedTelemetryDataset();
+  const users = buildUserSummaries(sessions, events);
+  const summary = users.find((u) => u.userKey === userKey || String(u.profileId) === userKey);
+  if (!summary) {
+    return null;
+  }
+  const matchingSessionIds = new Set(
+    sessions.filter((s) => {
+      if (summary.profileId && s.profile_id === summary.profileId) return true;
+      if (summary.userEmail && s.user_email?.toLowerCase() === summary.userEmail.toLowerCase()) return true;
+      return `guest:${s.session_id}` === summary.userKey;
+    }).map((s) => s.session_id)
+  );
+  const userSessions = sessions.filter((s) => matchingSessionIds.has(s.session_id));
+  const userEvents = events.filter(
+    (e) => matchingSessionIds.has(e.session_id) || summary.profileId && e.profile_id === summary.profileId
+  );
+  const searchTerms = userEvents.filter((e) => e.event_type === "search" && e.metadata?.query).map((e) => ({
+    query: String(e.metadata.query),
+    route: e.route_label,
+    createdAt: e.created_at
+  })).slice(0, 20);
+  const clickMap = /* @__PURE__ */ new Map();
+  for (const ev of userEvents) {
+    if (ev.event_type !== "click" && ev.event_type !== "rage_click" && ev.event_type !== "post_interaction") {
+      continue;
+    }
+    const label = ev.element_label || ev.element_tag || "Element";
+    const key = `${ev.route}::${label}`;
+    const item = clickMap.get(key);
+    if (item) item.count += 1;
+    else clickMap.set(key, { label, routeLabel: ev.route_label, count: 1 });
+  }
+  return {
+    supabaseConnected,
+    summary,
+    sessions: userSessions.slice(0, 30),
+    timeline: userEvents.slice(0, 200),
+    searchTerms,
+    topClicks: Array.from(clickMap.values()).sort((a, b) => b.count - a.count).slice(0, 12)
+  };
+}
+function matchUsersForSegment(users, segment) {
+  return users.filter((u) => {
+    if (segment.min_clicks > 0 && u.totalClicks < segment.min_clicks) return false;
+    if (segment.min_dwell_sec > 0 && u.totalDwellSec < segment.min_dwell_sec) return false;
+    if (segment.min_batch !== null && segment.min_batch !== void 0) {
+      if (!u.batchYear || u.batchYear < segment.min_batch) return false;
+    }
+    if (segment.max_batch !== null && segment.max_batch !== void 0) {
+      if (!u.batchYear || u.batchYear > segment.max_batch) return false;
+    }
+    if (segment.target_devices.length > 0 && !segment.target_devices.includes(u.primaryDevice)) {
+      return false;
+    }
+    if (segment.target_routes.length > 0) {
+      const visited = new Set(u.routesVisited);
+      const anyRouteMatch = segment.target_routes.some((r) => visited.has(r));
+      if (!anyRouteMatch) return false;
+    }
+    if (segment.target_interests.length > 0) {
+      const userInterests = new Set(u.inferredInterests.map((i) => i.label));
+      const anyInterestMatch = segment.target_interests.some((i) => userInterests.has(i));
+      if (!anyInterestMatch) return false;
+    }
+    return true;
+  });
+}
+async function listAdSegments(precomputedUsers) {
+  let segments = [...store.segments];
+  if (isSupabaseServerConfigured && supabaseTablesAvailable !== false) {
+    try {
+      const { data, error } = await supabaseServer.from("ad_audience_segments").select("*").order("created_at", { ascending: false });
+      if (!error && Array.isArray(data) && data.length > 0) {
+        segments = data;
+      }
+    } catch {
+    }
+  }
+  let users = precomputedUsers;
+  if (!users) {
+    const merged = await fetchMergedTelemetryDataset();
+    users = buildUserSummaries(merged.sessions, merged.events);
+  }
+  return segments.map((seg) => {
+    const matched = matchUsersForSegment(users, seg);
+    return {
+      ...seg,
+      matchedUsersCount: matched.length,
+      matchedUserPreview: matched.slice(0, 6).map((u) => ({
+        userKey: u.userKey,
+        profileId: u.profileId,
+        userName: u.userName,
+        batchYear: u.batchYear,
+        totalClicks: u.totalClicks,
+        totalDwellSec: u.totalDwellSec
+      }))
+    };
+  });
+}
+async function createAdSegment(input, createdBy) {
+  const name = clampString(input.name, 80);
+  if (!name) throw new Error("Audience segment name is required.");
+  const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+  const segment = {
+    id: `seg-${Date.now()}-${crypto2.randomBytes(3).toString("hex")}`,
+    name,
+    description: clampString(input.description, 240) || "",
+    target_routes: Array.isArray(input.target_routes) ? input.target_routes.map((r) => String(r).toLowerCase().trim()).filter(Boolean).slice(0, 15) : [],
+    target_interests: Array.isArray(input.target_interests) ? input.target_interests.map((i) => String(i).trim()).filter(Boolean).slice(0, 10) : [],
+    target_devices: Array.isArray(input.target_devices) ? input.target_devices.filter((d) => ["desktop", "mobile", "tablet"].includes(String(d))) : [],
+    min_clicks: clampInt(input.min_clicks, 0, 1e5, 0),
+    min_dwell_sec: clampInt(input.min_dwell_sec, 0, 1e6, 0),
+    min_batch: input.min_batch !== null && input.min_batch !== void 0 && String(input.min_batch) !== "" ? clampInt(input.min_batch, 1, 100) : null,
+    max_batch: input.max_batch !== null && input.max_batch !== void 0 && String(input.max_batch) !== "" ? clampInt(input.max_batch, 1, 100) : null,
+    created_by: createdBy,
+    created_at: nowIso,
+    updated_at: nowIso
+  };
+  store.segments = [segment, ...store.segments];
+  scheduleDiskFlush();
+  if (isSupabaseServerConfigured && supabaseTablesAvailable !== false) {
+    try {
+      await supabaseServer.from("ad_audience_segments").upsert(segment, { onConflict: "id" });
+    } catch {
+    }
+  }
+  return segment;
+}
+async function deleteAdSegment(id) {
+  const cleanId = clampString(id, 80);
+  if (!cleanId) return false;
+  store.segments = store.segments.filter((s) => s.id !== cleanId);
+  scheduleDiskFlush();
+  if (isSupabaseServerConfigured && supabaseTablesAvailable !== false) {
+    try {
+      await supabaseServer.from("ad_audience_segments").delete().eq("id", cleanId);
+    } catch {
+    }
+  }
+  return true;
+}
+async function clearTelemetryLogs() {
+  store.sessions = {};
+  store.events = [];
+  scheduleDiskFlush();
+}
+
 // server.ts
 if (typeof globalThis.__dirname !== "undefined") {
   delete globalThis.__dirname;
@@ -1310,20 +2867,30 @@ process.on("unhandledRejection", (reason) => {
   console.error("[Server] Unhandled Rejection (kept alive):", reason?.message || reason);
 });
 dotenv2.config({ quiet: true });
-var __filename = fileURLToPath(import.meta.url);
-var __dirname = path.dirname(__filename);
+var __filename2 = fileURLToPath2(import.meta.url);
+var __dirname2 = path2.dirname(__filename2);
 var app = express();
 var args = process.argv.slice(2);
 var portFlagIdx = args.indexOf("--port");
 var cliPort = portFlagIdx !== -1 && args[portFlagIdx + 1] ? Number(args[portFlagIdx + 1]) : void 0;
 var PORT = cliPort || (process.env.APP_PORT ? Number(process.env.APP_PORT) : 3e3);
+var EXTRA_ALLOWED_ORIGINS = new Set(
+  (process.env.ALLOWED_ORIGINS || "").split(",").map((o) => o.trim().replace(/\/+$/, "")).filter(Boolean)
+);
+function isAllowedCorsOrigin(origin) {
+  const normalized = origin.trim().replace(/\/+$/, "");
+  if (normalized === "https://szmcalumni.net" || normalized === "https://www.szmcalumni.net" || normalized === "https://ndcbogura.alumniworld.xyz" || normalized === "https://alumniworld.xyz" || normalized === "https://www.alumniworld.xyz" || EXTRA_ALLOWED_ORIGINS.has(normalized)) {
+    return true;
+  }
+  return /^https:\/\/([a-zA-Z0-9-]+\.)*szmcalumni\.net$/.test(normalized) || /^https:\/\/([a-zA-Z0-9-]+\.)*alumniworld\.xyz$/.test(normalized) || /^https:\/\/([a-zA-Z0-9-]+\.)*run\.app$/.test(normalized) || /^https:\/\/([a-zA-Z0-9-]+\.)*googleusercontent\.com$/.test(normalized) || /^https?:\/\/(localhost|127\.0\.0\.1)(:[0-9]+)?$/.test(normalized);
+}
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-  if (origin) {
+  if (origin && isAllowedCorsOrigin(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Vary", "Origin");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, x-file-ext, x-user-id");
     res.setHeader("Access-Control-Allow-Credentials", "true");
   }
   res.setHeader("X-Content-Type-Options", "nosniff");
@@ -1367,26 +2934,30 @@ function resolveActor(req) {
     return {
       uid: req.dbUser.uid,
       email: req.dbUser.email,
-      role: req.dbUser.role || "admin"
+      role: req.dbUser.role || "member"
     };
   }
-  if (req.user) {
-    const user = req.user;
-    return {
-      uid: user.uid || user.id || "admin-user",
-      email: user.email || "admin@szmcalumni.net",
-      role: "admin"
-    };
-  }
-  throw new Error("Unauthorized: Valid admin credentials required on backend");
+  throw new Error("Unauthorized: Valid verified session required on backend");
 }
-app.get(["/api/download-dist", "/download-dist", "/download/dist.zip", "/szmc-alumni-dist.zip"], (_req, res) => {
-  const publicZip = path.resolve(__dirname, "public", "szmc-alumni-dist.zip");
-  if (existsSync(publicZip)) {
+app.get("/api/auth/verify-session", requireAuth, (req, res) => {
+  const actor = req.dbUser;
+  if (!actor) {
+    return res.status(401).json({ authenticated: false, error: "Unauthorized" });
+  }
+  return res.json({
+    authenticated: true,
+    user: actor,
+    permissions: getRolePermissions(actor.role),
+    timestamp: (/* @__PURE__ */ new Date()).toISOString()
+  });
+});
+app.get(["/api/download-dist", "/download-dist", "/download/dist.zip", "/szmc-alumni-dist.zip"], requireSuperAdmin, (_req, res) => {
+  const publicZip = path2.resolve(__dirname2, "public", "szmc-alumni-dist.zip");
+  if (existsSync2(publicZip)) {
     return res.download(publicZip, "szmc-alumni-dist.zip");
   }
-  const distZip = path.resolve(__dirname, "dist", "szmc-alumni-dist.zip");
-  if (existsSync(distZip)) {
+  const distZip = path2.resolve(__dirname2, "dist", "szmc-alumni-dist.zip");
+  if (existsSync2(distZip)) {
     return res.download(distZip, "szmc-alumni-dist.zip");
   }
   return res.status(404).json({ error: "Distribution bundle not found" });
@@ -1453,7 +3024,7 @@ var PASSWORD_SALT = "ndc_dhaka_1949_salt_v1:";
 function hashPasswordServer(raw) {
   if (!raw) return "";
   if (raw.startsWith("sha256:")) return raw;
-  const hash = crypto2.createHash("sha256").update(PASSWORD_SALT + raw).digest("hex");
+  const hash = crypto3.createHash("sha256").update(PASSWORD_SALT + raw).digest("hex");
   return `sha256:${hash}`;
 }
 function verifyPasswordServer(storedHash, inputPass) {
@@ -1500,22 +3071,22 @@ app.post("/api/auth/register", rateLimitGuard(25, 6e4), async (req, res) => {
     }
     const hashedPassword = hashPasswordServer(password);
     const created = await createOrRegisterAlumniProfile({
-      userUid: req.body.userUid,
+      userUid: void 0,
       rawPassword: password,
       fullName: fullName.trim(),
       avatarUrl,
-      batchYear: Number(batchYear) || 68,
+      batchYear: Number(batchYear) || 25,
       session,
       collegeRoll: collegeRoll?.trim(),
       academicStream: academicStream === "Humanities" || academicStream === "Business Studies" ? academicStream : "Science",
       academicGroup: academicGroup || null,
-      section: section || "Group 4",
+      section: section || "MBBS",
       profession: profession || "",
       position: position || "",
       institution: institution || "",
       specialty: Array.isArray(specialty) ? specialty : [],
-      degree: Array.isArray(degree) ? degree : ["HSC"],
-      city: city || "Dhaka",
+      degree: Array.isArray(degree) ? degree : ["MBBS"],
+      city: city || "Bogura",
       country: country || "Bangladesh",
       phone: phone?.trim() || null,
       whatsapp: whatsapp?.trim() || null,
@@ -1525,6 +3096,12 @@ app.post("/api/auth/register", rateLimitGuard(25, 6e4), async (req, res) => {
       isRegisteredDonor: Boolean(isRegisteredDonor)
     });
     const formattedProfile = formatAlumniRowToProfile(created);
+    const memberToken = signMemberSessionToken({
+      email: formattedProfile.email || `member-${formattedProfile.id}@szmcalumni.net`,
+      userId: formattedProfile.id,
+      uid: formattedProfile.authUserId || `member:${formattedProfile.id}`,
+      fullName: formattedProfile.fullName
+    });
     broadcastFeedEvent({
       type: "ALUMNI_REGISTERED",
       profile: formattedProfile,
@@ -1532,6 +3109,7 @@ app.post("/api/auth/register", rateLimitGuard(25, 6e4), async (req, res) => {
     });
     res.status(201).json({
       success: true,
+      token: memberToken,
       profile: formattedProfile
     });
   } catch (error) {
@@ -1558,15 +3136,17 @@ async function handleUnifiedLoginCore(req, res) {
     }
     const cleanId = identifier.trim();
     const isEmail = cleanId.includes("@");
-    const idDigitsSuffix = cleanId.replace(/\D/g, "").slice(-10);
-    const idSuffixDigest = idDigitsSuffix ? crypto2.createHash("sha256").update(`szmc_id_salt:${idDigitsSuffix}`).digest("hex") : "";
-    const ADMIN_PHONE_SUFFIX_DIGEST2 = "752c91e0a1047c99f82ee8eff19f0234f12b2818db5fe0695ac961315b4f4bae";
-    const ADMIN_MASTER_PASS_HASH = "sha256:78c42a0b21dfeae36b95efa4b145e97e894a3f28d57fa8a233b64fddcaa9b3b1";
-    const isDedicatedAdmin = cleanId.toLowerCase() === "nurulanambashir25@gmail.com" || cleanId.toLowerCase() === "nurulanambashir20@gmail.com" || idSuffixDigest === ADMIN_PHONE_SUFFIX_DIGEST2;
-    if (isDedicatedAdmin) {
+    const safeCompareSecret = (provided, expected) => {
+      const a = crypto3.createHash("sha256").update(provided).digest();
+      const b = crypto3.createHash("sha256").update(expected).digest();
+      return crypto3.timingSafeEqual(a, b);
+    };
+    const isDedicatedSuperAdmin = isEmail && isSuperAdminEmail(cleanId);
+    if (isDedicatedSuperAdmin) {
       let authSession = null;
       let authenticated = false;
-      const targetEmail = cleanId.includes("@") ? cleanId.toLowerCase().trim() : "nurulanambashir25@gmail.com";
+      const targetEmail = cleanId.toLowerCase().trim();
+      let dbProfile = null;
       if (isSupabaseServerConfigured) {
         try {
           const { data: sData, error: sErr } = await supabaseServer.auth.signInWithPassword({
@@ -1580,26 +3160,31 @@ async function handleUnifiedLoginCore(req, res) {
         } catch {
         }
       }
+      dbProfile = await findAlumniByCredential(targetEmail);
       if (!authenticated) {
-        if (process.env.ADMIN_PASSWORD && password === process.env.ADMIN_PASSWORD) {
+        const envAdminPass = process.env.ADMIN_PASSWORD?.trim();
+        if (envAdminPass && safeCompareSecret(password, envAdminPass)) {
           authenticated = true;
-        } else if (hashPasswordServer(password) === ADMIN_MASTER_PASS_HASH) {
+        } else if (dbProfile?.passwordHash && verifyPasswordServer(dbProfile.passwordHash, password)) {
           authenticated = true;
-        } else {
-          const adminAlumnus = await findAlumniByCredential(targetEmail);
-          if (adminAlumnus?.passwordHash && verifyPasswordServer(adminAlumnus.passwordHash, password)) {
-            authenticated = true;
-          }
         }
       }
       if (!authenticated) {
-        return res.status(401).json({ error: "Incorrect administrator password. Access denied." });
+        return res.status(401).json({ error: "Invalid credentials. Access denied." });
       }
-      const superAdminToken = signAdminToken(targetEmail);
-      const superAdminProfile = {
-        id: 1,
-        userId: 1,
-        fullName: "Dr. Nurul Anam Bashir",
+      const resolvedId = Number(dbProfile?.id || 1);
+      const resolvedUid = authSession?.user?.id || dbProfile?.authUserId || `super-admin:${targetEmail}`;
+      const resolvedName = dbProfile?.fullName || "Dr. Nurul Anam Bashir";
+      const superAdminToken = signAdminToken(targetEmail, "super_admin", {
+        userId: resolvedId,
+        uid: resolvedUid,
+        fullName: resolvedName
+      });
+      const superAdminProfile = dbProfile ? { ...formatAlumniRowToProfile(dbProfile), role: "super_admin" } : {
+        id: resolvedId,
+        userId: resolvedId,
+        authUserId: resolvedUid,
+        fullName: resolvedName,
         avatarUrl: "/assets/aistudio/images__1__2778177d.png",
         batchYear: 25,
         academicStream: "MBBS",
@@ -1616,60 +3201,54 @@ async function handleUnifiedLoginCore(req, res) {
         city: "Bogura",
         country: "Bangladesh",
         email: targetEmail,
-        phone: !isEmail ? cleanId : "",
-        role: "admin",
+        phone: "",
+        role: "super_admin",
         isPublic: true,
         online: true,
         badges: ["SZMCian", "Super Admin", "Batch 25"]
       };
       return res.json({
         success: true,
-        token: superAdminToken,
-        session: authSession || { access_token: superAdminToken, token_type: "bearer", user: { email: targetEmail, role: "admin" } },
+        token: authSession?.access_token || superAdminToken,
+        session: authSession || null,
         profile: superAdminProfile
       });
     }
     if (isEmail) {
       const cleanEmail = cleanId.toLowerCase();
       if (isSupabaseServerConfigured) {
-        try {
-          const { data: uData } = await supabaseServer.auth.admin.listUsers();
-          const existingU = uData?.users?.find((u) => u.email?.toLowerCase() === cleanEmail);
-          if (existingU && !existingU.email_confirmed_at) {
-            await supabaseServer.auth.admin.updateUserById(existingU.id, { email_confirm: true });
-          }
-        } catch (confirmErr) {
-          console.warn("Auto-confirm check notice:", confirmErr);
-        }
         const { data: signInData, error: signInError } = await supabaseServer.auth.signInWithPassword({
           email: cleanEmail,
           password
         });
-        if (!signInError && signInData?.user) {
+        if (!signInError && signInData?.user && signInData?.session) {
           let alumnus3 = await findAlumniByCredential(cleanEmail);
           if (!alumnus3) {
             alumnus3 = await createOrRegisterAlumniProfile({
               userUid: signInData.user.id,
               rawPassword: password,
               fullName: signInData.user.user_metadata?.full_name || signInData.user.user_metadata?.name || cleanEmail.split("@")[0],
-              batchYear: Number(signInData.user.user_metadata?.batch_year) || 68,
+              batchYear: Number(signInData.user.user_metadata?.batch_year) || 25,
               email: cleanEmail,
               passwordHash: hashPasswordServer(password)
             });
           }
-          const adminToken3 = signAdminToken(cleanEmail || "admin@szmcalumni.net");
           return res.json({
             success: true,
             session: signInData.session,
-            token: signInData.session?.access_token || adminToken3,
+            token: signInData.session.access_token,
             profile: formatAlumniRowToProfile(alumnus3)
           });
         }
         if (signInError) {
           const msg = signInError.message.toLowerCase();
+          if (msg.includes("email not confirmed") || msg.includes("not confirmed")) {
+            return res.status(403).json({
+              error: "Please confirm your email address using the verification link sent to your inbox before signing in."
+            });
+          }
           if (msg.includes("invalid login credentials") || msg.includes("invalid_credentials")) {
-            const { data: uData } = await supabaseServer.auth.admin.listUsers();
-            const existingU = uData?.users?.find((u) => u.email?.toLowerCase() === cleanEmail);
+            const existingU = await findAuthUserByEmailOrPhone({ email: cleanEmail });
             if (existingU && (existingU.app_metadata?.provider === "google" || !existingU.encrypted_password)) {
               return res.status(400).json({
                 error: 'This account was created via Google Sign-In and does not have a password set yet. Please continue with "Sign in with Google" or use "Forgot Password" to set a password.'
@@ -1680,25 +3259,27 @@ async function handleUnifiedLoginCore(req, res) {
         }
       }
       const alumnus2 = await findAlumniByCredential(cleanEmail);
-      if (!alumnus2) {
-        return res.status(404).json({ error: "No registered account found with this email address." });
+      if (!alumnus2 || !verifyPasswordServer(alumnus2.passwordHash, password)) {
+        return res.status(401).json({ error: "Invalid email or password. Please verify your credentials." });
       }
-      const isValid2 = verifyPasswordServer(alumnus2.passwordHash, password);
-      if (!isValid2) {
-        return res.status(401).json({ error: "Incorrect password. Please try again." });
-      }
-      const adminToken2 = signAdminToken(cleanEmail || "admin@szmcalumni.net");
+      const formatted2 = formatAlumniRowToProfile(alumnus2);
+      const memberToken2 = signMemberSessionToken({
+        email: cleanEmail,
+        userId: formatted2.id,
+        uid: formatted2.authUserId || `member:${formatted2.id}`,
+        fullName: formatted2.fullName
+      });
       return res.json({
         success: true,
-        token: adminToken2,
-        profile: formatAlumniRowToProfile(alumnus2)
+        token: memberToken2,
+        profile: formatted2
       });
     }
     const formattedPhone = formatToE164PhoneServer(cleanId);
     const alumnus = await findAlumniByCredential(cleanId);
     if (!alumnus) {
-      return res.status(404).json({
-        error: "No registered account found with this mobile number. Please register your verified profile first."
+      return res.status(401).json({
+        error: "Invalid mobile number or password. Please verify your credentials."
       });
     }
     if (alumnus.accountStatus === "suspended") {
@@ -1711,6 +3292,11 @@ async function handleUnifiedLoginCore(req, res) {
           email: alumnus.email.toLowerCase().trim(),
           password
         });
+        if (signInError && signInError.message.toLowerCase().includes("not confirmed")) {
+          return res.status(403).json({
+            error: "Please confirm your registered email address before signing in."
+          });
+        }
         if (!signInError && signInData?.session) {
           authSession = signInData.session;
         }
@@ -1728,7 +3314,7 @@ async function handleUnifiedLoginCore(req, res) {
         }
       }
       if (authSession) {
-        if (alumnus.authUserId) {
+        if (alumnus.authUserId && alumnus.phoneOwnershipVerified) {
           try {
             await supabaseServer.auth.admin.updateUserById(alumnus.authUserId, {
               phone: formattedPhone,
@@ -1737,34 +3323,40 @@ async function handleUnifiedLoginCore(req, res) {
           } catch {
           }
         }
-        const adminToken2 = signAdminToken(alumnus.email || "admin@szmcalumni.net");
         return res.json({
           success: true,
           session: authSession,
-          token: authSession?.access_token || adminToken2,
+          token: authSession.access_token,
           profile: formatAlumniRowToProfile(alumnus)
         });
       }
-      const { data: usersData } = await supabaseServer.auth.admin.listUsers();
-      const matchedUser = usersData?.users?.find(
-        (u) => alumnus.email && u.email?.toLowerCase() === alumnus.email.toLowerCase().trim() || u.phone && u.phone === formattedPhone
-      );
+      const matchedUser = await findAuthUserByEmailOrPhone({
+        authUserId: alumnus.authUserId,
+        email: alumnus.email,
+        phone: formattedPhone
+      });
       if (matchedUser && (matchedUser.app_metadata?.provider === "google" || !matchedUser.encrypted_password)) {
         return res.status(400).json({
           error: 'This account was created via Google Sign-In and does not have a password set yet. Please sign in with Google, or use "Forgot Password" to set a password for phone login.'
         });
       }
-      return res.status(401).json({ error: "Incorrect password for this mobile number. Please try again." });
+      return res.status(401).json({ error: "Invalid mobile number or password. Please verify your credentials." });
     }
     const isValid = verifyPasswordServer(alumnus.passwordHash, password);
     if (!isValid) {
-      return res.status(401).json({ error: "Incorrect password. Please try again." });
+      return res.status(401).json({ error: "Invalid mobile number or password. Please verify your credentials." });
     }
-    const adminToken = signAdminToken(alumnus.email || "admin@szmcalumni.net");
+    const formatted = formatAlumniRowToProfile(alumnus);
+    const memberToken = signMemberSessionToken({
+      email: formatted.email || `phone-${formatted.id}@szmcalumni.net`,
+      userId: formatted.id,
+      uid: formatted.authUserId || `member:${formatted.id}`,
+      fullName: formatted.fullName
+    });
     return res.json({
       success: true,
-      token: adminToken,
-      profile: formatAlumniRowToProfile(alumnus)
+      token: memberToken,
+      profile: formatted
     });
   } catch (error) {
     console.error("Unified login error:", error);
@@ -1831,27 +3423,36 @@ app.post(
     }
   }
 );
-app.get("/api/admin/verify-access", requireAdmin, (req, res) => {
+app.get("/api/admin/verify-access", requireModerator, (req, res) => {
   const actor = req.dbUser;
-  if (actor && (actor.role === "admin" || actor.role === "super_admin")) {
-    return res.json({
-      authorized: true,
-      role: "admin",
-      userId: actor.id || 1,
-      userUid: actor.uid || "super-admin-nurul",
-      email: actor.email || "nurulanambashir25@gmail.com",
-      fullName: actor.fullName || "Dr. Nurul Anam Bashir",
-      verifiedViaMetadata: true,
-      timestamp: (/* @__PURE__ */ new Date()).toISOString()
+  if (!actor) {
+    return res.status(401).json({
+      authorized: false,
+      role: "member",
+      error: "Unauthorized: Missing verified session."
     });
   }
-  return res.status(403).json({
-    authorized: false,
-    role: actor?.role || "member",
-    error: "Forbidden: Admin access restricted to verified administrators."
+  const permissions = getRolePermissions(actor.role);
+  if (!permissions.canAccessAdminPortal) {
+    return res.status(403).json({
+      authorized: false,
+      role: actor.role,
+      error: "Forbidden: Portal access restricted to verified moderators and administrators."
+    });
+  }
+  return res.json({
+    authorized: true,
+    role: actor.role,
+    permissions,
+    userId: actor.id,
+    userUid: actor.uid,
+    email: actor.email,
+    fullName: actor.fullName,
+    verifiedViaMetadata: true,
+    timestamp: (/* @__PURE__ */ new Date()).toISOString()
   });
 });
-app.get("/api/admin/auto-verify-status", (_req, res) => {
+app.get("/api/admin/auto-verify-status", requireAdmin, (_req, res) => {
   const active = isServerAutoVerifyActive();
   const expiry = new Date(serverAutoVerifyConfig.expiresAt).getTime();
   const now = Date.now();
@@ -1887,7 +3488,7 @@ app.post("/api/admin/auto-verify-toggle", rateLimitGuard(30, 6e4), requireAdmin,
     res.status(500).json({ error: err.message || "Failed to toggle auto-verification" });
   }
 });
-app.post("/api/admin/bulk-verify-all", rateLimitGuard(15, 6e4), requireAdmin, async (req, res) => {
+app.post("/api/admin/bulk-verify-all", rateLimitGuard(15, 6e4), requireSuperAdmin, async (req, res) => {
   try {
     const actor = resolveActor(req);
     const result = await bulkVerifyAllAlumniProfiles({
@@ -1904,12 +3505,118 @@ app.post("/api/admin/bulk-verify-all", rateLimitGuard(15, 6e4), requireAdmin, as
     res.status(500).json({ error: err.message || "Failed to bulk verify profiles" });
   }
 });
+app.post(
+  "/api/telemetry/batch",
+  rateLimitGuard(180, 6e4),
+  optionalAuth,
+  async (req, res) => {
+    try {
+      const body = req.body;
+      if (!body || typeof body !== "object" || !body.session?.sessionId) {
+        return res.status(400).json({ error: "Invalid telemetry payload." });
+      }
+      const result = await ingestTelemetryBatch(body, req.dbUser || null);
+      return res.json({ ok: true, ...result });
+    } catch (err) {
+      return res.status(500).json({ error: err?.message || "Failed to ingest telemetry batch." });
+    }
+  }
+);
+app.get(
+  "/api/admin/telemetry/overview",
+  rateLimitGuard(120, 6e4),
+  requireSuperAdmin,
+  async (req, res) => {
+    try {
+      const rawRange = Number(req.query.rangeHours);
+      const rangeHours = Number.isFinite(rawRange) && rawRange >= 0 && rawRange <= 8760 ? rawRange : 168;
+      const overview = await getTelemetryOverview(rangeHours);
+      return res.json(overview);
+    } catch (err) {
+      return res.status(500).json({ error: err?.message || "Failed to load telemetry overview." });
+    }
+  }
+);
+app.get(
+  "/api/admin/telemetry/user/:userKey",
+  rateLimitGuard(120, 6e4),
+  requireSuperAdmin,
+  async (req, res) => {
+    try {
+      const userKey = decodeURIComponent(String(req.params.userKey || "")).trim();
+      if (!userKey || userKey.length > 140) {
+        return res.status(400).json({ error: "Invalid user identifier." });
+      }
+      const dossier = await getUserTelemetryDossier(userKey);
+      if (!dossier) {
+        return res.status(404).json({ error: "No behavioral telemetry found for this user." });
+      }
+      return res.json(dossier);
+    } catch (err) {
+      return res.status(500).json({ error: err?.message || "Failed to load user dossier." });
+    }
+  }
+);
+app.get(
+  "/api/admin/telemetry/segments",
+  rateLimitGuard(120, 6e4),
+  requireSuperAdmin,
+  async (_req, res) => {
+    try {
+      const segments = await listAdSegments();
+      return res.json({ segments });
+    } catch (err) {
+      return res.status(500).json({ error: err?.message || "Failed to list audience segments." });
+    }
+  }
+);
+app.post(
+  "/api/admin/telemetry/segments",
+  rateLimitGuard(60, 6e4),
+  requireSuperAdmin,
+  async (req, res) => {
+    try {
+      const actor = resolveActor(req);
+      const created = await createAdSegment(req.body || {}, actor.email || "Super Admin");
+      return res.status(201).json({ success: true, segment: created });
+    } catch (err) {
+      return res.status(400).json({ error: err?.message || "Failed to create audience segment." });
+    }
+  }
+);
+app.delete(
+  "/api/admin/telemetry/segments/:id",
+  rateLimitGuard(60, 6e4),
+  requireSuperAdmin,
+  async (req, res) => {
+    try {
+      const id = String(req.params.id || "").trim();
+      await deleteAdSegment(id);
+      return res.json({ success: true });
+    } catch (err) {
+      return res.status(500).json({ error: err?.message || "Failed to delete audience segment." });
+    }
+  }
+);
+app.post(
+  "/api/admin/telemetry/clear",
+  rateLimitGuard(10, 6e4),
+  requireSuperAdmin,
+  async (_req, res) => {
+    try {
+      await clearTelemetryLogs();
+      return res.json({ success: true, message: "Local telemetry session buffer cleared." });
+    } catch (err) {
+      return res.status(500).json({ error: err?.message || "Failed to clear telemetry logs." });
+    }
+  }
+);
 var serverSiteConfigStore = null;
-var SITE_CONFIG_FILE = path.resolve(__dirname, "szmc-site-config.json");
+var SITE_CONFIG_FILE = path2.resolve(__dirname2, "szmc-site-config.json");
 function cleanAndPersistBase64Avatars(members) {
   if (!Array.isArray(members)) return [];
-  const uploadsDir = path.resolve(__dirname, "public", "uploads", "avatars");
-  if (!existsSync(uploadsDir)) {
+  const uploadsDir = path2.resolve(__dirname2, "public", "uploads", "avatars");
+  if (!existsSync2(uploadsDir)) {
     try {
       const { mkdirSync } = __require("fs");
       mkdirSync(uploadsDir, { recursive: true });
@@ -1923,8 +3630,8 @@ function cleanAndPersistBase64Avatars(members) {
         if (matches && matches[2]) {
           const ext = matches[1] === "jpeg" ? "jpg" : matches[1];
           const fileName = `hof_${Date.now()}_${idx}.${ext}`;
-          const filePath = path.join(uploadsDir, fileName);
-          writeFileSync(filePath, Buffer.from(matches[2], "base64"));
+          const filePath = path2.join(uploadsDir, fileName);
+          writeFileSync2(filePath, Buffer.from(matches[2], "base64"));
           return {
             ...member,
             avatarUrl: `/uploads/avatars/${fileName}`
@@ -1940,8 +3647,8 @@ function cleanAndPersistBase64Avatars(members) {
 async function hydrateServerSiteConfigFromSupabase() {
   let diskConfig = null;
   try {
-    if (existsSync(SITE_CONFIG_FILE)) {
-      const raw = readFileSync(SITE_CONFIG_FILE, "utf-8");
+    if (existsSync2(SITE_CONFIG_FILE)) {
+      const raw = readFileSync2(SITE_CONFIG_FILE, "utf-8");
       diskConfig = JSON.parse(raw);
     }
   } catch (err) {
@@ -1979,7 +3686,7 @@ async function hydrateServerSiteConfigFromSupabase() {
   };
   serverSiteConfigStore = merged;
   try {
-    writeFileSync(SITE_CONFIG_FILE, JSON.stringify(merged, null, 2), "utf-8");
+    writeFileSync2(SITE_CONFIG_FILE, JSON.stringify(merged, null, 2), "utf-8");
   } catch (err) {
     console.warn("[Server] Failed to write szmc-site-config.json:", err);
   }
@@ -1988,8 +3695,8 @@ async function hydrateServerSiteConfigFromSupabase() {
 function loadServerSiteConfig() {
   if (serverSiteConfigStore) return serverSiteConfigStore;
   try {
-    if (existsSync(SITE_CONFIG_FILE)) {
-      const raw = readFileSync(SITE_CONFIG_FILE, "utf-8");
+    if (existsSync2(SITE_CONFIG_FILE)) {
+      const raw = readFileSync2(SITE_CONFIG_FILE, "utf-8");
       serverSiteConfigStore = JSON.parse(raw);
       return serverSiteConfigStore;
     }
@@ -2007,7 +3714,7 @@ function saveServerSiteConfig(patch) {
   const updated = { ...current, ...cleanedPatch, updatedAt: (/* @__PURE__ */ new Date()).toISOString() };
   serverSiteConfigStore = updated;
   try {
-    writeFileSync(SITE_CONFIG_FILE, JSON.stringify(updated, null, 2), "utf-8");
+    writeFileSync2(SITE_CONFIG_FILE, JSON.stringify(updated, null, 2), "utf-8");
   } catch (err) {
     console.warn("Failed to write szmc-site-config.json:", err);
   }
@@ -2041,32 +3748,8 @@ app.get("/api/hall-of-fame", async (_req, res) => {
     return res.status(500).json({ error: err.message || "Failed to read Hall of Fame" });
   }
 });
-app.post("/api/admin/site-config", rateLimitGuard(120, 6e4), async (req, res) => {
+app.post("/api/admin/site-config", rateLimitGuard(120, 6e4), requireAdmin, async (req, res) => {
   try {
-    const authHeader = req.headers.authorization;
-    let isAuthorized = false;
-    let actorEmail = "admin@szmcalumni.net";
-    if (authHeader && authHeader.startsWith("Bearer ")) {
-      const token = authHeader.split("Bearer ")[1].trim();
-      const authResult = await verifyAuthToken(token);
-      if (authResult?.dbUser?.role === "admin" || authResult?.dbUser?.role === "super_admin" || authResult?.dbUser?.email && SUPER_ADMIN_EMAILS.includes(authResult.dbUser.email.toLowerCase().trim())) {
-        isAuthorized = true;
-        actorEmail = authResult.dbUser.email || actorEmail;
-      }
-    }
-    if (!isAuthorized) {
-      const directToken = req.headers["x-admin-token"] || req.query.token;
-      if (directToken) {
-        const verifyRes = verifyAdminToken(directToken);
-        if (verifyRes.valid) {
-          isAuthorized = true;
-          if (verifyRes.email) actorEmail = verifyRes.email;
-        }
-      }
-    }
-    if (!isAuthorized) {
-      return res.status(401).json({ error: "Unauthorized: Valid administrator authorization token required." });
-    }
     const patch = req.body;
     if (!patch || typeof patch !== "object") {
       return res.status(400).json({ error: "Invalid configuration payload" });
@@ -2085,10 +3768,12 @@ app.post("/api/admin/site-config", rateLimitGuard(120, 6e4), async (req, res) =>
         timestamp: Date.now()
       });
     }
+    let supabaseSynced = false;
+    let supabaseSyncError = null;
     if (isSupabaseServerConfigured) {
       const nowIso = (/* @__PURE__ */ new Date()).toISOString();
       const hofMembers = Array.isArray(updated.featuredAlumni) ? updated.featuredAlumni : [];
-      void Promise.allSettled([
+      const results = await Promise.allSettled([
         supabaseServer.from("site_settings").upsert({
           key: "master_site_config",
           value: updated,
@@ -2102,12 +3787,20 @@ app.post("/api/admin/site-config", rateLimitGuard(120, 6e4), async (req, res) =>
           },
           updated_at: nowIso
         }, { onConflict: "key" })
-      ]).catch(() => {
-      });
+      ]);
+      const errors = results.map((r) => r.status === "rejected" ? r.reason?.message : r.value?.error?.message).filter(Boolean);
+      if (errors.length === 0) {
+        supabaseSynced = true;
+      } else {
+        supabaseSyncError = errors.join("; ");
+        console.warn("Supabase site_settings server sync error:", supabaseSyncError);
+      }
     }
     return res.json({
       success: true,
-      message: "Site configuration & Hall of Fame saved and broadcast live across all devices!",
+      supabaseSynced,
+      supabaseSyncError,
+      message: supabaseSynced ? "Site configuration & Hall of Fame saved to Supabase and broadcast live across all devices!" : "Site configuration broadcast live (check SUPABASE_SERVICE_ROLE_KEY for server-side Supabase sync).",
       savedAt: updated.updatedAt,
       config: updated
     });
@@ -2175,18 +3868,19 @@ function decodeHtmlEntities(raw) {
   });
 }
 app.get("/api/unfurl", rateLimitGuard(120, 6e4), async (req, res) => {
-  const targetUrl = req.query.url;
-  if (!targetUrl || !/^https?:\/\//i.test(targetUrl)) {
-    return res.status(400).json({ error: "Valid HTTP/HTTPS URL required" });
-  }
+  const targetUrl = typeof req.query.url === "string" ? req.query.url : "";
   const cleanUrl = targetUrl.trim();
+  const safety = isSafeTargetUrl(cleanUrl);
+  if (!safety.safe || !safety.parsed) {
+    return res.status(400).json({ error: safety.error || "Valid public HTTP/HTTPS URL required" });
+  }
   if (/\.(jpeg|jpg|png|webp|gif)(\?.*)?$/i.test(cleanUrl)) {
     return res.json({
       resolvedUrl: cleanUrl,
       imageUrl: cleanUrl,
       mediaType: "photo",
       title: "Direct Photo",
-      publisher: new URL(cleanUrl).hostname
+      publisher: safety.parsed.hostname
     });
   }
   if (/\.(mp4|webm|ogg|mov)(\?.*)?$/i.test(cleanUrl)) {
@@ -2195,27 +3889,17 @@ app.get("/api/unfurl", rateLimitGuard(120, 6e4), async (req, res) => {
       videoUrl: cleanUrl,
       mediaType: "video",
       title: "Direct Video Stream",
-      publisher: new URL(cleanUrl).hostname
+      publisher: safety.parsed.hostname
     });
   }
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 7e3);
     const isFacebook = /(?:facebook\.com|fb\.watch|fb\.com)/i.test(cleanUrl);
     const crawlerUa = isFacebook ? "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)" : "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
-    const resp = await fetch(cleanUrl, {
-      signal: controller.signal,
-      redirect: "follow",
-      headers: {
-        "User-Agent": crawlerUa,
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9,bn;q=0.8",
-        "Cache-Control": "no-cache"
-      }
+    const { html: rawHtml, finalUrl: finalResolvedUrl } = await safeFetchHtml(cleanUrl, {
+      userAgent: crawlerUa,
+      timeoutMs: 6e3,
+      maxRedirects: 4
     });
-    clearTimeout(timer);
-    const finalResolvedUrl = resp.url || cleanUrl;
-    const rawHtml = await resp.text();
     const getMeta = (propName) => {
       const p1 = new RegExp(`<meta[^>]+(?:property|name)=["']${propName}["'][^>]+content=["']([^"']*)["']`, "i");
       const m1 = rawHtml.match(p1);
@@ -2345,11 +4029,17 @@ function broadcastFeedEvent(event) {
     }
   }
 }
-app.post("/api/feed/broadcast", rateLimitGuard(60, 6e4), (req, res) => {
+app.post("/api/feed/broadcast", rateLimitGuard(60, 6e4), requireAuth, (req, res) => {
   const payload = req.body;
-  if (payload) {
-    broadcastFeedEvent(payload);
+  if (!payload || typeof payload !== "object") {
+    return res.status(400).json({ error: "Invalid broadcast payload" });
   }
+  const eventType = String(payload.type || "");
+  const isAdminActor = req.dbUser?.role === "admin" || req.dbUser?.role === "super_admin" || req.dbUser?.role === "moderator";
+  if ((eventType === "SITE_CONFIG_UPDATED" || eventType === "HALL_OF_FAME_UPDATED" || eventType === "NOTICE_UPDATED") && !isAdminActor) {
+    return res.status(403).json({ error: "Forbidden: Only administrators can broadcast system configuration events." });
+  }
+  broadcastFeedEvent(payload);
   res.json({ success: true });
 });
 app.get("/api/posts", rateLimitGuard(120, 6e4), async (req, res) => {
@@ -2440,10 +4130,12 @@ app.get("/api/posts", rateLimitGuard(120, 6e4), async (req, res) => {
     return res.json({ posts: memoryPostsStore });
   }
 });
-app.post("/api/posts", rateLimitGuard(40, 6e4), async (req, res) => {
+app.post("/api/posts", rateLimitGuard(40, 6e4), requireAuth, async (req, res) => {
   try {
     invalidatePostsCache();
-    const authorId = Number(req.body.author_id || req.body.authorId || 1);
+    const isAdminActor = req.dbUser?.role === "admin" || req.dbUser?.role === "super_admin";
+    const requestedAuthorId = Number(req.body.author_id || req.body.authorId || 0);
+    const authorId = isAdminActor && requestedAuthorId > 0 ? requestedAuthorId : Number(req.dbUser?.id || 1);
     const content = String(req.body.content || "").trim();
     const category = req.body.category || "General Update";
     const images = Array.isArray(req.body.images) ? req.body.images : [];
@@ -2605,10 +4297,10 @@ app.post("/api/posts", rateLimitGuard(40, 6e4), async (req, res) => {
     return res.status(500).json({ error: err.message || "Failed to create post" });
   }
 });
-app.post("/api/posts/:id/react", rateLimitGuard(120, 6e4), async (req, res) => {
+app.post("/api/posts/:id/react", rateLimitGuard(120, 6e4), requireAuth, async (req, res) => {
   try {
     const postId = Number(req.params.id);
-    const userId = Number(req.body.userId || req.body.user_id || 1);
+    const userId = Number(req.dbUser?.id || 1);
     const reaction = req.body.reaction ? String(req.body.reaction) : null;
     let likesCount = 0;
     let liked = Boolean(reaction);
@@ -2668,10 +4360,10 @@ app.post("/api/posts/:id/react", rateLimitGuard(120, 6e4), async (req, res) => {
     return res.status(500).json({ error: err.message || "Failed to update reaction" });
   }
 });
-app.post("/api/posts/:id/like", rateLimitGuard(120, 6e4), async (req, res) => {
+app.post("/api/posts/:id/like", rateLimitGuard(120, 6e4), requireAuth, async (req, res) => {
   try {
     const postId = Number(req.params.id);
-    const userId = Number(req.body.userId || req.body.user_id || 1);
+    const userId = Number(req.dbUser?.id || 1);
     let liked = false;
     let likesCount = 0;
     if (isSupabaseServerConfigured) {
@@ -2715,10 +4407,10 @@ app.post("/api/posts/:id/like", rateLimitGuard(120, 6e4), async (req, res) => {
     return res.status(500).json({ error: err.message || "Failed to toggle like" });
   }
 });
-app.post("/api/posts/:id/comment", rateLimitGuard(90, 6e4), async (req, res) => {
+app.post("/api/posts/:id/comment", rateLimitGuard(90, 6e4), requireAuth, async (req, res) => {
   try {
     const postId = Number(req.params.id);
-    const userId = Number(req.body.userId || req.body.user_id || req.body.author_id || 1);
+    const userId = Number(req.dbUser?.id || 1);
     const content = String(req.body.content || "").trim();
     let fullName = String(req.body.fullName || req.body.authorName || "").trim();
     let avatarUrl = String(req.body.avatarUrl || req.body.authorAvatar || "").trim();
@@ -2807,11 +4499,11 @@ app.post("/api/posts/:id/comment", rateLimitGuard(90, 6e4), async (req, res) => 
     return res.status(500).json({ error: err.message || "Failed to add comment" });
   }
 });
-app.post("/api/posts/:id/reply", rateLimitGuard(90, 6e4), async (req, res) => {
+app.post("/api/posts/:id/reply", rateLimitGuard(90, 6e4), requireAuth, async (req, res) => {
   try {
     const postId = Number(req.params.id);
     const parentCommentId = Number(req.body.parentCommentId);
-    const userId = Number(req.body.userId || 1);
+    const userId = Number(req.dbUser?.id || 1);
     const content = String(req.body.content || "").trim();
     const fullName = String(req.body.fullName || "SZMC Colleague").trim();
     const avatarUrl = String(req.body.avatarUrl || "/assets/aistudio/images__1__2778177d.png").trim();
@@ -2918,9 +4610,10 @@ app.get("/api/gallery/albums", rateLimitGuard(60, 6e4), async (_req, res) => {
     return res.status(500).json({ error: err.message || "Failed to fetch gallery albums" });
   }
 });
-app.post("/api/gallery/albums", rateLimitGuard(30, 6e4), async (req, res) => {
+app.post("/api/gallery/albums", rateLimitGuard(30, 6e4), requireAuth, async (req, res) => {
   try {
-    const { title, description, category, eventDateLabel, location, batchYear, coverUrl, createdById, createdBy } = req.body;
+    const { title, description, category, eventDateLabel, location, batchYear, coverUrl, createdBy } = req.body;
+    const createdById = Number(req.dbUser?.id || 0);
     if (!title || !title.trim()) {
       return res.status(400).json({ error: "Album title is required" });
     }
@@ -2996,9 +4689,10 @@ app.post("/api/gallery/albums", rateLimitGuard(30, 6e4), async (req, res) => {
     return res.status(500).json({ error: err.message || "Failed to create album" });
   }
 });
-app.post("/api/gallery/photos", rateLimitGuard(60, 6e4), async (req, res) => {
+app.post("/api/gallery/photos", rateLimitGuard(60, 6e4), requireAuth, async (req, res) => {
   try {
-    const { albumId, url, photoUrl, caption, batchYear, tags, mediaType, fileSize, uploaderId, uploaderName } = req.body;
+    const { albumId, url, photoUrl, caption, batchYear, tags, mediaType, fileSize, uploaderName } = req.body;
+    const uploaderId = Number(req.dbUser?.id || 0);
     const finalUrl = url || photoUrl;
     if (!albumId || !finalUrl) {
       return res.status(400).json({ error: "albumId and url are required" });
@@ -3060,8 +4754,8 @@ var handleGalleryAlbumDelete = async (req, res) => {
     if (!albumId) {
       return res.status(400).json({ error: "Album ID is required" });
     }
-    const requesterUserId = Number(req.body.userId || req.query.userId || 0);
-    const requesterIsAdmin = Boolean(req.body.isAdmin || req.query.isAdmin === "true" || req.user?.role === "admin");
+    const requesterUserId = Number(req.dbUser?.id || 0);
+    const requesterIsAdmin = req.dbUser?.role === "admin" || req.dbUser?.role === "super_admin" || req.dbUser?.role === "moderator";
     if (isSupabaseServerConfigured) {
       try {
         const { data: album } = await supabaseServer.from("gallery_albums").select("id, created_by_id").eq("id", albumId).maybeSingle();
@@ -3087,14 +4781,14 @@ var handleGalleryAlbumDelete = async (req, res) => {
     return res.status(500).json({ error: err.message || "Failed to delete album" });
   }
 };
-app.delete("/api/gallery/albums/:id", rateLimitGuard(40, 6e4), handleGalleryAlbumDelete);
-app.post("/api/gallery/albums/:id/delete", rateLimitGuard(40, 6e4), handleGalleryAlbumDelete);
+app.delete("/api/gallery/albums/:id", rateLimitGuard(40, 6e4), requireAuth, handleGalleryAlbumDelete);
+app.post("/api/gallery/albums/:id/delete", rateLimitGuard(40, 6e4), requireAuth, handleGalleryAlbumDelete);
 var handleGalleryPhotoDelete = async (req, res) => {
   try {
     const photoId = String(req.params.id);
     const albumId = req.body.albumId || req.query.albumId ? Number(req.body.albumId || req.query.albumId) : null;
-    const requesterUserId = Number(req.body.userId || req.query.userId || 0);
-    const requesterIsAdmin = Boolean(req.body.isAdmin || req.query.isAdmin === "true" || req.user?.role === "admin");
+    const requesterUserId = Number(req.dbUser?.id || 0);
+    const requesterIsAdmin = req.dbUser?.role === "admin" || req.dbUser?.role === "super_admin" || req.dbUser?.role === "moderator";
     if (isSupabaseServerConfigured) {
       try {
         const { data: photo } = await supabaseServer.from("gallery_photos").select("id, album_id, uploader_id").eq("id", photoId).maybeSingle();
@@ -3137,8 +4831,8 @@ var handleGalleryPhotoDelete = async (req, res) => {
     return res.status(500).json({ error: err.message || "Failed to delete photo" });
   }
 };
-app.delete("/api/gallery/photos/:id", rateLimitGuard(60, 6e4), handleGalleryPhotoDelete);
-app.post("/api/gallery/photos/:id/delete", rateLimitGuard(60, 6e4), handleGalleryPhotoDelete);
+app.delete("/api/gallery/photos/:id", rateLimitGuard(60, 6e4), requireAuth, handleGalleryPhotoDelete);
+app.post("/api/gallery/photos/:id/delete", rateLimitGuard(60, 6e4), requireAuth, handleGalleryPhotoDelete);
 var memoryBloodRequests = [];
 var memoryBloodDonors = [];
 app.get("/api/blood/requests", rateLimitGuard(60, 6e4), async (_req, res) => {
@@ -3197,10 +4891,9 @@ app.get("/api/blood/requests", rateLimitGuard(60, 6e4), async (_req, res) => {
     return res.status(500).json({ error: err.message || "Failed to fetch blood requests" });
   }
 });
-app.post("/api/blood/requests", rateLimitGuard(30, 6e4), async (req, res) => {
+app.post("/api/blood/requests", rateLimitGuard(30, 6e4), requireAuth, async (req, res) => {
   try {
     const {
-      requesterId,
       bloodGroup,
       unitsRequired,
       hospitalName,
@@ -3213,11 +4906,12 @@ app.post("/api/blood/requests", rateLimitGuard(30, 6e4), async (req, res) => {
       description,
       patientRelation
     } = req.body;
+    const requesterId = Number(req.dbUser?.id || 1);
     let insertedId = null;
     if (isSupabaseServerConfigured) {
       try {
         const payload = {
-          requester_id: Number(requesterId) || 1,
+          requester_id: requesterId,
           blood_group: bloodGroup,
           units_required: Number(unitsRequired) || 1,
           units_needed: Number(unitsRequired) || 1,
@@ -3285,10 +4979,10 @@ app.post("/api/blood/requests", rateLimitGuard(30, 6e4), async (req, res) => {
     return res.status(500).json({ error: err.message || "Failed to create blood request" });
   }
 });
-app.post("/api/blood/donors", rateLimitGuard(30, 6e4), async (req, res) => {
+app.post("/api/blood/donors", rateLimitGuard(30, 6e4), requireAuth, async (req, res) => {
   try {
-    const { userId, bloodGroup, isRegisteredDonor, availability, preferredArea, city, lastDonationDate, emergencyAlertPreference } = req.body;
-    const donorUserId = Number(userId || 1);
+    const { bloodGroup, isRegisteredDonor, availability, preferredArea, city, lastDonationDate, emergencyAlertPreference } = req.body;
+    const donorUserId = Number(req.dbUser?.id || 1);
     if (isSupabaseServerConfigured) {
       try {
         const payload = {
@@ -3365,9 +5059,10 @@ app.get("/api/mentorship/requests", rateLimitGuard(60, 6e4), async (_req, res) =
     return res.status(500).json({ error: err.message || "Failed to fetch mentorship requests" });
   }
 });
-app.post("/api/mentorship/requests", rateLimitGuard(30, 6e4), async (req, res) => {
+app.post("/api/mentorship/requests", rateLimitGuard(30, 6e4), requireAuth, async (req, res) => {
   try {
-    const { id, userId, userName, userBatch, userAvatar, topic, question, contactInfo, targetMentorId, targetMentorName } = req.body;
+    const { id, userName, userBatch, userAvatar, topic, question, contactInfo, targetMentorId, targetMentorName } = req.body;
+    const userId = Number(req.dbUser?.id || 0);
     if (!question || !question.trim()) {
       return res.status(400).json({ error: "Question text is required" });
     }
@@ -3410,10 +5105,11 @@ app.post("/api/mentorship/requests", rateLimitGuard(30, 6e4), async (req, res) =
     return res.status(500).json({ error: err.message || "Failed to create mentorship request" });
   }
 });
-app.post("/api/mentorship/requests/:id/answers", rateLimitGuard(30, 6e4), async (req, res) => {
+app.post("/api/mentorship/requests/:id/answers", rateLimitGuard(30, 6e4), requireAuth, async (req, res) => {
   try {
     const reqId = req.params.id;
-    const { mentorId, mentorName, mentorBatch, mentorAvatar, mentorProfession, answerText } = req.body;
+    const { mentorName, mentorBatch, mentorAvatar, mentorProfession, answerText } = req.body;
+    const mentorId = Number(req.dbUser?.id || 1);
     if (!answerText || !answerText.trim()) {
       return res.status(400).json({ error: "Answer text is required" });
     }
@@ -3479,9 +5175,10 @@ app.get("/api/mentorship/mentors", rateLimitGuard(60, 6e4), async (_req, res) =>
     return res.status(500).json({ error: err.message || "Failed to fetch mentors" });
   }
 });
-app.post("/api/mentorship/mentors", rateLimitGuard(30, 6e4), async (req, res) => {
+app.post("/api/mentorship/mentors", rateLimitGuard(30, 6e4), requireAuth, async (req, res) => {
   try {
-    const { id, userId, fullName, batchYear, avatarUrl, category, expertise, shortDescription, institution, position, contactPreference } = req.body;
+    const { id, fullName, batchYear, avatarUrl, category, expertise, shortDescription, institution, position, contactPreference } = req.body;
+    const userId = Number(req.dbUser?.id || 0);
     if (!fullName || !expertise) {
       return res.status(400).json({ error: "Full name and expertise are required" });
     }
@@ -3564,9 +5261,10 @@ app.get("/api/careers", rateLimitGuard(60, 6e4), async (_req, res) => {
     return res.status(500).json({ error: err.message || "Failed to fetch career opportunities" });
   }
 });
-app.post("/api/careers", rateLimitGuard(30, 6e4), async (req, res) => {
+app.post("/api/careers", rateLimitGuard(30, 6e4), requireAuth, async (req, res) => {
   try {
-    const { id, title, company, location, type, description, posterId, posterName, posterBatch, posterAvatar, posterEmail } = req.body;
+    const { id, title, company, location, type, description, posterName, posterBatch, posterAvatar, posterEmail } = req.body;
+    const posterId = Number(req.dbUser?.id || 0);
     if (!title || !company) {
       return res.status(400).json({ error: "Title and company/institution are required" });
     }
@@ -3617,17 +5315,18 @@ app.post("/api/careers", rateLimitGuard(30, 6e4), async (req, res) => {
     return res.status(500).json({ error: err.message || "Failed to create career opportunity" });
   }
 });
-app.post("/api/careers/:id/apply", rateLimitGuard(30, 6e4), async (req, res) => {
+app.post("/api/careers/:id/apply", rateLimitGuard(30, 6e4), requireAuth, async (req, res) => {
   try {
     const oppId = req.params.id;
-    const { applicantId, applicantName, applicantBatch, applicantAvatar, applicantEmail, applicantPhone } = req.body;
+    const { applicantName, applicantBatch, applicantAvatar, applicantEmail, applicantPhone } = req.body;
+    const applicantId = Number(req.dbUser?.id || 1);
     const newApp = {
       id: `app-${Date.now()}`,
-      applicantId: Number(applicantId) || 1,
-      applicantName: applicantName || "SZMC Applicant",
+      applicantId,
+      applicantName: applicantName || req.dbUser?.fullName || "SZMC Applicant",
       applicantBatch: applicantBatch || "",
       applicantAvatar: applicantAvatar || "/assets/aistudio/images__1__2778177d.png",
-      applicantEmail: applicantEmail || "",
+      applicantEmail: applicantEmail || req.dbUser?.email || "",
       applicantPhone: applicantPhone || "",
       appliedAt: (/* @__PURE__ */ new Date()).toISOString()
     };
@@ -3652,30 +5351,763 @@ app.post("/api/careers/:id/apply", rateLimitGuard(30, 6e4), async (req, res) => 
     return res.status(500).json({ error: err.message || "Failed to apply for opportunity" });
   }
 });
-app.delete("/api/careers/:id", rateLimitGuard(30, 6e4), async (req, res) => {
+app.delete("/api/careers/:id", rateLimitGuard(30, 6e4), requireAuth, async (req, res) => {
   try {
     const oppId = req.params.id;
+    const requesterId = Number(req.dbUser?.id || 0);
+    const isAdminActor = req.dbUser?.role === "admin" || req.dbUser?.role === "super_admin" || req.dbUser?.role === "moderator";
     if (isSupabaseServerConfigured) {
       try {
+        const { data: opp } = await supabaseServer.from("career_opportunities").select("id, poster_id").eq("id", oppId).maybeSingle();
+        if (opp && !isAdminActor && Number(opp.poster_id) !== requesterId) {
+          return res.status(403).json({ error: "Forbidden: Only the poster or an administrator can delete this opportunity." });
+        }
         await supabaseServer.from("career_opportunities").delete().eq("id", oppId);
       } catch (err) {
         console.warn("Supabase delete career notice:", err);
       }
     }
     const idx = memoryCareerOpportunities.findIndex((o) => o.id === oppId);
-    if (idx >= 0) memoryCareerOpportunities.splice(idx, 1);
+    if (idx >= 0) {
+      if (!isAdminActor && Number(memoryCareerOpportunities[idx].posterId) !== requesterId) {
+        return res.status(403).json({ error: "Forbidden: Only the poster or an administrator can delete this opportunity." });
+      }
+      memoryCareerOpportunities.splice(idx, 1);
+    }
     return res.json({ success: true, message: "Career opportunity deleted successfully" });
   } catch (err) {
     return res.status(500).json({ error: err.message || "Failed to delete opportunity" });
   }
 });
+var memoryFeatureFlags = /* @__PURE__ */ new Map([
+  ["the_quad_enabled", { key: "the_quad_enabled", enabled: true, description: "Master toggle for THE QUAD Hybrid Community System", config: { version: 1 }, updatedAt: (/* @__PURE__ */ new Date()).toISOString() }],
+  ["batch_lounges_enabled", { key: "batch_lounges_enabled", enabled: true, description: "Dedicated Batch Lounges across all 35 SZMC batches", config: { total_batches: 35 }, updatedAt: (/* @__PURE__ */ new Date()).toISOString() }],
+  ["official_pages_enabled", { key: "official_pages_enabled", enabled: true, description: "Institutional Official Pages inside THE QUAD", config: { official_pages: 6 }, updatedAt: (/* @__PURE__ */ new Date()).toISOString() }],
+  ["community_polls_enabled", { key: "community_polls_enabled", enabled: true, description: "Interactive polls inside community posts", config: {}, updatedAt: (/* @__PURE__ */ new Date()).toISOString() }],
+  ["content_moderation_queue_enabled", { key: "content_moderation_queue_enabled", enabled: true, description: "User reporting, blocking, and moderator review queue", config: {}, updatedAt: (/* @__PURE__ */ new Date()).toISOString() }]
+]);
+var FEATURE_FLAG_KEY_REGEX = /^[a-z0-9_]{2,64}$/;
+app.get("/api/feature-flags", rateLimitGuard(120, 6e4), async (_req, res) => {
+  try {
+    if (isSupabaseServerConfigured) {
+      try {
+        const { data, error } = await supabaseServer.from(SUPABASE_TABLES.APP_FEATURE_FLAGS).select("key, enabled, description, config, updated_at").order("key", { ascending: true });
+        if (!error && Array.isArray(data) && data.length > 0) {
+          const flags = data.map((row) => ({
+            key: String(row.key),
+            enabled: Boolean(row.enabled),
+            description: row.description ?? null,
+            config: row.config && typeof row.config === "object" ? row.config : {},
+            updatedAt: row.updated_at || (/* @__PURE__ */ new Date()).toISOString()
+          }));
+          return res.json({ flags });
+        }
+      } catch (err) {
+        console.warn("Supabase fetch feature flags notice:", err);
+      }
+    }
+    return res.json({ flags: Array.from(memoryFeatureFlags.values()) });
+  } catch (err) {
+    return res.status(500).json({ error: err.message || "Failed to load feature flags" });
+  }
+});
+app.put(
+  "/api/admin/feature-flags/:key",
+  rateLimitGuard(30, 6e4),
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const cleanKey = String(req.params.key || "").trim().toLowerCase();
+      if (!FEATURE_FLAG_KEY_REGEX.test(cleanKey)) {
+        return res.status(400).json({ error: "Invalid feature flag key format (use 2-64 lowercase letters, digits, or underscores)." });
+      }
+      if (typeof req.body?.enabled !== "boolean") {
+        return res.status(400).json({ error: 'Field "enabled" must be a boolean.' });
+      }
+      const description = typeof req.body.description === "string" ? req.body.description.trim().slice(0, 280) : memoryFeatureFlags.get(cleanKey)?.description ?? null;
+      const config3 = req.body.config && typeof req.body.config === "object" && !Array.isArray(req.body.config) ? req.body.config : memoryFeatureFlags.get(cleanKey)?.config ?? {};
+      const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+      if (isSupabaseServerConfigured) {
+        const { error } = await supabaseServer.from(SUPABASE_TABLES.APP_FEATURE_FLAGS).upsert(
+          {
+            key: cleanKey,
+            enabled: req.body.enabled,
+            description,
+            config: config3,
+            updated_by: req.dbUser?.id || null,
+            updated_at: nowIso
+          },
+          { onConflict: "key" }
+        );
+        if (error) {
+          console.warn("Supabase upsert feature flag notice:", error.message);
+        }
+      }
+      const flag = {
+        key: cleanKey,
+        enabled: req.body.enabled,
+        description,
+        config: config3,
+        updatedAt: nowIso
+      };
+      memoryFeatureFlags.set(cleanKey, flag);
+      return res.json({ success: true, flag });
+    } catch (err) {
+      return res.status(500).json({ error: err.message || "Failed to update feature flag" });
+    }
+  }
+);
+var memoryFeedRankingWeights = {
+  batchRelevanceWeight: 28,
+  followedAlumniWeight: 20,
+  followedPageWeight: 22,
+  engagementLikeWeight: 1.5,
+  engagementCommentWeight: 3,
+  engagementCap: 42,
+  recencyMaxBoost: 48,
+  recencyDecayPerHour: 0.5,
+  featuredBoost: 18,
+  updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+};
+app.get("/api/feed/ranking-weights", rateLimitGuard(120, 6e4), async (_req, res) => {
+  try {
+    if (isSupabaseServerConfigured) {
+      try {
+        const { data, error } = await supabaseServer.from(SUPABASE_TABLES.FEED_RANKING_WEIGHTS).select("*").eq("id", 1).maybeSingle();
+        if (!error && data) {
+          return res.json({
+            weights: {
+              batchRelevanceWeight: Number(data.batch_relevance_weight ?? 28),
+              followedAlumniWeight: Number(data.followed_alumni_weight ?? 20),
+              followedPageWeight: Number(data.followed_page_weight ?? 22),
+              engagementLikeWeight: Number(data.engagement_like_weight ?? 1.5),
+              engagementCommentWeight: Number(data.engagement_comment_weight ?? 3),
+              engagementCap: Number(data.engagement_cap ?? 42),
+              recencyMaxBoost: Number(data.recency_max_boost ?? 48),
+              recencyDecayPerHour: Number(data.recency_decay_per_hour ?? 0.5),
+              featuredBoost: Number(data.featured_boost ?? 18),
+              updatedAt: data.updated_at || (/* @__PURE__ */ new Date()).toISOString()
+            }
+          });
+        }
+      } catch (err) {
+        console.warn("Supabase fetch feed ranking weights notice:", err);
+      }
+    }
+    return res.json({ weights: memoryFeedRankingWeights });
+  } catch (err) {
+    return res.status(500).json({ error: err.message || "Failed to load feed ranking weights" });
+  }
+});
+app.put(
+  "/api/admin/feed/ranking-weights",
+  rateLimitGuard(30, 6e4),
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const clampNum = (val, min, max, fallback) => {
+        const n = Number(val);
+        if (!Number.isFinite(n)) return fallback;
+        return Math.min(max, Math.max(min, Math.round(n * 1e3) / 1e3));
+      };
+      const next = {
+        batchRelevanceWeight: clampNum(req.body?.batchRelevanceWeight, 0, 200, memoryFeedRankingWeights.batchRelevanceWeight),
+        followedAlumniWeight: clampNum(req.body?.followedAlumniWeight, 0, 200, memoryFeedRankingWeights.followedAlumniWeight),
+        followedPageWeight: clampNum(req.body?.followedPageWeight, 0, 200, memoryFeedRankingWeights.followedPageWeight),
+        engagementLikeWeight: clampNum(req.body?.engagementLikeWeight, 0, 50, memoryFeedRankingWeights.engagementLikeWeight),
+        engagementCommentWeight: clampNum(req.body?.engagementCommentWeight, 0, 50, memoryFeedRankingWeights.engagementCommentWeight),
+        engagementCap: clampNum(req.body?.engagementCap, 0, 300, memoryFeedRankingWeights.engagementCap),
+        recencyMaxBoost: clampNum(req.body?.recencyMaxBoost, 0, 300, memoryFeedRankingWeights.recencyMaxBoost),
+        recencyDecayPerHour: clampNum(req.body?.recencyDecayPerHour, 0.01, 20, memoryFeedRankingWeights.recencyDecayPerHour),
+        featuredBoost: clampNum(req.body?.featuredBoost, 0, 200, memoryFeedRankingWeights.featuredBoost),
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+      };
+      if (isSupabaseServerConfigured) {
+        const { error } = await supabaseServer.from(SUPABASE_TABLES.FEED_RANKING_WEIGHTS).upsert(
+          {
+            id: 1,
+            batch_relevance_weight: next.batchRelevanceWeight,
+            followed_alumni_weight: next.followedAlumniWeight,
+            followed_page_weight: next.followedPageWeight,
+            engagement_like_weight: next.engagementLikeWeight,
+            engagement_comment_weight: next.engagementCommentWeight,
+            engagement_cap: next.engagementCap,
+            recency_max_boost: next.recencyMaxBoost,
+            recency_decay_per_hour: next.recencyDecayPerHour,
+            featured_boost: next.featuredBoost,
+            updated_by: req.dbUser?.id || null,
+            updated_at: next.updatedAt
+          },
+          { onConflict: "id" }
+        );
+        if (error) {
+          console.warn("Supabase upsert feed ranking weights notice:", error.message);
+        }
+      }
+      Object.assign(memoryFeedRankingWeights, next);
+      return res.json({ success: true, weights: next });
+    } catch (err) {
+      return res.status(500).json({ error: err.message || "Failed to update ranking weights" });
+    }
+  }
+);
+var memoryContentReports = [];
+var VALID_REPORT_TARGET_TYPES = /* @__PURE__ */ new Set(["post", "comment", "profile"]);
+var VALID_REPORT_STATUSES = /* @__PURE__ */ new Set(["open", "in_review", "resolved_removed", "resolved_dismissed"]);
+app.post(
+  "/api/community/reports",
+  rateLimitGuard(20, 6e4),
+  requireAuth,
+  async (req, res) => {
+    try {
+      const reporterId = Number(req.dbUser?.id || 0);
+      if (!reporterId) {
+        return res.status(401).json({ error: "Authenticated alumni profile required to submit a report." });
+      }
+      const targetType = String(req.body?.targetType || "").trim().toLowerCase();
+      const targetId = Number(req.body?.targetId);
+      const targetAuthorId = req.body?.targetAuthorId ? Number(req.body.targetAuthorId) : null;
+      const reason = String(req.body?.reason || "").trim().slice(0, 140);
+      const details = typeof req.body?.details === "string" ? req.body.details.trim().slice(0, 1e3) : null;
+      if (!VALID_REPORT_TARGET_TYPES.has(targetType)) {
+        return res.status(400).json({ error: "Invalid report target type." });
+      }
+      if (!Number.isInteger(targetId) || targetId <= 0) {
+        return res.status(400).json({ error: "Invalid report target ID." });
+      }
+      if (!reason || reason.length < 3) {
+        return res.status(400).json({ error: "Please select a valid report reason." });
+      }
+      const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+      if (isSupabaseServerConfigured) {
+        const { data, error } = await supabaseServer.from(SUPABASE_TABLES.CONTENT_REPORTS).insert({
+          reporter_id: reporterId,
+          target_type: targetType,
+          target_id: targetId,
+          target_author_id: targetAuthorId && targetAuthorId > 0 ? targetAuthorId : null,
+          reason,
+          details: details || null,
+          status: "open"
+        }).select("*").single();
+        if (!error && data) {
+          return res.status(201).json({ success: true, report: data, source: "supabase" });
+        }
+        if (error && (error.code === "23505" || String(error.message || "").includes("uq_content_reports_open"))) {
+          return res.status(200).json({
+            success: true,
+            duplicate: true,
+            message: "You already have an open report for this item.",
+            source: "supabase"
+          });
+        }
+      }
+      const existing = memoryContentReports.find(
+        (r) => r.reporter_id === reporterId && r.target_type === targetType && r.target_id === targetId && r.status === "open"
+      );
+      if (existing) {
+        return res.status(200).json({
+          success: true,
+          duplicate: true,
+          report: existing,
+          source: "memory"
+        });
+      }
+      const fallbackReport = {
+        id: Date.now(),
+        reporter_id: reporterId,
+        target_type: targetType,
+        target_id: targetId,
+        target_author_id: targetAuthorId && targetAuthorId > 0 ? targetAuthorId : null,
+        reason,
+        details: details || null,
+        status: "open",
+        reviewed_by: null,
+        resolution_note: null,
+        created_at: nowIso,
+        reviewed_at: null
+      };
+      memoryContentReports.unshift(fallbackReport);
+      return res.status(201).json({ success: true, report: fallbackReport, source: "memory" });
+    } catch (err) {
+      return res.status(500).json({ error: err.message || "Failed to submit content report" });
+    }
+  }
+);
+app.get(
+  "/api/admin/moderation/reports",
+  rateLimitGuard(60, 6e4),
+  requireModerator,
+  async (req, res) => {
+    try {
+      const statusFilter = String(req.query.status || "all").trim().toLowerCase();
+      const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 100);
+      if (isSupabaseServerConfigured) {
+        let query = supabaseServer.from(SUPABASE_TABLES.CONTENT_REPORTS).select("*").order("created_at", { ascending: false }).limit(limit);
+        if (statusFilter !== "all" && VALID_REPORT_STATUSES.has(statusFilter)) {
+          query = query.eq("status", statusFilter);
+        }
+        const { data, error } = await query;
+        if (!error && Array.isArray(data)) {
+          const profileIds = Array.from(
+            new Set(
+              data.flatMap((r) => [r.reporter_id, r.target_author_id, r.reviewed_by]).map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0)
+            )
+          );
+          const profileMap = /* @__PURE__ */ new Map();
+          if (profileIds.length > 0) {
+            const { data: profiles } = await supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).select("id, full_name, batch_year, avatar_url").in("id", profileIds);
+            (profiles || []).forEach(
+              (p) => profileMap.set(Number(p.id), {
+                full_name: p.full_name || "SZMC Alumnus",
+                batch_year: p.batch_year ? Number(p.batch_year) : null,
+                avatar_url: p.avatar_url || null
+              })
+            );
+          }
+          const enriched = data.map((r) => ({
+            ...r,
+            reporter: profileMap.get(Number(r.reporter_id)) || null,
+            target_author: r.target_author_id ? profileMap.get(Number(r.target_author_id)) || null : null,
+            reviewer: r.reviewed_by ? profileMap.get(Number(r.reviewed_by)) || null : null
+          }));
+          return res.json({ reports: enriched, source: "supabase" });
+        }
+      }
+      const filtered = statusFilter !== "all" && VALID_REPORT_STATUSES.has(statusFilter) ? memoryContentReports.filter((r) => r.status === statusFilter) : memoryContentReports;
+      return res.json({ reports: filtered.slice(0, limit), source: "memory" });
+    } catch (err) {
+      return res.status(500).json({ error: err.message || "Failed to fetch moderation reports" });
+    }
+  }
+);
+app.put(
+  "/api/admin/moderation/reports/:id",
+  rateLimitGuard(30, 6e4),
+  requireModerator,
+  async (req, res) => {
+    try {
+      const reportId = Number(req.params.id);
+      if (!Number.isInteger(reportId) || reportId <= 0) {
+        return res.status(400).json({ error: "Invalid report ID." });
+      }
+      const nextStatus = String(req.body?.status || "").trim().toLowerCase();
+      if (!VALID_REPORT_STATUSES.has(nextStatus) || nextStatus === "open") {
+        return res.status(400).json({
+          error: "Status must be one of: in_review, resolved_removed, resolved_dismissed."
+        });
+      }
+      const resolutionNote = typeof req.body?.resolutionNote === "string" ? req.body.resolutionNote.trim().slice(0, 600) : null;
+      const removeContent = Boolean(req.body?.removeContent) || nextStatus === "resolved_removed";
+      const reviewerId = Number(req.dbUser?.id || 0) || null;
+      const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+      if (isSupabaseServerConfigured) {
+        const { data: updated, error } = await supabaseServer.from(SUPABASE_TABLES.CONTENT_REPORTS).update({
+          status: nextStatus,
+          reviewed_by: reviewerId,
+          resolution_note: resolutionNote,
+          reviewed_at: nowIso
+        }).eq("id", reportId).select("*").maybeSingle();
+        if (!error && updated) {
+          if (removeContent) {
+            if (updated.target_type === "post") {
+              await supabaseServer.from(SUPABASE_TABLES.POSTS).update({ is_deleted: true }).eq("id", updated.target_id);
+            } else if (updated.target_type === "comment") {
+              await supabaseServer.from(SUPABASE_TABLES.POST_COMMENTS).update({ is_deleted: true }).eq("id", updated.target_id);
+            }
+          }
+          if (updated.reporter_id && updated.reporter_id !== reviewerId && nextStatus.startsWith("resolved_")) {
+            try {
+              await supabaseServer.from(SUPABASE_TABLES.NOTIFICATIONS).insert({
+                recipient_id: updated.reporter_id,
+                actor_id: reviewerId,
+                type: "moderation_action",
+                title: "Report Reviewed",
+                message: nextStatus === "resolved_removed" ? "Thank you for helping keep The Quad safe. Our moderation team reviewed your report and took action." : "Our moderation team reviewed your report and closed it after review.",
+                target_route: "feed",
+                unread: true
+              });
+            } catch {
+            }
+          }
+          return res.json({ success: true, report: updated, contentRemoved: removeContent, source: "supabase" });
+        }
+      }
+      const idx = memoryContentReports.findIndex((r) => r.id === reportId);
+      if (idx === -1) {
+        return res.status(404).json({ error: "Report not found." });
+      }
+      memoryContentReports[idx] = {
+        ...memoryContentReports[idx],
+        status: nextStatus,
+        reviewed_by: reviewerId,
+        resolution_note: resolutionNote,
+        reviewed_at: nowIso
+      };
+      return res.json({
+        success: true,
+        report: memoryContentReports[idx],
+        contentRemoved: removeContent,
+        source: "memory"
+      });
+    } catch (err) {
+      return res.status(500).json({ error: err.message || "Failed to update moderation report" });
+    }
+  }
+);
+var memoryBatchModerators = [];
+var memoryOfficialPageRoles = [];
+var memoryOfficialPages = [
+  { id: 1, slug: "szmc-official", name: "SZMC Official", tagline: "Shaheed Ziaur Rahman Medical College Institutional Desk", description: "Official institutional announcements, academic milestones, and campus updates from SZMC Bogura.", category: "Announcement", is_verified: true, is_active: true, followers_count: 0, posts_count: 0 },
+  { id: 2, slug: "alumni-association", name: "Alumni Association", tagline: "SZMC Alumni Association Secretariat", description: "Official updates, annual general meetings, membership initiatives, and global alumni news.", category: "Announcement", is_verified: true, is_active: true, followers_count: 0, posts_count: 0 },
+  { id: 3, slug: "executive-committee", name: "Executive Committee", tagline: "Governance & Elected Leadership Updates", description: "Resolutions, policy briefings, and executive committee notices for all MBBS batches.", category: "Announcement", is_verified: true, is_active: true, followers_count: 0, posts_count: 0 },
+  { id: 4, slug: "blood-donation-network", name: "Blood Donation Network", tagline: "Emergency Blood Lifeline & Donor Coordination", description: "Urgent blood donor mobilization, verified emergency requests, and donor drives.", category: "Blood Request", is_verified: true, is_active: true, followers_count: 0, posts_count: 0 },
+  { id: 5, slug: "career-mentorship", name: "Career & Mentorship", tagline: "Residency, Fellowship & Clinical Career Guidance", description: "FCPS, MD/MS, USMLE, PLAB/MRCP mentorship, medical fellowships, and clinical job opportunities.", category: "Career & Jobs", is_verified: true, is_active: true, followers_count: 0, posts_count: 0 },
+  { id: 6, slug: "alumni-events", name: "Alumni Events", tagline: "Reunions, Scientific Seminars & Batch Gatherings", description: "Official reunion calendars, Silver Jubilee celebrations, CME conferences, and chapter meetups.", category: "Events & Reunion", is_verified: true, is_active: true, followers_count: 0, posts_count: 0 }
+];
+app.get(
+  "/api/admin/community/overview",
+  rateLimitGuard(60, 6e4),
+  requireModerator,
+  async (_req, res) => {
+    try {
+      let openReportsCount = memoryContentReports.filter((r) => r.status === "open" || r.status === "in_review").length;
+      let totalReportsCount = memoryContentReports.length;
+      let batchModerators = [...memoryBatchModerators];
+      let officialPages = memoryOfficialPages.map((p) => ({
+        ...p,
+        roles: memoryOfficialPageRoles.filter((r) => r.page_id === p.id)
+      }));
+      let featureFlags = Array.from(memoryFeatureFlags.values());
+      let rankingWeights = { ...memoryFeedRankingWeights };
+      if (isSupabaseServerConfigured) {
+        const [reportsRes, batchModsRes, pagesRes, pageRolesRes, flagsRes, weightsRes] = await Promise.all([
+          supabaseServer.from(SUPABASE_TABLES.CONTENT_REPORTS).select("id, status"),
+          supabaseServer.from(SUPABASE_TABLES.BATCH_LOUNGE_MODERATORS).select("id, batch_year, profile_id, role, created_at").order("batch_year", { ascending: true }),
+          supabaseServer.from(SUPABASE_TABLES.OFFICIAL_PAGES).select("id, slug, name, tagline, description, category, is_verified, is_active, followers_count, posts_count").order("id", { ascending: true }),
+          supabaseServer.from(SUPABASE_TABLES.OFFICIAL_PAGE_ROLES).select("id, page_id, profile_id, role, created_at").order("created_at", { ascending: false }),
+          supabaseServer.from(SUPABASE_TABLES.APP_FEATURE_FLAGS).select("*").order("key", { ascending: true }),
+          supabaseServer.from(SUPABASE_TABLES.FEED_RANKING_WEIGHTS).select("*").eq("id", 1).maybeSingle()
+        ]);
+        if (!reportsRes.error && Array.isArray(reportsRes.data)) {
+          totalReportsCount = reportsRes.data.length;
+          openReportsCount = reportsRes.data.filter(
+            (r) => r.status === "open" || r.status === "in_review"
+          ).length;
+        }
+        const profileIds = /* @__PURE__ */ new Set();
+        if (!batchModsRes.error && Array.isArray(batchModsRes.data)) {
+          batchModsRes.data.forEach((m) => {
+            if (m.profile_id) profileIds.add(Number(m.profile_id));
+          });
+        }
+        if (!pageRolesRes.error && Array.isArray(pageRolesRes.data)) {
+          pageRolesRes.data.forEach((r) => {
+            if (r.profile_id) profileIds.add(Number(r.profile_id));
+          });
+        }
+        const profileMap = /* @__PURE__ */ new Map();
+        if (profileIds.size > 0) {
+          const { data: profiles } = await supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).select("id, full_name, email, batch_year, avatar_url").in("id", Array.from(profileIds));
+          (profiles || []).forEach((p) => profileMap.set(Number(p.id), p));
+        }
+        if (!batchModsRes.error && Array.isArray(batchModsRes.data)) {
+          batchModerators = batchModsRes.data.map((m) => ({
+            ...m,
+            profile: profileMap.get(Number(m.profile_id)) || null
+          }));
+        }
+        const rolesByPage = /* @__PURE__ */ new Map();
+        if (!pageRolesRes.error && Array.isArray(pageRolesRes.data)) {
+          for (const r of pageRolesRes.data) {
+            const pid = Number(r.page_id);
+            const list = rolesByPage.get(pid) || [];
+            list.push({ ...r, profile: profileMap.get(Number(r.profile_id)) || null });
+            rolesByPage.set(pid, list);
+          }
+        }
+        if (!pagesRes.error && Array.isArray(pagesRes.data) && pagesRes.data.length > 0) {
+          officialPages = pagesRes.data.map((p) => ({
+            ...p,
+            roles: rolesByPage.get(Number(p.id)) || []
+          }));
+        }
+        if (!flagsRes.error && Array.isArray(flagsRes.data) && flagsRes.data.length > 0) {
+          featureFlags = flagsRes.data.map((f) => ({
+            key: f.key,
+            enabled: Boolean(f.enabled),
+            description: f.description || null,
+            config: f.config || {},
+            updatedAt: f.updated_at || (/* @__PURE__ */ new Date()).toISOString()
+          }));
+        }
+        if (!weightsRes.error && weightsRes.data) {
+          const d = weightsRes.data;
+          rankingWeights = {
+            batchRelevanceWeight: Number(d.batch_relevance_weight ?? 28),
+            followedAlumniWeight: Number(d.followed_alumni_weight ?? 20),
+            followedPageWeight: Number(d.followed_page_weight ?? 22),
+            engagementLikeWeight: Number(d.engagement_like_weight ?? 1.5),
+            engagementCommentWeight: Number(d.engagement_comment_weight ?? 3),
+            engagementCap: Number(d.engagement_cap ?? 42),
+            recencyMaxBoost: Number(d.recency_max_boost ?? 48),
+            recencyDecayPerHour: Number(d.recency_decay_per_hour ?? 0.5),
+            featuredBoost: Number(d.featured_boost ?? 18),
+            updatedAt: d.updated_at || (/* @__PURE__ */ new Date()).toISOString()
+          };
+        }
+      }
+      return res.json({
+        metrics: {
+          openReportsCount,
+          totalReportsCount,
+          batchLoungesCount: 35,
+          batchModeratorsCount: batchModerators.length,
+          officialPagesCount: officialPages.length,
+          activeFlagsCount: featureFlags.filter((f) => f.enabled).length,
+          totalFlagsCount: featureFlags.length
+        },
+        batchModerators,
+        officialPages,
+        featureFlags,
+        rankingWeights
+      });
+    } catch (err) {
+      return res.status(500).json({ error: err.message || "Failed to load community overview" });
+    }
+  }
+);
+app.get(
+  "/api/admin/community/alumni-search",
+  rateLimitGuard(60, 6e4),
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const q = String(req.query.q || "").trim().replace(/[%_,]/g, "");
+      if (q.length < 2) {
+        return res.json({ alumni: [] });
+      }
+      if (!isSupabaseServerConfigured) {
+        return res.json({ alumni: [] });
+      }
+      const { data, error } = await supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).select("id, full_name, email, batch_year, avatar_url, role").or(`full_name.ilike.%${q}%,email.ilike.%${q}%`).limit(10);
+      if (error) {
+        return res.status(500).json({ error: error.message || "Search failed" });
+      }
+      return res.json({ alumni: data || [] });
+    } catch (err) {
+      return res.status(500).json({ error: err.message || "Alumni search failed" });
+    }
+  }
+);
+app.post(
+  "/api/admin/community/batch-moderators",
+  rateLimitGuard(30, 6e4),
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const batchYear = Number(req.body?.batchYear);
+      const profileId = Number(req.body?.profileId);
+      const role = String(req.body?.role || "moderator").trim().toLowerCase();
+      if (!Number.isInteger(batchYear) || batchYear < 1 || batchYear > 35) {
+        return res.status(400).json({ error: "Batch year must be an integer between 1 and 35." });
+      }
+      if (!Number.isInteger(profileId) || profileId <= 0) {
+        return res.status(400).json({ error: "A valid alumni profile ID is required." });
+      }
+      if (role !== "moderator" && role !== "coordinator") {
+        return res.status(400).json({ error: 'Role must be "moderator" or "coordinator".' });
+      }
+      const assignedBy = Number(req.dbUser?.id || 0) || null;
+      let profileMeta = null;
+      if (isSupabaseServerConfigured) {
+        const { data: prof } = await supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).select("id, full_name, email, batch_year, avatar_url").eq("id", profileId).maybeSingle();
+        profileMeta = prof || null;
+        const { data, error } = await supabaseServer.from(SUPABASE_TABLES.BATCH_LOUNGE_MODERATORS).upsert(
+          {
+            batch_year: batchYear,
+            profile_id: profileId,
+            role,
+            assigned_by: assignedBy
+          },
+          { onConflict: "batch_year,profile_id" }
+        ).select("*").single();
+        if (!error && data) {
+          return res.status(201).json({
+            success: true,
+            assignment: { ...data, profile: profileMeta },
+            source: "supabase"
+          });
+        }
+      }
+      const existingIdx = memoryBatchModerators.findIndex(
+        (m) => m.batch_year === batchYear && m.profile_id === profileId
+      );
+      const entry = {
+        id: existingIdx >= 0 ? memoryBatchModerators[existingIdx].id : Date.now(),
+        batch_year: batchYear,
+        profile_id: profileId,
+        role,
+        created_at: (/* @__PURE__ */ new Date()).toISOString(),
+        profile: profileMeta || { id: profileId, full_name: `Alumnus #${profileId}`, batch_year: batchYear }
+      };
+      if (existingIdx >= 0) memoryBatchModerators[existingIdx] = entry;
+      else memoryBatchModerators.unshift(entry);
+      return res.status(201).json({ success: true, assignment: entry, source: "memory" });
+    } catch (err) {
+      return res.status(500).json({ error: err.message || "Failed to assign batch moderator" });
+    }
+  }
+);
+app.delete(
+  "/api/admin/community/batch-moderators/:batchYear/:profileId",
+  rateLimitGuard(30, 6e4),
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const batchYear = Number(req.params.batchYear);
+      const profileId = Number(req.params.profileId);
+      if (!Number.isInteger(batchYear) || !Number.isInteger(profileId)) {
+        return res.status(400).json({ error: "Invalid batch year or profile ID." });
+      }
+      if (isSupabaseServerConfigured) {
+        const { error } = await supabaseServer.from(SUPABASE_TABLES.BATCH_LOUNGE_MODERATORS).delete().eq("batch_year", batchYear).eq("profile_id", profileId);
+        if (!error) {
+          return res.json({ success: true, source: "supabase" });
+        }
+      }
+      const idx = memoryBatchModerators.findIndex(
+        (m) => m.batch_year === batchYear && m.profile_id === profileId
+      );
+      if (idx >= 0) memoryBatchModerators.splice(idx, 1);
+      return res.json({ success: true, source: "memory" });
+    } catch (err) {
+      return res.status(500).json({ error: err.message || "Failed to remove batch moderator" });
+    }
+  }
+);
+app.post(
+  "/api/admin/community/official-pages/:pageId/roles",
+  rateLimitGuard(30, 6e4),
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const pageId = Number(req.params.pageId);
+      const profileId = Number(req.body?.profileId);
+      const role = String(req.body?.role || "editor").trim().toLowerCase();
+      if (!Number.isInteger(pageId) || pageId <= 0 || !Number.isInteger(profileId) || profileId <= 0) {
+        return res.status(400).json({ error: "Valid page ID and alumni profile ID are required." });
+      }
+      if (role !== "admin" && role !== "editor") {
+        return res.status(400).json({ error: 'Role must be "admin" or "editor".' });
+      }
+      const assignedBy = Number(req.dbUser?.id || 0) || null;
+      let profileMeta = null;
+      if (isSupabaseServerConfigured) {
+        const { data: prof } = await supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).select("id, full_name, email, batch_year, avatar_url").eq("id", profileId).maybeSingle();
+        profileMeta = prof || null;
+        const { data, error } = await supabaseServer.from(SUPABASE_TABLES.OFFICIAL_PAGE_ROLES).upsert(
+          {
+            page_id: pageId,
+            profile_id: profileId,
+            role,
+            assigned_by: assignedBy
+          },
+          { onConflict: "page_id,profile_id" }
+        ).select("*").single();
+        if (!error && data) {
+          return res.status(201).json({
+            success: true,
+            assignment: { ...data, profile: profileMeta },
+            source: "supabase"
+          });
+        }
+      }
+      const existingIdx = memoryOfficialPageRoles.findIndex(
+        (r) => r.page_id === pageId && r.profile_id === profileId
+      );
+      const entry = {
+        id: existingIdx >= 0 ? memoryOfficialPageRoles[existingIdx].id : Date.now(),
+        page_id: pageId,
+        profile_id: profileId,
+        role,
+        created_at: (/* @__PURE__ */ new Date()).toISOString(),
+        profile: profileMeta || { id: profileId, full_name: `Alumnus #${profileId}` }
+      };
+      if (existingIdx >= 0) memoryOfficialPageRoles[existingIdx] = entry;
+      else memoryOfficialPageRoles.unshift(entry);
+      return res.status(201).json({ success: true, assignment: entry, source: "memory" });
+    } catch (err) {
+      return res.status(500).json({ error: err.message || "Failed to assign official page role" });
+    }
+  }
+);
+app.delete(
+  "/api/admin/community/official-pages/:pageId/roles/:profileId",
+  rateLimitGuard(30, 6e4),
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const pageId = Number(req.params.pageId);
+      const profileId = Number(req.params.profileId);
+      if (!Number.isInteger(pageId) || !Number.isInteger(profileId)) {
+        return res.status(400).json({ error: "Invalid page ID or profile ID." });
+      }
+      if (isSupabaseServerConfigured) {
+        const { error } = await supabaseServer.from(SUPABASE_TABLES.OFFICIAL_PAGE_ROLES).delete().eq("page_id", pageId).eq("profile_id", profileId);
+        if (!error) {
+          return res.json({ success: true, source: "supabase" });
+        }
+      }
+      const idx = memoryOfficialPageRoles.findIndex(
+        (r) => r.page_id === pageId && r.profile_id === profileId
+      );
+      if (idx >= 0) memoryOfficialPageRoles.splice(idx, 1);
+      return res.json({ success: true, source: "memory" });
+    } catch (err) {
+      return res.status(500).json({ error: err.message || "Failed to remove official page role" });
+    }
+  }
+);
+app.put(
+  "/api/admin/community/official-pages/:pageId",
+  rateLimitGuard(30, 6e4),
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const pageId = Number(req.params.pageId);
+      if (!Number.isInteger(pageId) || pageId <= 0) {
+        return res.status(400).json({ error: "Invalid official page ID." });
+      }
+      const patch = { updated_at: (/* @__PURE__ */ new Date()).toISOString() };
+      if (typeof req.body?.isVerified === "boolean") patch.is_verified = req.body.isVerified;
+      if (typeof req.body?.isActive === "boolean") patch.is_active = req.body.isActive;
+      if (typeof req.body?.description === "string") patch.description = req.body.description.trim().slice(0, 600);
+      if (typeof req.body?.tagline === "string") patch.tagline = req.body.tagline.trim().slice(0, 180);
+      if (isSupabaseServerConfigured) {
+        const { data, error } = await supabaseServer.from(SUPABASE_TABLES.OFFICIAL_PAGES).update(patch).eq("id", pageId).select("*").maybeSingle();
+        if (!error && data) {
+          return res.json({ success: true, page: data, source: "supabase" });
+        }
+      }
+      const page = memoryOfficialPages.find((p) => p.id === pageId);
+      if (!page) return res.status(404).json({ error: "Official page not found." });
+      if (typeof patch.is_verified === "boolean") page.is_verified = patch.is_verified;
+      if (typeof patch.is_active === "boolean") page.is_active = patch.is_active;
+      if (typeof patch.description === "string") page.description = patch.description;
+      if (typeof patch.tagline === "string") page.tagline = patch.tagline;
+      return res.json({ success: true, page, source: "memory" });
+    } catch (err) {
+      return res.status(500).json({ error: err.message || "Failed to update official page" });
+    }
+  }
+);
 app.get(
   "/api/alumni",
   rateLimitGuard(90, 6e4),
   optionalAuth,
   async (req, res) => {
     try {
-      const isAdminView = req.query.adminView === "true" && req.dbUser?.role === "admin";
+      const isAdminView = req.query.adminView === "true" && (req.dbUser?.role === "admin" || req.dbUser?.role === "super_admin");
       const result = await queryPaginatedAlumniProfiles({
         page: Number(req.query.page) || 1,
         limit: Number(req.query.limit) || 25,
@@ -3698,12 +6130,13 @@ app.get(
 app.post(
   "/api/alumni/register",
   rateLimitGuard(20, 6e4),
-  optionalAuth,
+  requireAuth,
   async (req, res) => {
     try {
       const user = req.user;
+      const isAdminCaller = req.dbUser?.role === "admin" || req.dbUser?.role === "super_admin";
       const created = await createOrRegisterAlumniProfile({
-        userUid: user?.uid || user?.id || req.body.userUid,
+        userUid: isAdminCaller ? req.body.userUid || user?.uid || user?.id : user?.uid || user?.id,
         fullName: req.body.fullName,
         avatarUrl: req.body.avatarUrl,
         batchYear: Number(req.body.batchYear) || 68,
@@ -3721,7 +6154,7 @@ app.post(
         country: req.body.country,
         phone: req.body.phone,
         whatsapp: req.body.whatsapp,
-        email: req.body.email,
+        email: isAdminCaller ? req.body.email : user?.email || req.dbUser?.email || req.body.email,
         bloodGroup: req.body.bloodGroup,
         isRegisteredDonor: Boolean(req.body.isRegisteredDonor)
       });
@@ -3735,23 +6168,24 @@ app.post(
 app.post(
   "/api/profile/update",
   rateLimitGuard(40, 6e4),
-  optionalAuth,
+  requireAuth,
   async (req, res) => {
     try {
       const user = req.user;
-      const callerEmail = user?.email || req.dbUser?.email || req.body.email;
-      const callerAuthId = user?.uid || user?.id || req.dbUser?.auth_user_id || req.body.authUserId;
-      let targetProfileId = Number(req.dbUser?.id || req.body.id);
-      if (!targetProfileId && callerEmail) {
+      const isAdminCaller = req.dbUser?.role === "admin" || req.dbUser?.role === "super_admin";
+      const callerEmail = user?.email || req.dbUser?.email;
+      let targetProfileId = Number(req.dbUser?.id || 0);
+      if (isAdminCaller && req.body.id && Number(req.body.id) > 0) {
+        targetProfileId = Number(req.body.id);
+      } else if (!targetProfileId && callerEmail) {
         const found = await findAlumniByCredential(callerEmail);
-        if (found) targetProfileId = found.id;
-      }
-      if (!targetProfileId && req.body.phone) {
-        const found = await findAlumniByCredential(req.body.phone);
         if (found) targetProfileId = found.id;
       }
       if (!targetProfileId) {
         return res.status(400).json({ error: "Could not identify target profile to update." });
+      }
+      if (!isAdminCaller && req.body.id && Number(req.body.id) !== targetProfileId) {
+        return res.status(403).json({ error: "Forbidden: You can only update your own profile." });
       }
       const updates = {};
       if (req.body.fullName) updates.fullName = req.body.fullName;
@@ -3809,6 +6243,11 @@ app.patch(
         return res.status(400).json({ error: "Invalid profile ID" });
       }
       const actor = resolveActor(req);
+      if ((req.body.role === "admin" || req.body.role === "super_admin") && actor.role !== "super_admin") {
+        return res.status(403).json({
+          error: "Forbidden: Only Super Administrators can assign admin or super_admin roles."
+        });
+      }
       const updated = await adminUpdateAlumniGovernance({
         profileId,
         verificationStatus: req.body.verificationStatus,
@@ -3831,7 +6270,7 @@ app.patch(
 app.get(
   "/api/admin/verifications",
   rateLimitGuard(60, 6e4),
-  requireAdmin,
+  requireModerator,
   async (req, res) => {
     try {
       const status = req.query.status || "all";
@@ -3846,7 +6285,7 @@ app.get(
 app.post(
   "/api/admin/verifications/:id/review",
   rateLimitGuard(40, 6e4),
-  requireAdmin,
+  requireModerator,
   async (req, res) => {
     try {
       const submissionId = Number(req.params.id);
@@ -3870,7 +6309,7 @@ app.post(
 app.get(
   "/api/admin/blood-requests",
   rateLimitGuard(60, 6e4),
-  requireAdmin,
+  requireModerator,
   async (_req, res) => {
     try {
       const requests = await getBloodEmergencyList();
@@ -3884,7 +6323,7 @@ app.get(
 app.patch(
   "/api/admin/blood-requests/:id",
   rateLimitGuard(40, 6e4),
-  requireAdmin,
+  requireModerator,
   async (req, res) => {
     try {
       const id = Number(req.params.id);
@@ -3908,7 +6347,7 @@ app.patch(
 app.get(
   "/api/admin/notices",
   rateLimitGuard(60, 6e4),
-  requireAdmin,
+  requireModerator,
   async (_req, res) => {
     try {
       const notices = await getOfficialNoticesList();
@@ -3922,7 +6361,7 @@ app.get(
 app.post(
   "/api/admin/notices",
   rateLimitGuard(30, 6e4),
-  requireAdmin,
+  requireModerator,
   async (req, res) => {
     try {
       const actor = resolveActor(req);
@@ -3970,7 +6409,7 @@ app.patch(
 app.post(
   "/api/admin/bulk-cohort",
   rateLimitGuard(10, 6e4),
-  requireAdmin,
+  requireSuperAdmin,
   async (req, res) => {
     try {
       const actor = resolveActor(req);
@@ -3991,7 +6430,7 @@ app.post(
 app.get(
   "/api/admin/export-full-backup",
   rateLimitGuard(15, 6e4),
-  requireAdmin,
+  requireSuperAdmin,
   async (_req, res) => {
     try {
       const [overview, directory, verifications, blood, notices] = await Promise.all([
@@ -4023,42 +6462,46 @@ app.get([
   "/dist.zip",
   "/api/download-dist",
   "/download-dist"
-], (_req, res) => {
+], requireSuperAdmin, (_req, res) => {
   const candidates = [
-    path.resolve(__dirname, "public", "szmc-alumni-dist.zip"),
-    path.resolve(__dirname, "szmc-alumni-dist.zip"),
-    path.resolve(__dirname, "public", "dist.zip"),
-    path.resolve(__dirname, "dist.zip"),
-    path.resolve(__dirname, "public", "szmc-alumni-dist.tar.gz"),
-    path.resolve(__dirname, "szmc-alumni-dist.tar.gz")
+    path2.resolve(__dirname2, "public", "szmc-alumni-dist.zip"),
+    path2.resolve(__dirname2, "szmc-alumni-dist.zip"),
+    path2.resolve(__dirname2, "public", "dist.zip"),
+    path2.resolve(__dirname2, "dist.zip"),
+    path2.resolve(__dirname2, "public", "szmc-alumni-dist.tar.gz"),
+    path2.resolve(__dirname2, "szmc-alumni-dist.tar.gz")
   ];
   for (const c of candidates) {
-    if (existsSync(c)) {
+    if (existsSync2(c)) {
       return res.download(c, "szmc-alumni-portal-dist.zip");
     }
   }
   return res.status(404).send("Production dist archive not found. Please build first.");
 });
-app.get(["/download/szmc-alumni-dist.tar.gz", "/szmc-alumni-dist.tar.gz"], (_req, res) => {
+app.get(["/download/szmc-alumni-dist.tar.gz", "/szmc-alumni-dist.tar.gz"], requireSuperAdmin, (_req, res) => {
   const candidates = [
-    path.resolve(__dirname, "public", "szmc-alumni-dist.tar.gz"),
-    path.resolve(__dirname, "szmc-alumni-dist.tar.gz")
+    path2.resolve(__dirname2, "public", "szmc-alumni-dist.tar.gz"),
+    path2.resolve(__dirname2, "szmc-alumni-dist.tar.gz")
   ];
   for (const c of candidates) {
-    if (existsSync(c)) {
+    if (existsSync2(c)) {
       return res.download(c, "szmc-alumni-dist.tar.gz");
     }
   }
   return res.status(404).send("Production dist tar.gz archive not found.");
 });
+var ALLOWED_VIDEO_EXTENSIONS = /* @__PURE__ */ new Set(["mp4", "webm", "mov", "ogg"]);
 app.post(
   "/api/upload-video",
-  express.raw({ type: ["video/*", "application/octet-stream"], limit: "100mb" }),
+  rateLimitGuard(20, 6e4),
+  requireAuth,
+  express.raw({ type: ["video/*", "application/octet-stream"], limit: "50mb" }),
   async (req, res) => {
     try {
-      const extHeader = String(req.headers["x-file-ext"] || "mp4").replace(/[^a-zA-Z0-9]/g, "").toLowerCase() || "mp4";
-      const userIdHeader = String(req.headers["x-user-id"] || "alumni").replace(/[^a-zA-Z0-9_-]/g, "");
-      const fileName = `video_${userIdHeader}_${Date.now()}_${crypto2.randomBytes(4).toString("hex")}.${extHeader}`;
+      const rawExt = String(req.headers["x-file-ext"] || "mp4").replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+      const extHeader = ALLOWED_VIDEO_EXTENSIONS.has(rawExt) ? rawExt : "mp4";
+      const userIdHeader = String(req.dbUser?.id || "alumni").replace(/[^a-zA-Z0-9_-]/g, "");
+      const fileName = `video_${userIdHeader}_${Date.now()}_${crypto3.randomBytes(4).toString("hex")}.${extHeader}`;
       let buffer = null;
       if (Buffer.isBuffer(req.body) && req.body.length > 0) {
         buffer = req.body;
@@ -4090,13 +6533,13 @@ app.post(
           console.warn("[Server] Supabase storage video upload fallback:", supaErr);
         }
       }
-      const uploadsDir = path.resolve(__dirname, "public", "uploads", "videos");
-      if (!existsSync(uploadsDir)) {
+      const uploadsDir = path2.resolve(__dirname2, "public", "uploads", "videos");
+      if (!existsSync2(uploadsDir)) {
         const { mkdirSync } = await import("fs");
         mkdirSync(uploadsDir, { recursive: true });
       }
-      const filePath = path.join(uploadsDir, fileName);
-      writeFileSync(filePath, buffer);
+      const filePath = path2.join(uploadsDir, fileName);
+      writeFileSync2(filePath, buffer);
       return res.json({
         url: `/uploads/videos/${fileName}`
       });
@@ -4117,7 +6560,7 @@ async function startServer() {
   } catch (hydErr) {
     console.warn("[Server] Notice during initial Supabase site config hydration:", hydErr?.message || hydErr);
   }
-  const publicPath = path.resolve(__dirname, "public");
+  const publicPath = path2.resolve(__dirname2, "public");
   app.use(express.static(publicPath, {
     maxAge: "7d",
     etag: true
@@ -4139,12 +6582,12 @@ async function startServer() {
         return res.status(404).json({ error: "Endpoint not found" });
       }
       const cleanPath = req.originalUrl.split("?")[0];
-      if (path.extname(cleanPath) && !cleanPath.endsWith(".html")) {
+      if (path2.extname(cleanPath) && !cleanPath.endsWith(".html")) {
         return res.status(404).type("text/plain").send("File not found");
       }
       const url = req.originalUrl;
       try {
-        let template = await readFile(path.resolve(__dirname, "index.html"), "utf-8");
+        let template = await readFile(path2.resolve(__dirname2, "index.html"), "utf-8");
         template = await vite.transformIndexHtml(url, template);
         res.status(200).set({
           "Content-Type": "text/html",
@@ -4156,7 +6599,7 @@ async function startServer() {
       }
     });
   } else {
-    const distPath = path.resolve(__dirname, "dist");
+    const distPath = path2.resolve(__dirname2, "dist");
     app.use(express.static(distPath, {
       maxAge: "1y",
       etag: true,
@@ -4169,7 +6612,7 @@ async function startServer() {
     }));
     app.get("*", (_req, res) => {
       res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-      res.sendFile(path.join(distPath, "index.html"));
+      res.sendFile(path2.join(distPath, "index.html"));
     });
   }
   app.use((err, _req, res, _next) => {

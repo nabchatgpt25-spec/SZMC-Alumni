@@ -1,6 +1,18 @@
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import { supabase, ALUMNI_PUBLIC_COLUMNS, isSupabaseConfigured, SUPABASE_API_URL } from '../lib/supabase';
-import type { ChatConversation, ChatMessage, ChatPerson, UserMessageSettings } from '../types/messaging';
+import { fetchBlockedUserIds } from './communitySafetyService';
+import { compressImageFileToDataUrl } from '../utils/mediaStorage';
+import type {
+  ChatConversation,
+  ChatMessage,
+  ChatPerson,
+  MessageChangeMeta,
+  MessageReaction,
+  OnlinePresenceUser,
+  ReactionChangeEvent,
+  ReadReceiptEvent,
+  UserMessageSettings,
+} from '../types/messaging';
 
 /**
  * =============================================================================
@@ -17,30 +29,28 @@ import type { ChatConversation, ChatMessage, ChatPerson, UserMessageSettings } f
  *   public.user_message_settings     (profile_id, who_can_message, …)
  *   public.profiles                  (id, user_id, full_name, avatar_url, batch …)
  *   public.alumni_profiles           (directory: full_name, batch_year, profession …)
+ *   public.user_blocks               (bidirectional block enforcement)
  *
- * IMPORTANT IDENTITY RULE
- * -----------------------
- * `messages.sender_id` and `conversation_participants.profile_id` are FOREIGN KEYS
- * to `public.profiles(id)` — not to `public.alumni_profiles(id)`. The RLS policies
- * compare those columns against `public.get_current_profile_id()`, which returns the
- * `public.profiles.id` of `auth.uid()`. We therefore resolve the signed-in user's
- * messaging profile id at runtime (`getMessagingProfileId`) and always write with it.
- * Migration 013/014 bridges profiles ↔ alumni_profiles on matching ids, so they are
- * normally identical, but resolving avoids FK / RLS failures on legacy rows.
- *
- * No `/api/messages`, `/api/conversations` or any Express endpoint is called here.
- * Live updates come from Supabase Realtime `postgres_changes` (publication
- * `supabase_realtime`, enabled for these tables in migration 012/014) plus
- * low-latency `broadcast` events for typing indicators.
+ * SECURITY & REALTIME ISOLATION
+ * -----------------------------
+ * - Database messages/conversations/participants arrive strictly over RLS-filtered
+ *   Supabase Realtime `postgres_changes` (`messages-db-sync`). Raw message payloads
+ *   are NEVER broadcast on a shared global channel.
+ * - Typing indicators run exclusively on per-conversation scoped room channels
+ *   (`conversation-room:<conversationId>`), joined only while a thread is open.
  * =============================================================================
  */
 
 const MESSAGE_COLUMNS = 'id, conversation_id, sender_id, type, body, media_url, created_at, edited_at, deleted_at';
+const MESSAGE_COLUMNS_WITH_REPLY = `${MESSAGE_COLUMNS}, reply_to_message_id`;
 const CONVERSATION_COLUMNS = 'id, type, title, last_message, last_message_at, created_by, updated_at';
 const PARTICIPANT_COLUMNS = 'conversation_id, profile_id, joined_at, last_read_at, is_muted';
 const PROFILE_COLUMNS = 'id, user_id, full_name, avatar_url, batch, is_verified, last_seen_at';
 const PREVIEW_LENGTH = 120;
 const FALLBACK_AVATAR = '/szmc-logo.png';
+const OFFICIAL_ANNOUNCEMENT_CHANNEL_ID = 'szmc-official-announcements';
+const MAX_CHAT_IMAGE_BYTES = 8 * 1024 * 1024;
+let replyColumnSupported: boolean | null = null;
 
 // ---------------------------------------------------------------------------
 // ERROR HANDLING
@@ -114,6 +124,7 @@ function toChatPerson(profile: ProfileLite | undefined, fallbackId: number): Cha
     batchYear: Number(profile.batch_year ?? profile.batch) || 20,
     profession: profile.profession || 'Physician',
     verificationStatus: profile.verification_status ?? (profile.is_verified ? 'verified' : 'unverified'),
+    lastSeenAt: profile.last_seen_at ?? null,
   };
 }
 
@@ -128,6 +139,7 @@ function toChatMessage(row: any): ChatMessage {
     deletedAt: row.deleted_at ?? row.deletedAt ?? null,
     type: row.type || 'text',
     mediaUrl: row.media_url ?? row.mediaUrl ?? null,
+    replyToMessageId: row.reply_to_message_id ?? row.replyToMessageId ?? null,
   };
 }
 
@@ -182,6 +194,7 @@ export function getCachedMessagingProfileId(): number | null {
 export function invalidateMessagingIdentity(): void {
   cachedAuthUserId = null;
   identityPromise = null;
+  closeMessagingRealtime();
   if (cachedMessagingProfileId !== null) emitIdentity(null);
 }
 
@@ -427,6 +440,58 @@ async function loadPeople(profileIds: number[]): Promise<Map<number, ProfileLite
 }
 
 // ---------------------------------------------------------------------------
+// 0B. BLOCKED ACCOUNTS STATE (public.user_blocks + RPC get_messenger_blocked_profile_ids)
+// ---------------------------------------------------------------------------
+export interface MessengerBlockState {
+  blockedByMe: Set<number>;
+  blockedEitherWay: Set<number>;
+}
+
+export async function getMessengerBlockState(myProfileId?: number | null): Promise<MessengerBlockState> {
+  const blockedByMe = new Set<number>();
+  const blockedEitherWay = new Set<number>();
+
+  const resolvedId = (await getMessagingProfileId()) ?? myProfileId ?? null;
+
+  // 1. Local + Supabase user_blocks created by me (works immediately even before migration 026)
+  if (resolvedId) {
+    try {
+      const myBlockedIds = await fetchBlockedUserIds(resolvedId);
+      myBlockedIds.forEach((id) => {
+        if (Number.isFinite(id) && id > 0) {
+          blockedByMe.add(Number(id));
+          blockedEitherWay.add(Number(id));
+        }
+      });
+    } catch {
+      /* best-effort fallback */
+    }
+  }
+
+  // 2. Authoritative bidirectional block RPC (includes accounts who blocked me)
+  if (isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase.rpc('get_messenger_blocked_profile_ids');
+      if (!error && Array.isArray(data)) {
+        data.forEach((row: any) => {
+          const pid = Number(row.blocked_profile_id);
+          if (Number.isFinite(pid) && pid > 0) {
+            blockedEitherWay.add(pid);
+            if (row.blocked_by_me) {
+              blockedByMe.add(pid);
+            }
+          }
+        });
+      }
+    } catch {
+      /* graceful fallback before migration 026 is applied */
+    }
+  }
+
+  return { blockedByMe, blockedEitherWay };
+}
+
+// ---------------------------------------------------------------------------
 // 1. LIST CONVERSATIONS — public.conversations ⋈ conversation_participants ⋈ messages
 // ---------------------------------------------------------------------------
 export async function listConversations(myProfileId?: number | null): Promise<ChatConversation[]> {
@@ -472,11 +537,16 @@ export async function listConversations(myProfileId?: number | null): Promise<Ch
   const conversationRows = convRes.data ?? [];
   const participantRows = participantRes.data ?? [];
 
-  // 1c. Other participants (direct chats) and unread counters
+  // 1c. Other participants (direct chats), member counts, peer read timestamps, and unread counters
   const otherByConversation = new Map<string, number>();
+  const peerLastReadAtByConversation = new Map<string, string | null>();
+  const participantCountByConversation = new Map<string, number>();
   participantRows.forEach((row: any) => {
+    const convId = String(row.conversation_id);
+    participantCountByConversation.set(convId, (participantCountByConversation.get(convId) ?? 0) + 1);
     if (Number(row.profile_id) !== myId) {
-      otherByConversation.set(String(row.conversation_id), Number(row.profile_id));
+      otherByConversation.set(convId, Number(row.profile_id));
+      peerLastReadAtByConversation.set(convId, row.last_read_at ?? null);
     }
   });
 
@@ -488,35 +558,56 @@ export async function listConversations(myProfileId?: number | null): Promise<Ch
     }
   });
 
-  // Unread messages: sent by others, not deleted, newer than my last_read_at
-  const readMarkers = mine
-    .map((row: any) => row.last_read_at)
-    .filter(Boolean)
-    .sort();
+  // Unread messages: prefer authoritative server-side RPC (no 1,000-row cap),
+  // with safe client-side fallback if migration 027 is not yet applied.
   const unreadByConversation = new Map<string, number>();
-  if (readMarkers.length > 0) {
-    const { data: unreadRows } = await supabase
-      .from('messages')
-      .select('id, conversation_id, created_at, sender_id, deleted_at')
-      .in('conversation_id', conversationIds)
-      .neq('sender_id', myId)
-      .is('deleted_at', null)
-      .gte('created_at', readMarkers[0])
-      .order('created_at', { ascending: true })
-      .limit(1000);
-
-    (unreadRows ?? []).forEach((row: any) => {
-      const lastRead = myParticipantByConv.get(String(row.conversation_id))?.last_read_at;
-      if (lastRead && row.created_at > lastRead) {
-        const key = String(row.conversation_id);
-        unreadByConversation.set(key, (unreadByConversation.get(key) ?? 0) + 1);
-      }
-    });
+  let usedUnreadRpc = false;
+  try {
+    const { data: rpcUnreads, error: rpcErr } = await supabase.rpc('get_unread_counts_by_conversation');
+    if (!rpcErr && Array.isArray(rpcUnreads)) {
+      usedUnreadRpc = true;
+      rpcUnreads.forEach((row: any) => {
+        if (row?.conversation_id) {
+          unreadByConversation.set(String(row.conversation_id), Math.max(0, Number(row.unread_count || 0)));
+        }
+      });
+    }
+  } catch {
+    /* fallback below */
   }
 
-  // 1d. Display data for the counterpart participants
+  if (!usedUnreadRpc) {
+    const readMarkers = mine
+      .map((row: any) => row.last_read_at)
+      .filter(Boolean)
+      .sort();
+    if (readMarkers.length > 0) {
+      const { data: unreadRows } = await supabase
+        .from('messages')
+        .select('id, conversation_id, created_at, sender_id, deleted_at')
+        .in('conversation_id', conversationIds)
+        .neq('sender_id', myId)
+        .is('deleted_at', null)
+        .gte('created_at', readMarkers[0])
+        .order('created_at', { ascending: true })
+        .limit(1000);
+
+      (unreadRows ?? []).forEach((row: any) => {
+        const lastRead = myParticipantByConv.get(String(row.conversation_id))?.last_read_at;
+        if (lastRead && row.created_at > lastRead) {
+          const key = String(row.conversation_id);
+          unreadByConversation.set(key, (unreadByConversation.get(key) ?? 0) + 1);
+        }
+      });
+    }
+  }
+
+  // 1d. Display data for the counterpart participants + bidirectional block state
   const others = Array.from(new Set(Array.from(otherByConversation.values())));
-  const people = await loadPeople(others);
+  const [people, blockState] = await Promise.all([
+    loadPeople(others),
+    getMessengerBlockState(myId),
+  ]);
 
   const conversations: ChatConversation[] = [];
   conversationRows.forEach((conv: any) => {
@@ -525,16 +616,20 @@ export async function listConversations(myProfileId?: number | null): Promise<Ch
     const otherId = otherByConversation.get(convId);
     const latest = latestByConversation.get(convId);
     const isGroup = conv.type === 'group' || conv.type === 'announcement';
+    const memberCount = participantCountByConversation.get(convId) ?? 2;
 
     if (isGroup) {
       conversations.push({
         id: convId,
         person: {
           profileId: Number(otherId ?? myId),
-          fullName: conv.title || (conv.type === 'announcement' ? 'Official Announcements' : 'Group chat'),
+          fullName: conv.title || (conv.type === 'announcement' ? 'SZMC Official Announcements' : 'Group chat'),
           avatarUrl: FALLBACK_AVATAR,
           batchYear: 20,
-          profession: conv.type === 'announcement' ? 'SZMC Alumni Network' : 'Group conversation',
+          profession:
+            conv.type === 'announcement'
+              ? 'SZMC Alumni Network'
+              : `${memberCount} ${memberCount === 1 ? 'member' : 'members'}`,
         },
         lastMessageAt: latest?.createdAt ?? conv.last_message_at,
         lastMessagePreview: previewOf(latest, conv.last_message),
@@ -543,11 +638,17 @@ export async function listConversations(myProfileId?: number | null): Promise<Ch
         isMuted: Boolean(participant?.is_muted),
         type: conv.type,
         title: conv.title ?? null,
+        participantCount: memberCount,
+        peerLastReadAt: null,
+        isBlockedByMe: false,
+        isBlockedEitherWay: false,
       });
       return;
     }
 
     const person = toChatPerson(otherId !== undefined ? people.get(otherId) : undefined, otherId ?? 0);
+    const isBlockedByMe = otherId !== undefined && blockState.blockedByMe.has(otherId);
+    const isBlockedEitherWay = otherId !== undefined && blockState.blockedEitherWay.has(otherId);
     conversations.push({
       id: convId,
       person,
@@ -558,6 +659,10 @@ export async function listConversations(myProfileId?: number | null): Promise<Ch
       isMuted: Boolean(participant?.is_muted),
       type: conv.type || 'direct',
       title: conv.title ?? null,
+      participantCount: memberCount,
+      peerLastReadAt: peerLastReadAtByConversation.get(convId) ?? null,
+      isBlockedByMe,
+      isBlockedEitherWay,
     });
   });
 
@@ -587,6 +692,16 @@ export async function findOrCreateDirectConversation(
     throw new MessagingError('You cannot start a direct conversation with yourself.');
   }
 
+  // Enforce bidirectional user_blocks before opening or creating a direct chat
+  const blockState = await getMessengerBlockState(myId);
+  if (blockState.blockedEitherWay.has(targetId) || blockState.blockedEitherWay.has(Number(otherProfileId))) {
+    throw new MessagingError(
+      blockState.blockedByMe.has(targetId) || blockState.blockedByMe.has(Number(otherProfileId))
+        ? 'You have blocked this user. Unblock them in Message Settings to start a conversation.'
+        : 'Messaging is unavailable because this account cannot be messaged.'
+    );
+  }
+
   // 2a. Idempotent lookup first — never create a duplicate thread.
   const { data: myRows } = await supabase
     .from('conversation_participants')
@@ -613,10 +728,10 @@ export async function findOrCreateDirectConversation(
     }
   }
 
-  // 2b. Postgres RPC (privacy-aware, SECURITY DEFINER, atomic).
+  // 2b. Postgres RPC (privacy + block-aware, SECURITY DEFINER, atomic).
   //     Only fall back to direct inserts when the function itself is unavailable
   //     (missing / not granted). A business-rule rejection must be surfaced, never
-  //     bypassed — otherwise a privacy-blocked chat would be created anyway.
+  //     bypassed — otherwise a privacy- or block-restricted chat would be created anyway.
   const { data: rpcId, error: rpcErr } = await supabase.rpc('start_direct_conversation', {
     target_profile_id: targetId,
   });
@@ -626,7 +741,7 @@ export async function findOrCreateDirectConversation(
   if (rpcErr) {
     const msg = rpcErr.message || '';
     const code = String((rpcErr as any).code || '');
-    const isBusinessRule = /Privacy Restriction|Cannot start|not found|does not exist in public\.profiles/i.test(msg);
+    const isBusinessRule = /Blocked:|Privacy Restriction|Cannot start|not found|does not exist in public\.profiles/i.test(msg);
     const functionUnavailable =
       !isBusinessRule &&
       (code === 'PGRST202' || // function missing from the schema cache
@@ -635,7 +750,7 @@ export async function findOrCreateDirectConversation(
         /could not find the function|permission denied/i.test(msg));
 
     if (!functionUnavailable) {
-      // Privacy restriction, self-chat, unknown target → report it to the user.
+      // Block restriction, privacy restriction, self-chat, unknown target → report it to the user.
       throw new MessagingError(msg || 'Could not start this conversation.', code);
     }
   }
@@ -666,33 +781,240 @@ export async function findOrCreateDirectConversation(
 }
 
 // ---------------------------------------------------------------------------
-// 3. LIST MESSAGES — public.messages by conversation_id, oldest → newest
+// 2B. GROUP CONVERSATIONS — create, list participants, add members
 // ---------------------------------------------------------------------------
-export async function listMessages(conversationId: string, limit = 300): Promise<ChatMessage[]> {
-  if (!conversationId) return [];
+export async function createGroupConversation(
+  myProfileId: number,
+  title: string,
+  memberProfileIds: number[]
+): Promise<string> {
+  if (!isSupabaseConfigured) {
+    throw new MessagingError('Supabase is not configured. Messenger requires a live Supabase project.');
+  }
+  const cleanTitle = (title || '').trim();
+  if (cleanTitle.length < 2 || cleanTitle.length > 80) {
+    throw new MessagingError('Group name must be between 2 and 80 characters.');
+  }
+
+  const myId = await resolveSelfProfileId(myProfileId);
+  const blockState = await getMessengerBlockState(myId);
+
+  const resolvedTargets: number[] = [];
+  for (const rawId of memberProfileIds) {
+    const resolved = await resolveTargetProfileId(rawId);
+    if (
+      resolved !== myId &&
+      !resolvedTargets.includes(resolved) &&
+      !blockState.blockedEitherWay.has(resolved) &&
+      !blockState.blockedEitherWay.has(Number(rawId))
+    ) {
+      resolvedTargets.push(resolved);
+    }
+  }
+
+  if (resolvedTargets.length < 1) {
+    throw new MessagingError('Select at least 1 colleague to create a group chat.');
+  }
+
+  // Primary atomic path: SECURITY DEFINER RPC (migration 028)
+  const { data: rpcConvId, error: rpcErr } = await supabase.rpc('create_group_conversation', {
+    p_title: cleanTitle,
+    p_member_ids: resolvedTargets,
+  });
+
+  if (!rpcErr && rpcConvId) return String(rpcConvId);
+
+  if (rpcErr) {
+    const code = String((rpcErr as any).code || '');
+    const msg = rpcErr.message || '';
+    const fnUnavailable =
+      code === 'PGRST202' || code === '42883' || /could not find the function/i.test(msg);
+    if (!fnUnavailable) {
+      throw new MessagingError(msg || 'Could not create group chat.', code);
+    }
+  }
+
+  // Graceful direct-insert fallback if migration 028 hasn't been applied yet
+  const now = new Date().toISOString();
+  const { data: created, error: createErr } = await supabase
+    .from('conversations')
+    .insert({
+      created_by: myId,
+      type: 'group',
+      title: cleanTitle,
+      last_message: 'Group created',
+      last_message_at: now,
+    })
+    .select('id')
+    .single();
+
+  if (createErr || !created?.id) {
+    throwMessagingError(createErr, 'Could not create group conversation.');
+  }
+
+  const conversationId = String(created.id);
+  const rows = [
+    { conversation_id: conversationId, profile_id: myId, last_read_at: now, is_muted: false },
+    ...resolvedTargets.map((pid) => ({
+      conversation_id: conversationId,
+      profile_id: pid,
+      last_read_at: now,
+      is_muted: false,
+    })),
+  ];
+
+  const { error: partErr } = await supabase.from('conversation_participants').insert(rows);
+  if (partErr) {
+    throwMessagingError(partErr, 'Group created, but members could not be added.');
+  }
+
+  return conversationId;
+}
+
+export async function listConversationParticipants(conversationId: string): Promise<ChatPerson[]> {
+  if (!conversationId || !isSupabaseConfigured) return [];
+  const { data, error } = await supabase
+    .from('conversation_participants')
+    .select('profile_id')
+    .eq('conversation_id', conversationId);
+  if (error || !data || data.length === 0) return [];
+
+  const ids = Array.from(new Set(data.map((r: any) => Number(r.profile_id)).filter((n) => n > 0)));
+  const people = await loadPeople(ids);
+  return ids.map((id) => toChatPerson(people.get(id), id));
+}
+
+export async function addGroupMember(conversationId: string, memberProfileId: number): Promise<void> {
+  if (!conversationId || !isSupabaseConfigured) return;
+  const targetId = await resolveTargetProfileId(memberProfileId);
+
+  const { error: rpcErr } = await supabase.rpc('add_group_member', {
+    p_conversation_id: conversationId,
+    p_profile_id: targetId,
+  });
+
+  if (!rpcErr) return;
+
+  const code = String((rpcErr as any).code || '');
+  const msg = rpcErr.message || '';
+  const fnUnavailable =
+    code === 'PGRST202' || code === '42883' || /could not find the function/i.test(msg);
+  if (!fnUnavailable) {
+    throw new MessagingError(msg || 'Could not add member to this group.', code);
+  }
+
+  const { error: insertErr } = await supabase.from('conversation_participants').upsert(
+    {
+      conversation_id: conversationId,
+      profile_id: targetId,
+      last_read_at: new Date().toISOString(),
+      is_muted: false,
+    },
+    { onConflict: 'conversation_id,profile_id' }
+  );
+  if (insertErr) throwMessagingError(insertErr, 'Could not add member to this group.');
+}
+
+// ---------------------------------------------------------------------------
+// 2C. CHAT PHOTO UPLOAD (Supabase Storage 'chat-media' with compressed fallback)
+// ---------------------------------------------------------------------------
+export async function uploadChatImage(file: File, conversationId: string): Promise<string> {
+  if (!file.type || !file.type.startsWith('image/')) {
+    throw new MessagingError('Please select a valid image file (JPG, PNG, WebP, or GIF).');
+  }
+  if (file.size > MAX_CHAT_IMAGE_BYTES) {
+    throw new MessagingError('Image must be smaller than 8 MB.');
+  }
+
+  // Try Supabase Storage first for lightweight DB rows & CDN delivery
+  if (isSupabaseConfigured && conversationId) {
+    try {
+      const ext = (file.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '') || 'jpg';
+      const path = `${conversationId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+      const { error: uploadErr } = await supabase.storage
+        .from('chat-media')
+        .upload(path, file, { contentType: file.type, upsert: false });
+
+      if (!uploadErr) {
+        const { data: pub } = supabase.storage.from('chat-media').getPublicUrl(path);
+        if (pub?.publicUrl) return pub.publicUrl;
+      }
+    } catch {
+      /* gracefully fall back to compressed Data URL when Storage bucket is not provisioned */
+    }
+  }
+
+  return compressImageFileToDataUrl(file, 1080, 0.8);
+}
+
+// ---------------------------------------------------------------------------
+// 3. LIST MESSAGES — cursor-paginated public.messages, oldest → newest
+// ---------------------------------------------------------------------------
+export interface MessagePage {
+  messages: ChatMessage[];
+  hasMore: boolean;
+}
+
+export async function listMessagesPage(
+  conversationId: string,
+  options: { limit?: number; beforeCreatedAt?: string | null } = {}
+): Promise<MessagePage> {
+  if (!conversationId) return { messages: [], hasMore: false };
   if (!isSupabaseConfigured) {
     throw new MessagingError('Supabase is not configured. Messenger requires a live Supabase project.');
   }
 
-  const { data, error } = await supabase
-    .from('messages')
-    .select(MESSAGE_COLUMNS)
-    .eq('conversation_id', conversationId)
-    .order('created_at', { ascending: false })
-    .limit(limit);
+  const pageSize = Math.max(10, Math.min(200, options.limit ?? 50));
+  const selectCols = replyColumnSupported === false ? MESSAGE_COLUMNS : MESSAGE_COLUMNS_WITH_REPLY;
+
+  const runQuery = (columns: string) => {
+    let q = supabase
+      .from('messages')
+      .select(columns)
+      .eq('conversation_id', conversationId)
+      .order('created_at', { ascending: false })
+      .limit(pageSize + 1);
+    if (options.beforeCreatedAt) {
+      q = q.lt('created_at', options.beforeCreatedAt);
+    }
+    return q;
+  };
+
+  let { data, error } = await runQuery(selectCols);
+
+  if (error && selectCols !== MESSAGE_COLUMNS && /reply_to_message_id|column .* does not exist/i.test(error.message || '')) {
+    replyColumnSupported = false;
+    ({ data, error } = await runQuery(MESSAGE_COLUMNS));
+  } else if (!error && selectCols === MESSAGE_COLUMNS_WITH_REPLY) {
+    replyColumnSupported = true;
+  }
 
   if (error) throwMessagingError(error, 'Could not load this conversation.');
-  return (data ?? []).map(toChatMessage).reverse();
+
+  const rows = data ?? [];
+  const hasMore = rows.length > pageSize;
+  const pageRows = hasMore ? rows.slice(0, pageSize) : rows;
+  return {
+    messages: pageRows.map(toChatMessage).reverse(),
+    hasMore,
+  };
+}
+
+export async function listMessages(conversationId: string, limit = 50): Promise<ChatMessage[]> {
+  const { messages } = await listMessagesPage(conversationId, { limit });
+  return messages;
 }
 
 // ---------------------------------------------------------------------------
-// 4. SEND MESSAGE — inserts into public.messages
+// 4. SEND MESSAGE — inserts into public.messages (supports media & replies)
 // ---------------------------------------------------------------------------
 export interface SendMessageOptions {
   /** 'text' | 'like' | 'image' | 'system' */
   type?: 'text' | 'like' | 'image' | 'system';
-  /** Public URL (or data URL fallback) for image messages → messages.media_url */
+  /** Public URL (or compressed data URL fallback) for image messages → messages.media_url */
   mediaUrl?: string | null;
+  /** Optional replied-to message ID → messages.reply_to_message_id */
+  replyToMessageId?: string | null;
 }
 
 export async function sendMessage(
@@ -709,6 +1031,29 @@ export async function sendMessage(
   }
 
   const authorId = await resolveSelfProfileId(senderId);
+
+  // Enforce bidirectional block state for direct conversations client-side as well
+  // (DB RLS also enforces this authoritatively once migration 026 is applied)
+  try {
+    const [convMeta, participantsRes, blockState] = await Promise.all([
+      supabase.from('conversations').select('type').eq('id', conversationId).maybeSingle(),
+      supabase.from('conversation_participants').select('profile_id').eq('conversation_id', conversationId),
+      getMessengerBlockState(authorId),
+    ]);
+    if (convMeta.data?.type === 'direct' && Array.isArray(participantsRes.data)) {
+      const peerRow = participantsRes.data.find((p: any) => Number(p.profile_id) !== authorId);
+      if (peerRow && blockState.blockedEitherWay.has(Number(peerRow.profile_id))) {
+        throw new MessagingError(
+          blockState.blockedByMe.has(Number(peerRow.profile_id))
+            ? 'You blocked this user. Unblock them to send messages again.'
+            : 'You can no longer send messages to this conversation.'
+        );
+      }
+    }
+  } catch (checkErr) {
+    if (checkErr instanceof MessagingError) throw checkErr;
+  }
+
   const resolvedType = options.type ?? (cleanBody === '👍' && !options.mediaUrl ? 'like' : options.mediaUrl ? 'image' : 'text');
 
   const payload: Record<string, any> = {
@@ -718,10 +1063,27 @@ export async function sendMessage(
     body: cleanBody || (resolvedType === 'image' ? 'Photo' : ''),
   };
   if (options.mediaUrl) payload.media_url = options.mediaUrl;
+  if (options.replyToMessageId && replyColumnSupported !== false) {
+    payload.reply_to_message_id = options.replyToMessageId;
+  }
 
-  const { data, error } = await supabase.from('messages').insert(payload).select(MESSAGE_COLUMNS).single();
+  const selectCols = replyColumnSupported === false ? MESSAGE_COLUMNS : MESSAGE_COLUMNS_WITH_REPLY;
+  const { data, error } = await supabase.from('messages').insert(payload).select(selectCols).single();
 
   if (error) {
+    // Retry without reply_to_message_id if migration 028 isn't applied yet
+    if (/reply_to_message_id/i.test(error.message || '')) {
+      replyColumnSupported = false;
+      const fallbackPayload = { ...payload };
+      delete fallbackPayload.reply_to_message_id;
+      const { data: retryReply, error: retryReplyErr } = await supabase
+        .from('messages')
+        .insert(fallbackPayload)
+        .select(MESSAGE_COLUMNS)
+        .single();
+      if (!retryReplyErr && retryReply) return toChatMessage(retryReply);
+    }
+
     // If the optional media/type columns are unavailable, retry with the core payload.
     if (/column .* does not exist/i.test(error.message || '')) {
       const { data: retry, error: retryErr } = await supabase
@@ -735,13 +1097,88 @@ export async function sendMessage(
     throwMessagingError(error, 'Could not send message. Please try again.');
   }
 
-  const message = toChatMessage(data);
-  broadcastMessageEvent('new_message', message);
-  return message;
+  // Real-time delivery happens strictly through RLS-filtered postgres_changes (never global broadcast)
+  return toChatMessage(data);
 }
 
 // ---------------------------------------------------------------------------
-// 5. EDIT MESSAGE — columns body + edited_at (only granted columns)
+// 4B. MESSAGE REACTIONS — public.message_reactions (toggle + list)
+// ---------------------------------------------------------------------------
+export async function listMessageReactions(messageIds: string[]): Promise<Record<string, MessageReaction[]>> {
+  const grouped: Record<string, MessageReaction[]> = {};
+  const cleanIds = messageIds.filter((id) => id && !id.startsWith('temp-'));
+  if (cleanIds.length === 0 || !isSupabaseConfigured) return grouped;
+
+  try {
+    const { data, error } = await supabase
+      .from('message_reactions')
+      .select('message_id, profile_id, emoji, created_at')
+      .in('message_id', cleanIds);
+
+    if (error || !Array.isArray(data)) return grouped;
+
+    data.forEach((row: any) => {
+      const msgId = String(row.message_id);
+      if (!grouped[msgId]) grouped[msgId] = [];
+      grouped[msgId].push({
+        messageId: msgId,
+        profileId: Number(row.profile_id),
+        emoji: String(row.emoji),
+        createdAt: row.created_at ?? undefined,
+      });
+    });
+  } catch {
+    /* graceful no-op before migration 028 is applied */
+  }
+  return grouped;
+}
+
+export async function toggleMessageReaction(
+  messageId: string,
+  myProfileId: number,
+  emoji: string,
+  currentlyReacted: boolean
+): Promise<boolean> {
+  if (!messageId || messageId.startsWith('temp-') || !isSupabaseConfigured) return false;
+  const myId = await resolveSelfProfileId(myProfileId);
+  const cleanEmoji = (emoji || '').trim();
+  if (!cleanEmoji) return false;
+
+  if (currentlyReacted) {
+    const { error } = await supabase
+      .from('message_reactions')
+      .delete()
+      .eq('message_id', messageId)
+      .eq('profile_id', myId)
+      .eq('emoji', cleanEmoji);
+    if (error) {
+      if (error.code === '42P01' || /does not exist/i.test(error.message || '')) return false;
+      throwMessagingError(error, 'Could not remove reaction.');
+    }
+    return false;
+  } else {
+    const { error } = await supabase.from('message_reactions').upsert(
+      {
+        message_id: messageId,
+        profile_id: myId,
+        emoji: cleanEmoji,
+      },
+      { onConflict: 'message_id,profile_id,emoji' }
+    );
+    if (error) {
+      if (error.code === '42P01' || /does not exist/i.test(error.message || '')) {
+        throw new MessagingError(
+          'Live message reactions require applying migration 028_phase9c_messenger_groups_replies_reactions.sql in Supabase.'
+        );
+      }
+      throwMessagingError(error, 'Could not add reaction.');
+    }
+    return true;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 5. EDIT MESSAGE — strictly original sender only (columns body + edited_at)
 // ---------------------------------------------------------------------------
 export async function editMessage(messageId: string, body: string): Promise<ChatMessage> {
   const cleanBody = (body ?? '').trim();
@@ -754,17 +1191,41 @@ export async function editMessage(messageId: string, body: string): Promise<Chat
     .select(MESSAGE_COLUMNS)
     .maybeSingle();
 
-  if (error || !data) throwMessagingError(error, 'Could not edit this message.');
+  if (error || !data) throwMessagingError(error, 'Only the message author can edit this message.');
 
-  const message = toChatMessage(data);
-  broadcastMessageEvent('edit_message', message);
-  return message;
+  return toChatMessage(data);
 }
 
 // ---------------------------------------------------------------------------
-// 6. DELETE MESSAGE — soft delete via deleted_at
+// 6. DELETE MESSAGE — sender soft delete or admin moderation soft delete
 // ---------------------------------------------------------------------------
-export async function deleteMessage(messageId: string): Promise<ChatMessage> {
+export async function deleteMessage(
+  messageId: string,
+  options?: { asModerator?: boolean }
+): Promise<ChatMessage> {
+  if (options?.asModerator) {
+    const { data: rpcRow, error: rpcErr } = await supabase.rpc('moderate_delete_message', {
+      p_message_id: messageId,
+    });
+    if (!rpcErr && rpcRow) {
+      return toChatMessage(rpcRow);
+    }
+    if (rpcErr) {
+      const code = String((rpcErr as any).code || '');
+      const msg = rpcErr.message || '';
+      const fnMissing =
+        code === 'PGRST202' ||
+        code === '42883' ||
+        /could not find the function/i.test(msg);
+      if (!fnMissing) {
+        throwMessagingError(rpcErr, 'Could not moderate-delete this message.');
+      }
+      throw new MessagingError(
+        'Admin message moderation requires applying migration 026_phase9a_messenger_security_privacy.sql in Supabase.'
+      );
+    }
+  }
+
   const { data, error } = await supabase
     .from('messages')
     .update({ deleted_at: new Date().toISOString() })
@@ -772,11 +1233,97 @@ export async function deleteMessage(messageId: string): Promise<ChatMessage> {
     .select(MESSAGE_COLUMNS)
     .maybeSingle();
 
-  if (error || !data) throwMessagingError(error, 'Could not delete this message.');
+  if (!error && data) {
+    return toChatMessage(data);
+  }
 
-  const message = toChatMessage(data);
-  broadcastMessageEvent('delete_message', message);
-  return message;
+  // Fallback for admins moderating another user's message if caller did not pass asModerator
+  const { data: modRow, error: modErr } = await supabase.rpc('moderate_delete_message', {
+    p_message_id: messageId,
+  });
+  if (!modErr && modRow) {
+    return toChatMessage(modRow);
+  }
+
+  throwMessagingError(error || modErr, 'Could not delete this message.');
+}
+
+// ---------------------------------------------------------------------------
+// 6B. PERSISTENT OFFICIAL ANNOUNCEMENT BROADCAST (ADMIN / SUPER ADMIN ONLY)
+// ---------------------------------------------------------------------------
+export async function publishOfficialAnnouncement(
+  announcementText: string,
+  fallbackConversationId?: string | null
+): Promise<{ conversationId: string; persisted: boolean }> {
+  const cleanText = (announcementText ?? '').trim();
+  if (!cleanText) {
+    throw new MessagingError('Announcement message cannot be empty.');
+  }
+  if (!isSupabaseConfigured) {
+    throw new MessagingError('Supabase is not configured. Official announcements require a live database.');
+  }
+
+  // 1. Primary path: SECURITY DEFINER RPC persists into canonical 'szmc-official-announcements'
+  //    channel, enrolls all active profiles, and streams via RLS-protected postgres_changes.
+  const { data: rpcConvId, error: rpcErr } = await supabase.rpc('broadcast_announcement', {
+    announcement_text: cleanText,
+  });
+
+  if (!rpcErr && rpcConvId) {
+    return { conversationId: String(rpcConvId), persisted: true };
+  }
+
+  const msg = rpcErr?.message || '';
+  const code = String((rpcErr as any)?.code || '');
+  const isAccessDenied = /Access Denied|Authentication required|cannot be empty/i.test(msg);
+  if (isAccessDenied) {
+    throw new MessagingError(msg, code);
+  }
+
+  // 2. Graceful fallback if migration 026 RPC is not yet applied remotely:
+  //    persist directly into the canonical announcement conversation (or active thread),
+  //    NEVER firing an unpersisted fake global broadcast.
+  const myId = await resolveSelfProfileId();
+  let targetConvId = fallbackConversationId || OFFICIAL_ANNOUNCEMENT_CHANNEL_ID;
+
+  if (!fallbackConversationId) {
+    const { data: existingChannel } = await supabase
+      .from('conversations')
+      .select('id')
+      .eq('id', OFFICIAL_ANNOUNCEMENT_CHANNEL_ID)
+      .maybeSingle();
+
+    if (!existingChannel?.id) {
+      const nowIso = new Date().toISOString();
+      const { error: createErr } = await supabase.from('conversations').insert({
+        id: OFFICIAL_ANNOUNCEMENT_CHANNEL_ID,
+        created_by: myId,
+        type: 'announcement',
+        title: 'SZMC Official Announcements',
+        last_message: cleanText.slice(0, 200),
+        last_message_at: nowIso,
+      });
+      if (createErr) {
+        throwMessagingError(
+          createErr,
+          'Could not create the Official Announcements channel. Apply migration 026_phase9a_messenger_security_privacy.sql.'
+        );
+      }
+      await supabase.from('conversation_participants').upsert(
+        {
+          conversation_id: OFFICIAL_ANNOUNCEMENT_CHANNEL_ID,
+          profile_id: myId,
+          last_read_at: nowIso,
+          is_muted: false,
+        },
+        { onConflict: 'conversation_id,profile_id' }
+      );
+    }
+    targetConvId = OFFICIAL_ANNOUNCEMENT_CHANNEL_ID;
+  }
+
+  await sendMessage(targetConvId, myId, cleanText, { type: 'system' });
+  return { conversationId: targetConvId, persisted: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -792,6 +1339,32 @@ export async function markConversationRead(conversationId: string, myProfileId?:
       .eq('profile_id', myId);
   } catch {
     /* read markers are non-critical */
+  }
+}
+
+export async function getPeerLastReadAt(conversationId: string, myProfileId?: number | null): Promise<string | null> {
+  if (!conversationId || !isSupabaseConfigured) return null;
+  try {
+    const myId = await resolveSelfProfileId(myProfileId);
+    const { data } = await supabase
+      .from('conversation_participants')
+      .select('profile_id, last_read_at')
+      .eq('conversation_id', conversationId)
+      .neq('profile_id', myId)
+      .limit(1)
+      .maybeSingle();
+    return data?.last_read_at ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function touchMyLastSeen(): Promise<void> {
+  if (!isSupabaseConfigured) return;
+  try {
+    await supabase.rpc('touch_my_last_seen');
+  } catch {
+    /* best-effort heartbeat */
   }
 }
 
@@ -1118,7 +1691,7 @@ export async function getMessagingConnectionStatus() {
 }
 
 // ---------------------------------------------------------------------------
-// 10. ALUMNI SEARCH — direct public.alumni_profiles query
+// 10. ALUMNI SEARCH — direct public.alumni_profiles query (excludes blocked accounts)
 // ---------------------------------------------------------------------------
 export async function searchAlumniForChat(query: string, myProfileId?: number | null): Promise<ChatPerson[]> {
   const term = (query || '').trim().replace(/[%_,()]/g, ' ').trim();
@@ -1126,17 +1699,23 @@ export async function searchAlumniForChat(query: string, myProfileId?: number | 
 
   const myId = (await getMessagingProfileId()) ?? myProfileId ?? null;
 
-  const { data, error } = await supabase
-    .from('alumni_profiles')
-    .select(ALUMNI_PUBLIC_COLUMNS)
-    .or(`full_name.ilike.%${term}%,profession.ilike.%${term}%,institution.ilike.%${term}%`)
-    .order('full_name', { ascending: true })
-    .limit(25);
+  const [{ data, error }, blockState] = await Promise.all([
+    supabase
+      .from('alumni_profiles')
+      .select(ALUMNI_PUBLIC_COLUMNS)
+      .or(`full_name.ilike.%${term}%,profession.ilike.%${term}%,institution.ilike.%${term}%`)
+      .order('full_name', { ascending: true })
+      .limit(25),
+    getMessengerBlockState(myId),
+  ]);
 
   if (error) throwMessagingError(error, 'Search is temporarily unavailable.');
 
   return (data ?? [])
-    .filter((row: any) => Number(row.id) !== Number(myId))
+    .filter((row: any) => {
+      const rowId = Number(row.id);
+      return rowId !== Number(myId) && !blockState.blockedEitherWay.has(rowId);
+    })
     .map((row: any) =>
       toChatPerson(
         {
@@ -1156,33 +1735,137 @@ export async function searchAlumniForChat(query: string, myProfileId?: number | 
 }
 
 // ---------------------------------------------------------------------------
-// 11. SUPABASE REALTIME — postgres_changes (database) + broadcast (typing)
+// 11. SUPABASE REALTIME — STRICTLY SCOPED ISOLATION + AUTO-RECONNECT + PRESENCE
+//     • 'messages-db-sync': RLS-protected postgres_changes ONLY (zero global broadcast!)
+//     • 'conversation-room:<conversationId>': per-thread ephemeral typing channel ONLY
+//     • 'messenger-presence': real Supabase Realtime Presence for online alumni
 // ---------------------------------------------------------------------------
 export type MessagingRealtimeStatus = 'SUBSCRIBED' | 'CONNECTING' | 'CLOSED' | 'OFFLINE';
 
-let sharedMessagesChannel: RealtimeChannel | null = null;
-const messageListeners = new Set<(message: ChatMessage) => void>();
+interface ScopedRoomEntry {
+  channel: RealtimeChannel;
+  listeners: Set<(data: { conversationId: string; profileId: number; fullName: string }) => void>;
+}
+
+let sharedDbSyncChannel: RealtimeChannel | null = null;
+const scopedRoomChannels = new Map<string, ScopedRoomEntry>();
+
+const messageListeners = new Set<(message: ChatMessage, meta: MessageChangeMeta) => void>();
 const conversationListeners = new Set<() => void>();
-const typingListeners = new Set<(data: { conversationId: string; profileId: number; fullName: string }) => void>();
+const readReceiptListeners = new Set<(receipt: ReadReceiptEvent) => void>();
+const reactionListeners = new Set<(event: ReactionChangeEvent) => void>();
 const realtimeStatusListeners = new Set<(status: MessagingRealtimeStatus) => void>();
+const realtimeReconnectListeners = new Set<() => void>();
+
 let realtimeChannelStatus: MessagingRealtimeStatus = isSupabaseConfigured ? 'CONNECTING' : 'OFFLINE';
+let hasSubscribedOnce = false;
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let reconnectAttempt = 0;
+let networkHooksRegistered = false;
 const seenMessageSignatures = new Map<string, number>();
 
+function hasActiveRealtimeListeners(): boolean {
+  return (
+    messageListeners.size > 0 ||
+    conversationListeners.size > 0 ||
+    readReceiptListeners.size > 0 ||
+    reactionListeners.size > 0 ||
+    realtimeStatusListeners.size > 0
+  );
+}
+
 function setRealtimeStatus(status: MessagingRealtimeStatus) {
+  const prevStatus = realtimeChannelStatus;
   realtimeChannelStatus = status;
   realtimeStatusListeners.forEach((fn) => {
     try {
       fn(status);
     } catch {}
   });
+
+  if (status === 'SUBSCRIBED') {
+    const wasDisconnected = hasSubscribedOnce && prevStatus !== 'SUBSCRIBED';
+    hasSubscribedOnce = true;
+    reconnectAttempt = 0;
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    if (wasDisconnected) {
+      emitReconnect();
+    }
+  }
 }
 
-function emitMessage(message: ChatMessage, source: 'postgres' | 'broadcast') {
-  // postgres_changes and the peer broadcast can deliver the same row → dedupe briefly.
-  const signature = `${message.id}:${message.editedAt ?? ''}:${message.deletedAt ?? ''}`;
+function emitReconnect() {
+  realtimeReconnectListeners.forEach((fn) => {
+    try {
+      fn();
+    } catch {}
+  });
+}
+
+function scheduleDbSyncReconnect() {
+  if (!isSupabaseConfigured || !hasActiveRealtimeListeners()) return;
+  if (reconnectTimer) return;
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    setRealtimeStatus('OFFLINE');
+    return;
+  }
+
+  const delayMs = Math.min(30000, 1500 * Math.pow(2, reconnectAttempt));
+  reconnectAttempt += 1;
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    if (!hasActiveRealtimeListeners()) return;
+    if (sharedDbSyncChannel) {
+      try {
+        void supabase.removeChannel(sharedDbSyncChannel);
+      } catch {}
+      sharedDbSyncChannel = null;
+    }
+    getOrCreateMessagesChannel();
+  }, delayMs);
+}
+
+function ensureNetworkAndVisibilityHooks() {
+  if (networkHooksRegistered || typeof window === 'undefined') return;
+  networkHooksRegistered = true;
+
+  window.addEventListener('online', () => {
+    if (!hasActiveRealtimeListeners()) return;
+    reconnectAttempt = 0;
+    if (realtimeChannelStatus !== 'SUBSCRIBED') {
+      forceReconnectMessagingRealtime();
+    } else {
+      emitReconnect();
+    }
+  });
+
+  window.addEventListener('offline', () => {
+    if (hasActiveRealtimeListeners()) {
+      setRealtimeStatus('OFFLINE');
+    }
+  });
+
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible' || !hasActiveRealtimeListeners()) return;
+      if (realtimeChannelStatus !== 'SUBSCRIBED') {
+        forceReconnectMessagingRealtime();
+      } else {
+        // Reconcile any events missed while the browser tab was throttled/sleeping
+        emitReconnect();
+      }
+    });
+  }
+}
+
+function emitMessage(message: ChatMessage, meta: MessageChangeMeta) {
+  const signature = `${meta.eventType}:${message.id}:${message.body.length}:${message.editedAt ?? ''}:${message.deletedAt ?? ''}`;
   const now = Date.now();
   const previous = seenMessageSignatures.get(signature);
-  if (previous && now - previous < 4000) return;
+  if (previous && now - previous < 2500) return;
   seenMessageSignatures.set(signature, now);
   if (seenMessageSignatures.size > 500) {
     for (const [key, ts] of seenMessageSignatures) {
@@ -1192,45 +1875,52 @@ function emitMessage(message: ChatMessage, source: 'postgres' | 'broadcast') {
 
   messageListeners.forEach((fn) => {
     try {
-      fn(message);
+      fn(message, meta);
     } catch (err) {
-      console.warn(`Message listener error (${source}):`, err);
+      console.warn('Message listener error (postgres_changes):', err);
     }
   });
 }
 
 /**
- * Shared Realtime channel.
- *  • postgres_changes on public.messages                → inserts, edits, soft deletes
- *  • postgres_changes on public.conversation_participants → new chats / read markers
- *  • broadcast 'typing'                                  → typing indicators
- * Supabase applies RLS to postgres_changes, so only rows the signed-in user may
- * read are delivered.
+ * RLS-enforced database sync channel (`messages-db-sync`).
+ * Only listens to `postgres_changes` on `messages`, `conversation_participants`, and
+ * `conversations`. Supabase applies Postgres RLS server-side before dispatching each
+ * row, guaranteeing users only ever receive events for their own conversations.
+ *
+ * Includes automatic exponential-backoff reconnection and visibility/online resync.
  */
 export function getOrCreateMessagesChannel(): RealtimeChannel | null {
   if (!isSupabaseConfigured) {
     setRealtimeStatus('OFFLINE');
     return null;
   }
-  if (sharedMessagesChannel) return sharedMessagesChannel;
+  ensureNetworkAndVisibilityHooks();
+
+  if (sharedDbSyncChannel && realtimeChannelStatus !== 'CLOSED' && realtimeChannelStatus !== 'OFFLINE') {
+    return sharedDbSyncChannel;
+  }
+
+  if (sharedDbSyncChannel) {
+    try {
+      void supabase.removeChannel(sharedDbSyncChannel);
+    } catch {}
+    sharedDbSyncChannel = null;
+  }
 
   try {
     setRealtimeStatus('CONNECTING');
 
-    sharedMessagesChannel = supabase.channel('messages-realtime-feed', {
-      config: {
-        // self: false → the sender's own broadcast is ignored; their row arrives
-        // through postgres_changes so the UI never double-renders a message.
-        broadcast: { self: false },
-      },
-    });
+    const channel = supabase.channel('messages-db-sync');
+    sharedDbSyncChannel = channel;
 
-    sharedMessagesChannel
+    channel
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'messages' },
         (payload: any) => {
-          if (payload.eventType === 'DELETE') {
+          const eventType = (payload.eventType || 'INSERT') as MessageChangeMeta['eventType'];
+          if (eventType === 'DELETE') {
             const old = payload.old || {};
             if (!old.id) return;
             emitMessage(
@@ -1245,35 +1935,47 @@ export function getOrCreateMessagesChannel(): RealtimeChannel | null {
                 type: 'text',
                 mediaUrl: null,
               },
-              'postgres'
+              { eventType: 'DELETE' }
             );
             return;
           }
           if (!payload.new?.id) return;
-          emitMessage(toChatMessage(payload.new), 'postgres');
+          emitMessage(toChatMessage(payload.new), { eventType });
         }
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'conversation_participants' },
-        () => {
-          // Membership changes (someone starts a chat, joins or leaves) → refresh the
-          // inbox. This is NOT a message event: emitting one would blank previews and
-          // inflate unread badges, so it goes through its own listener set.
-          conversationListeners.forEach((fn) => {
-            try {
-              fn();
-            } catch (err) {
-              console.warn('Conversation listener error:', err);
-            }
-          });
+        (payload: any) => {
+          const row = payload.new || {};
+          if (payload.eventType === 'UPDATE' && row.conversation_id && row.profile_id && row.last_read_at) {
+            const receipt: ReadReceiptEvent = {
+              conversationId: String(row.conversation_id),
+              profileId: Number(row.profile_id),
+              lastReadAt: String(row.last_read_at),
+            };
+            readReceiptListeners.forEach((fn) => {
+              try {
+                fn(receipt);
+              } catch {}
+            });
+          }
+          // Only refresh full conversation list on membership insert/delete or mute toggle
+          if (payload.eventType !== 'UPDATE' || row.is_muted !== payload.old?.is_muted) {
+            conversationListeners.forEach((fn) => {
+              try {
+                fn();
+              } catch (err) {
+                console.warn('Conversation listener error:', err);
+              }
+            });
+          }
         }
       )
       .on(
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'conversations' },
         () => {
-          // last_message / last_message_at changed (set by the messages trigger).
           conversationListeners.forEach((fn) => {
             try {
               fn();
@@ -1281,60 +1983,126 @@ export function getOrCreateMessagesChannel(): RealtimeChannel | null {
           });
         }
       )
-      .on('broadcast', { event: 'new_message' }, ({ payload }) => {
-        if (payload?.id) emitMessage(payload as ChatMessage, 'broadcast');
-      })
-      .on('broadcast', { event: 'edit_message' }, ({ payload }) => {
-        if (payload?.id) emitMessage(payload as ChatMessage, 'broadcast');
-      })
-      .on('broadcast', { event: 'delete_message' }, ({ payload }) => {
-        if (payload?.id) emitMessage(payload as ChatMessage, 'broadcast');
-      })
-      .on('broadcast', { event: 'typing' }, ({ payload }) => {
-        if (!payload?.conversationId) return;
-        typingListeners.forEach((fn) => {
-          try {
-            fn(payload);
-          } catch {}
-        });
-      })
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'message_reactions' },
+        (payload: any) => {
+          const eventType = payload.eventType === 'DELETE' ? 'DELETE' : 'INSERT';
+          const row = eventType === 'DELETE' ? payload.old : payload.new;
+          if (!row?.message_id || !row?.profile_id || !row?.emoji) return;
+          const event: ReactionChangeEvent = {
+            eventType,
+            reaction: {
+              messageId: String(row.message_id),
+              profileId: Number(row.profile_id),
+              emoji: String(row.emoji),
+              createdAt: row.created_at ?? undefined,
+            },
+          };
+          reactionListeners.forEach((fn) => {
+            try {
+              fn(event);
+            } catch {}
+          });
+        }
+      )
       .subscribe((status) => {
+        if (sharedDbSyncChannel !== channel) return;
         if (status === 'SUBSCRIBED') {
           setRealtimeStatus('SUBSCRIBED');
         } else if (status === 'TIMED_OUT' || status === 'CLOSED' || status === 'CHANNEL_ERROR') {
-          setRealtimeStatus('CLOSED');
+          setRealtimeStatus(
+            typeof navigator !== 'undefined' && navigator.onLine === false ? 'OFFLINE' : 'CLOSED'
+          );
+          scheduleDbSyncReconnect();
         } else {
           setRealtimeStatus('CONNECTING');
         }
       });
 
-    return sharedMessagesChannel;
+    return channel;
   } catch (err) {
-    console.warn('Failed to initialize Supabase Realtime channel:', err);
+    console.warn('Failed to initialize Supabase Realtime DB sync channel:', err);
     setRealtimeStatus('CLOSED');
-    sharedMessagesChannel = null;
+    sharedDbSyncChannel = null;
+    scheduleDbSyncReconnect();
     return null;
   }
 }
 
-export function broadcastMessageEvent(
-  event: 'new_message' | 'edit_message' | 'delete_message',
-  message: ChatMessage
-) {
-  const channel = getOrCreateMessagesChannel();
-  if (!channel || !isSupabaseConfigured) return;
-  try {
-    void channel.send({ type: 'broadcast', event, payload: message });
-  } catch (err) {
-    console.warn('Realtime broadcast error:', err);
+/** Forces an immediate teardown & reconnection of the Realtime sync channel. */
+export function forceReconnectMessagingRealtime(): void {
+  if (!isSupabaseConfigured) return;
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
   }
+  reconnectAttempt = 0;
+  if (sharedDbSyncChannel) {
+    try {
+      void supabase.removeChannel(sharedDbSyncChannel);
+    } catch {}
+    sharedDbSyncChannel = null;
+  }
+  getOrCreateMessagesChannel();
 }
 
-export function sendTypingIndicator(conversationId: string, profileId: number, fullName: string) {
-  const channel = getOrCreateMessagesChannel();
-  if (!channel || !isSupabaseConfigured) return;
+/**
+ * Joins or reuses a per-conversation scoped Realtime channel (`conversation-room:<id>`)
+ * exclusively for ephemeral typing indicators inside that specific thread.
+ */
+function acquireConversationRoom(conversationId: string): ScopedRoomEntry | null {
+  if (!isSupabaseConfigured || !conversationId) return null;
+
+  const existing = scopedRoomChannels.get(conversationId);
+  if (existing) return existing;
+
+  const listeners = new Set<(data: { conversationId: string; profileId: number; fullName: string }) => void>();
+  const channel = supabase.channel(`conversation-room:${conversationId}`, {
+    config: {
+      broadcast: { self: false },
+    },
+  });
+
+  channel
+    .on('broadcast', { event: 'typing' }, ({ payload }) => {
+      if (!payload || String(payload.conversationId) !== conversationId) return;
+      listeners.forEach((fn) => {
+        try {
+          fn({
+            conversationId,
+            profileId: Number(payload.profileId || 0),
+            fullName: String(payload.fullName || 'Colleague'),
+          });
+        } catch {}
+      });
+    })
+    .subscribe();
+
+  const entry: ScopedRoomEntry = { channel, listeners };
+  scopedRoomChannels.set(conversationId, entry);
+  return entry;
+}
+
+function releaseConversationRoomIfUnused(conversationId: string) {
+  const entry = scopedRoomChannels.get(conversationId);
+  if (!entry || entry.listeners.size > 0) return;
   try {
-    void channel.send({
+    void supabase.removeChannel(entry.channel);
+  } catch {}
+  scopedRoomChannels.delete(conversationId);
+}
+
+/**
+ * Sends a typing indicator strictly to the active conversation's scoped room channel.
+ * Unrelated users never subscribe to this room and never receive the event.
+ */
+export function sendTypingIndicator(conversationId: string, profileId: number, fullName: string) {
+  if (!isSupabaseConfigured || !conversationId) return;
+  const room = scopedRoomChannels.get(conversationId);
+  if (!room) return;
+  try {
+    void room.channel.send({
       type: 'broadcast',
       event: 'typing',
       payload: { conversationId, profileId, fullName },
@@ -1342,13 +2110,136 @@ export function sendTypingIndicator(conversationId: string, profileId: number, f
   } catch {}
 }
 
+/**
+ * Subscribes to typing indicators strictly inside `conversationId`'s isolated room.
+ * Automatically leaves and cleans up the room channel when unsubscribed.
+ */
 export function subscribeToTypingStatus(
+  conversationId: string | null | undefined,
   onTyping: (data: { conversationId: string; profileId: number; fullName: string }) => void
 ): () => void {
-  typingListeners.add(onTyping);
-  getOrCreateMessagesChannel();
+  if (!conversationId || !isSupabaseConfigured) {
+    return () => {};
+  }
+  const room = acquireConversationRoom(conversationId);
+  if (!room) return () => {};
+  room.listeners.add(onTyping);
   return () => {
-    typingListeners.delete(onTyping);
+    room.listeners.delete(onTyping);
+    releaseConversationRoomIfUnused(conversationId);
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 11B. REAL SUPABASE REALTIME PRESENCE ('messenger-presence')
+//      Replaces hardcoded green dots and mock Active Now trays with live state.
+// ---------------------------------------------------------------------------
+let presenceChannel: RealtimeChannel | null = null;
+let presenceTrackedProfileId: number | null = null;
+const onlineUsersMap = new Map<number, OnlinePresenceUser>();
+const presenceListeners = new Set<(users: OnlinePresenceUser[]) => void>();
+
+function emitPresenceSnapshot() {
+  const snapshot = Array.from(onlineUsersMap.values()).sort((a, b) =>
+    a.fullName.localeCompare(b.fullName)
+  );
+  presenceListeners.forEach((fn) => {
+    try {
+      fn(snapshot);
+    } catch {}
+  });
+}
+
+function rebuildPresenceMapFromChannel(channel: RealtimeChannel) {
+  onlineUsersMap.clear();
+  const state = channel.presenceState<any>();
+  Object.values(state).forEach((presences) => {
+    if (!Array.isArray(presences)) return;
+    presences.forEach((entry: any) => {
+      const pid = Number(entry?.profileId);
+      if (!Number.isFinite(pid) || pid <= 0) return;
+      onlineUsersMap.set(pid, {
+        profileId: pid,
+        fullName: String(entry.fullName || 'SZMC Alumnus'),
+        avatarUrl: String(entry.avatarUrl || FALLBACK_AVATAR),
+        batchYear: Number(entry.batchYear) || 20,
+        onlineAt: String(entry.onlineAt || new Date().toISOString()),
+      });
+    });
+  });
+  emitPresenceSnapshot();
+}
+
+export function getOnlineUsers(): OnlinePresenceUser[] {
+  return Array.from(onlineUsersMap.values());
+}
+
+export function getOnlineProfileIds(): Set<number> {
+  return new Set(onlineUsersMap.keys());
+}
+
+export function subscribeToOnlinePresence(
+  selfProfile: { profileId: number; fullName: string; avatarUrl: string; batchYear: number } | null,
+  onOnlineUsersChange: (users: OnlinePresenceUser[]) => void
+): () => void {
+  presenceListeners.add(onOnlineUsersChange);
+  onOnlineUsersChange(getOnlineUsers());
+
+  if (!isSupabaseConfigured || !selfProfile || !selfProfile.profileId) {
+    return () => {
+      presenceListeners.delete(onOnlineUsersChange);
+    };
+  }
+
+  // If the tracked profile changed (e.g. resolved from alumni_profiles.id -> profiles.id), recreate presence channel
+  if (presenceChannel && presenceTrackedProfileId !== selfProfile.profileId) {
+    try {
+      void supabase.removeChannel(presenceChannel);
+    } catch {}
+    presenceChannel = null;
+    presenceTrackedProfileId = null;
+  }
+
+  if (!presenceChannel) {
+    presenceTrackedProfileId = selfProfile.profileId;
+    const channel = supabase.channel('messenger-presence', {
+      config: {
+        presence: { key: String(selfProfile.profileId) },
+      },
+    });
+    presenceChannel = channel;
+
+    channel
+      .on('presence', { event: 'sync' }, () => rebuildPresenceMapFromChannel(channel))
+      .on('presence', { event: 'join' }, () => rebuildPresenceMapFromChannel(channel))
+      .on('presence', { event: 'leave' }, () => rebuildPresenceMapFromChannel(channel))
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          void channel.track({
+            profileId: selfProfile.profileId,
+            fullName: selfProfile.fullName || 'SZMC Alumnus',
+            avatarUrl: selfProfile.avatarUrl || FALLBACK_AVATAR,
+            batchYear: selfProfile.batchYear || 20,
+            onlineAt: new Date().toISOString(),
+          });
+          void touchMyLastSeen();
+        }
+      });
+  }
+
+  return () => {
+    presenceListeners.delete(onOnlineUsersChange);
+    if (presenceListeners.size === 0 && presenceChannel) {
+      const ch = presenceChannel;
+      presenceChannel = null;
+      presenceTrackedProfileId = null;
+      onlineUsersMap.clear();
+      void touchMyLastSeen();
+      try {
+        void ch.untrack();
+        void supabase.removeChannel(ch);
+      } catch {}
+    }
   };
 }
 
@@ -1363,11 +2254,36 @@ export function subscribeToRealtimeConnectionStatus(
   };
 }
 
+export function subscribeToRealtimeReconnect(onReconnect: () => void): () => void {
+  realtimeReconnectListeners.add(onReconnect);
+  return () => {
+    realtimeReconnectListeners.delete(onReconnect);
+  };
+}
+
+export function subscribeToReadReceipts(onReceipt: (receipt: ReadReceiptEvent) => void): () => void {
+  readReceiptListeners.add(onReceipt);
+  getOrCreateMessagesChannel();
+  return () => {
+    readReceiptListeners.delete(onReceipt);
+  };
+}
+
+export function subscribeToReactionChanges(onChange: (event: ReactionChangeEvent) => void): () => void {
+  reactionListeners.add(onChange);
+  getOrCreateMessagesChannel();
+  return () => {
+    reactionListeners.delete(onChange);
+  };
+}
+
 export function getRealtimeChannelStatus(): MessagingRealtimeStatus {
   return realtimeChannelStatus;
 }
 
-export function subscribeToMessageChanges(onChange: (message: ChatMessage) => void): () => void {
+export function subscribeToMessageChanges(
+  onChange: (message: ChatMessage, meta: MessageChangeMeta) => void
+): () => void {
   messageListeners.add(onChange);
   getOrCreateMessagesChannel();
   return () => {
@@ -1387,12 +2303,34 @@ export function subscribeToConversationChanges(onRefresh: () => void): () => voi
   };
 }
 
-/** Tears down the shared channel (used on sign-out / hot reload). */
+/** Tears down the DB sync channel, presence channel, and all scoped rooms (sign-out / account switch). */
 export function closeMessagingRealtime() {
-  if (!sharedMessagesChannel) return;
-  try {
-    void supabase.removeChannel(sharedMessagesChannel);
-  } catch {}
-  sharedMessagesChannel = null;
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  reconnectAttempt = 0;
+  hasSubscribedOnce = false;
+  if (sharedDbSyncChannel) {
+    try {
+      void supabase.removeChannel(sharedDbSyncChannel);
+    } catch {}
+    sharedDbSyncChannel = null;
+  }
+  if (presenceChannel) {
+    try {
+      void presenceChannel.untrack();
+      void supabase.removeChannel(presenceChannel);
+    } catch {}
+    presenceChannel = null;
+    presenceTrackedProfileId = null;
+    onlineUsersMap.clear();
+  }
+  for (const [, entry] of scopedRoomChannels) {
+    try {
+      void supabase.removeChannel(entry.channel);
+    } catch {}
+  }
+  scopedRoomChannels.clear();
   setRealtimeStatus(isSupabaseConfigured ? 'CONNECTING' : 'OFFLINE');
 }
