@@ -6,14 +6,10 @@ import {
   Users,
   Lock,
   Volume2,
-  VolumeX,
   Eye,
-  Mail,
   Check,
   Loader2,
   Database,
-  ExternalLink,
-  Copy,
   CheckCircle2,
   AlertCircle,
   RefreshCw,
@@ -119,6 +115,15 @@ export const MessageSettingsModal: React.FC<MessageSettingsModalProps> = ({
     }
   }, [isOpen, profileId]);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isOpen, onClose]);
+
   const handleRefreshStatus = async () => {
     setCheckingDb(true);
     try {
@@ -164,22 +169,28 @@ export const MessageSettingsModal: React.FC<MessageSettingsModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm animate-fadeIn">
-      <div className="relative w-full max-w-xl max-h-[90vh] flex flex-col rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden">
+    <div
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-950/70 backdrop-blur-sm animate-fadeIn"
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="message-settings-modal-title"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="relative w-full max-w-xl max-h-[92dvh] flex flex-col rounded-t-3xl sm:rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden"
+      >
         {/* Header */}
-        <div className="px-6 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between gap-3 bg-gradient-to-r from-blue-50/50 via-white to-indigo-50/30 dark:from-slate-900 dark:via-slate-900 dark:to-slate-900">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-blue-600 text-white flex items-center justify-center shadow-md shadow-blue-500/20">
+        <div className="px-4 sm:px-6 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between gap-3 bg-gradient-to-r from-blue-50/50 via-white to-indigo-50/30 dark:from-slate-900 dark:via-slate-900 dark:to-slate-900">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-10 h-10 rounded-2xl bg-blue-600 text-white flex items-center justify-center shadow-md shadow-blue-500/20 shrink-0">
               <Sliders className="w-5 h-5" />
             </div>
-            <div>
-              <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                Message & Privacy Settings
-                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-100 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300">
-                  Supabase Live
-                </span>
+            <div className="min-w-0">
+              <h2 id="message-settings-modal-title" className="text-base font-bold text-slate-900 dark:text-white truncate">
+                Message &amp; Privacy Settings
               </h2>
-              <p className="text-xs text-slate-500 dark:text-slate-400">
+              <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
                 Control incoming chats, privacy, read receipts, and alerts
               </p>
             </div>
@@ -187,14 +198,15 @@ export const MessageSettingsModal: React.FC<MessageSettingsModalProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="p-2 rounded-xl text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+            aria-label="Close settings"
+            className="min-w-[40px] min-h-[40px] rounded-xl text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center transition-colors cursor-pointer shrink-0"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Content Body */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6">
           {/* Technical Supabase connection diagnostics — Super Admin only */}
           {isSuperAdmin && (
             <div className="p-3.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/60 space-y-2">
@@ -250,7 +262,7 @@ export const MessageSettingsModal: React.FC<MessageSettingsModalProps> = ({
                   <Shield className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
                   Who can send you direct messages
                 </label>
-                <div className="space-y-2">
+                <div className="space-y-2" role="radiogroup" aria-label="Who can send you direct messages">
                   {[
                     {
                       id: 'everyone',
@@ -274,10 +286,13 @@ export const MessageSettingsModal: React.FC<MessageSettingsModalProps> = ({
                     const isSelected = settings.whoCanMessage === opt.id;
                     const Icon = opt.icon;
                     return (
-                      <div
+                      <button
                         key={opt.id}
+                        type="button"
+                        role="radio"
+                        aria-checked={isSelected}
                         onClick={() => handleToggle('whoCanMessage', opt.id)}
-                        className={`p-3.5 rounded-2xl border transition-all cursor-pointer flex items-start gap-3.5 ${
+                        className={`w-full text-left p-3.5 rounded-2xl border transition-all cursor-pointer flex items-start gap-3.5 ${
                           isSelected
                             ? 'border-blue-600 bg-blue-50/60 dark:bg-blue-950/30 dark:border-blue-500 shadow-sm'
                             : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-white dark:bg-slate-900/40'
@@ -293,10 +308,10 @@ export const MessageSettingsModal: React.FC<MessageSettingsModalProps> = ({
                           <Icon className="w-4 h-4" />
                         </div>
                         <div className="flex-1 min-w-0">
-                          <p className="text-sm font-bold text-slate-900 dark:text-white flex items-center justify-between">
+                          <span className="text-sm font-bold text-slate-900 dark:text-white flex items-center justify-between gap-2">
                             <span>{opt.label}</span>
                             <span
-                              className={`w-4 h-4 rounded-full border flex items-center justify-center ${
+                              className={`w-4 h-4 rounded-full border flex items-center justify-center shrink-0 ${
                                 isSelected
                                   ? 'border-blue-600 bg-blue-600 text-white'
                                   : 'border-slate-300 dark:border-slate-600'
@@ -304,12 +319,12 @@ export const MessageSettingsModal: React.FC<MessageSettingsModalProps> = ({
                             >
                               {isSelected && <span className="w-1.5 h-1.5 rounded-full bg-white" />}
                             </span>
-                          </p>
-                          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
+                          </span>
+                          <span className="block text-xs text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
                             {opt.desc}
-                          </p>
+                          </span>
                         </div>
-                      </div>
+                      </button>
                     );
                   })}
                 </div>
@@ -459,6 +474,7 @@ export const MessageSettingsModal: React.FC<MessageSettingsModalProps> = ({
                           <img
                             src={entry.avatarUrl}
                             alt={entry.fullName}
+                            referrerPolicy="no-referrer"
                             className="w-8 h-8 rounded-full object-cover shrink-0 ring-1 ring-slate-200 dark:ring-slate-700"
                           />
                           <div className="min-w-0">

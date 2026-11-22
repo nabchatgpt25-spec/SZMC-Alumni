@@ -1,3 +1,5 @@
+import type { ClinicalStatusKey } from '../utils/clinicalStatus';
+
 export interface ChatPerson {
   profileId: number;
   fullName: string;
@@ -46,12 +48,14 @@ export interface ChatMessage {
   createdAt: string;
   editedAt: string | null;
   deletedAt: string | null;
-  /** public.messages.type: 'text' | 'like' | 'system' | 'image' */
-  type?: string;
+  /** public.messages.type: 'text' | 'like' | 'system' | 'image' | 'ProfileShareCard' */
+  type?: 'text' | 'like' | 'system' | 'image' | 'ProfileShareCard' | string;
   /** public.messages.media_url (image attachments stored as public URLs or compressed data URLs) */
   mediaUrl?: string | null;
   /** Optional quoted/replied-to message ID */
   replyToMessageId?: string | null;
+  /** True when delivered quietly via "Send Quietly" (suppresses recipient notification sound) */
+  isSilent?: boolean;
   /** Client-side delivery state for optimistic messages */
   status?: MessageDeliveryStatus;
   /** Client-only temporary ID used before server reconciliation */
@@ -75,10 +79,13 @@ export interface ReadReceiptEvent {
 
 export interface OnlinePresenceUser {
   profileId: number;
+  appProfileId?: number;
   fullName: string;
   avatarUrl: string;
   batchYear: number;
   onlineAt: string;
+  clinicalStatus?: ClinicalStatusKey | null;
+  statusUpdatedAt?: string | null;
 }
 
 export interface UserMessageSettings {

@@ -19,7 +19,21 @@ import { OutstandingLoadingScreen } from './components/OutstandingLoadingScreen'
 import { AdminSettingsProvider } from './components/admin/AdminSettingsProvider';
 import { activityTracker } from './services/activityTracker';
 import { loadFeatureFlags } from './services/featureFlagsService';
+import {
+  getTotalUnreadCount,
+  subscribeToConversationChanges,
+  subscribeToMessageChanges,
+  subscribeToOnlinePresence,
+  subscribeToReadReceipts,
+  subscribeToRealtimeReconnect,
+} from './services/messagingService';
+import { useMessagingProfileId } from './hooks/useMessagingProfileId';
+import { loadSavedClinicalStatus } from './utils/clinicalStatus';
 import type { QuadFeedFilter } from './components/community/quadConstants';
+import { ALUMNI_PROFILES, loadStoredAlumniProfiles } from './data/mockData';
+import { FAMOUS_SZMC_ALUMNI } from './components/landing/FeaturedAlumniSection';
+import { INITIAL_OFFLINE_DIRECTORY } from './utils/offlineStorage';
+import { fetchAlumniProfileByIdFromDb } from './services/supabaseService';
 import './services/siteConfigService';
 
 // Code-split dynamic views for instant snappy initial page load
@@ -49,6 +63,7 @@ const VerificationCenterModal = lazy(() => import('./components/verification/Ver
 const BloodNetworkView = lazy(() => import('./components/BloodNetworkView').then(m => ({ default: m.BloodNetworkView })));
 const AdminPage = lazy(() => import('./components/admin/AdminPage').then(m => ({ default: m.AdminPage })));
 const SettingsView = lazy(() => import('./components/SettingsView').then(m => ({ default: m.SettingsView })));
+const FrostedProfileCardModal = lazy(() => import('./components/FrostedProfileCardModal').then(m => ({ default: m.FrostedProfileCardModal })));
 
 const ViewSkeletonFallback: React.FC = () => (
   <div className="w-full min-h-[380px] flex items-center justify-center p-8">
@@ -226,9 +241,126 @@ function AlumniAppContent() {
     setVerificationModalState({ isOpen: true, initialTab });
   };
 
-  // Facebook Messenger Floating Dock & Direct Message state
+  // Facebook Messenger Floating Dock, Direct Message & Live Unread Badge state
   const [dockChatPeer, setDockChatPeer] = useState<AlumniProfile | null>(null);
   const [messengerInitialProfileId, setMessengerInitialProfileId] = useState<number | null>(null);
+  const [messengerInitialConversationId, setMessengerInitialConversationId] = useState<string | null>(null);
+  const [unreadMessagesCount, setUnreadMessagesCount] = useState(0);
+
+  // Shareable Frosted Profile Card Modal state (?card=<id> deep-link or Header "Share Profile Card")
+  const [sharedCardProfile, setSharedCardProfile] = useState<AlumniProfile | null>(null);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const rawCard = new URLSearchParams(window.location.search).get('card');
+    const cardId = rawCard ? Number(rawCard) : 0;
+    if (!cardId || !Number.isFinite(cardId) || cardId <= 0) return;
+
+    let cancelled = false;
+    if (isLoggedIn && (currentUser.id === cardId || currentUser.userId === cardId)) {
+      setSharedCardProfile(currentUser);
+    } else {
+      const localPool = [
+        ...loadStoredAlumniProfiles(),
+        ...ALUMNI_PROFILES,
+        ...FAMOUS_SZMC_ALUMNI,
+        ...INITIAL_OFFLINE_DIRECTORY,
+      ];
+      const matched = localPool.find((p) => p.id === cardId || p.userId === cardId);
+      if (matched) setSharedCardProfile(matched);
+    }
+
+    void fetchAlumniProfileByIdFromDb(cardId)
+      .then((live) => {
+        if (!cancelled && live) setSharedCardProfile(live);
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isLoggedIn, currentUser.id]);
+
+  const closeSharedCardModal = () => {
+    setSharedCardProfile(null);
+    if (typeof window !== 'undefined') {
+      const u = new URL(window.location.href);
+      if (u.searchParams.has('card')) {
+        u.searchParams.delete('card');
+        window.history.replaceState({}, '', u.toString());
+      }
+    }
+  };
+
+  // Global Supabase Realtime Presence tracking (keeps live online & clinical status synced app-wide)
+  const { effectiveProfileId } = useMessagingProfileId(isLoggedIn ? currentUser.id : undefined);
+  useEffect(() => {
+    if (!isLoggedIn || !currentUser.id) return;
+    const trackedId = effectiveProfileId ?? currentUser.id;
+    const savedStatus =
+      loadSavedClinicalStatus(trackedId) ?? loadSavedClinicalStatus(currentUser.id);
+    return subscribeToOnlinePresence(
+      {
+        profileId: trackedId,
+        appProfileId: currentUser.id,
+        fullName: currentUser.fullName || 'SZMC Alumnus',
+        avatarUrl: currentUser.avatarUrl || '/szmc-logo.png',
+        batchYear: currentUser.batchYear || 20,
+        clinicalStatus: savedStatus,
+      },
+      () => {
+        /* individual views listen via subscribeToOnlinePresence(null, ...) */
+      }
+    );
+  }, [
+    isLoggedIn,
+    effectiveProfileId,
+    currentUser.id,
+    currentUser.fullName,
+    currentUser.avatarUrl,
+    currentUser.batchYear,
+  ]);
+
+  useEffect(() => {
+    if (!isLoggedIn || !currentUser.id) {
+      setUnreadMessagesCount(0);
+      return;
+    }
+    let cancelled = false;
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const refreshUnread = async () => {
+      try {
+        const count = await getTotalUnreadCount(currentUser.id);
+        if (!cancelled) setUnreadMessagesCount(count);
+      } catch {
+        /* non-critical badge sync */
+      }
+    };
+
+    const scheduleUnreadSync = () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        debounceTimer = null;
+        void refreshUnread();
+      }, 350);
+    };
+
+    void refreshUnread();
+    const unsubMessages = subscribeToMessageChanges(() => scheduleUnreadSync());
+    const unsubConvs = subscribeToConversationChanges(() => scheduleUnreadSync());
+    const unsubReceipts = subscribeToReadReceipts(() => scheduleUnreadSync());
+    const unsubReconnect = subscribeToRealtimeReconnect(() => void refreshUnread());
+
+    return () => {
+      cancelled = true;
+      if (debounceTimer) clearTimeout(debounceTimer);
+      unsubMessages();
+      unsubConvs();
+      unsubReceipts();
+      unsubReconnect();
+    };
+  }, [isLoggedIn, currentUser.id]);
 
   const handleStartDirectMessage = (peer: AlumniProfile) => {
     if (!isLoggedIn) {
@@ -245,6 +377,14 @@ function AlumniAppContent() {
   const handleOpenFullMessenger = (peerId: number) => {
     setDockChatPeer(null);
     setMessengerInitialProfileId(peerId);
+    navigateTo('messages');
+  };
+
+  const handleOpenConversation = (conversationId: string) => {
+    setDockChatPeer(null);
+    if (conversationId) {
+      setMessengerInitialConversationId(conversationId);
+    }
     navigateTo('messages');
   };
 
@@ -389,6 +529,20 @@ function AlumniAppContent() {
             />
           </Suspense>
         )}
+
+        {sharedCardProfile && (
+          <Suspense fallback={null}>
+            <FrostedProfileCardModal
+              profile={sharedCardProfile}
+              isOpen={Boolean(sharedCardProfile)}
+              onClose={closeSharedCardModal}
+              onRequireLogin={() => {
+                closeSharedCardModal();
+                setAuthModalMode('login');
+              }}
+            />
+          </Suspense>
+        )}
       </>
     );
   }
@@ -422,6 +576,7 @@ function AlumniAppContent() {
         onSelectTab={navigateTo}
         isOpen={isSidebarOpen}
         onClose={() => setIsSidebarOpen(false)}
+        unreadMessagesCount={unreadMessagesCount}
         onOpenVerificationCenter={openVerificationCenter}
       />
 
@@ -438,7 +593,9 @@ function AlumniAppContent() {
           }}
           searchQuery={globalSearch}
           onSearchChange={handleGlobalSearchChange}
+          unreadMessagesCount={unreadMessagesCount}
           onOpenVerificationCenter={openVerificationCenter}
+          onShareMyCard={() => setSharedCardProfile(currentUser)}
         />
 
         {/* View Router with Smooth Cinematic Page Transitions */}
@@ -603,6 +760,9 @@ function AlumniAppContent() {
                   <MessengerView
                     initialTargetProfileId={messengerInitialProfileId}
                     onClearInitialTarget={() => setMessengerInitialProfileId(null)}
+                    initialConversationId={messengerInitialConversationId}
+                    onClearInitialConversation={() => setMessengerInitialConversationId(null)}
+                    onViewProfile={handleViewProfile}
                   />
                 )}
 
@@ -646,6 +806,7 @@ function AlumniAppContent() {
                     onOpenVerificationCenter={openVerificationCenter}
                     onNavigate={navigateTo}
                     onStartMessage={handleStartDirectMessage}
+                    onOpenConversation={handleOpenConversation}
                   />
                 )}
 
@@ -751,7 +912,14 @@ function AlumniAppContent() {
                 : 'text-slate-500 dark:text-slate-400 hover:text-[#0084FF] dark:hover:text-[#0084FF]'
             }`}
           >
-            <MessageCircle className={`w-5 h-5 ${route === 'messages' ? 'text-[#0084FF]' : ''}`} />
+            <div className="relative">
+              <MessageCircle className={`w-5 h-5 ${route === 'messages' ? 'text-[#0084FF]' : ''}`} />
+              {unreadMessagesCount > 0 && (
+                <span className="absolute -top-1.5 -right-2 min-w-[16px] h-4 px-1 rounded-full bg-[#0084FF] text-white text-[9px] font-black tabular-nums flex items-center justify-center ring-2 ring-white dark:ring-slate-900">
+                  {unreadMessagesCount > 99 ? '99+' : unreadMessagesCount}
+                </span>
+              )}
+            </div>
             <span className="text-[10px] sm:text-[11px] mt-0.5 truncate max-w-[64px]">Chats</span>
           </button>
 
@@ -832,7 +1000,48 @@ function AlumniAppContent() {
           peer={dockChatPeer}
           onClose={() => setDockChatPeer(null)}
           onOpenFullMessenger={handleOpenFullMessenger}
+          onViewProfile={handleViewProfile}
         />
+      )}
+
+      {/* Shareable Frosted Profile Card Modal */}
+      {sharedCardProfile && (
+        <Suspense fallback={null}>
+          <FrostedProfileCardModal
+            profile={sharedCardProfile}
+            isOpen={Boolean(sharedCardProfile)}
+            onClose={closeSharedCardModal}
+            onStartMessage={
+              sharedCardProfile.id === currentUser.id
+                ? undefined
+                : (peer) => {
+                    closeSharedCardModal();
+                    handleStartDirectMessage(peer);
+                  }
+            }
+            onOpenFullProfile={(pid) => {
+              closeSharedCardModal();
+              handleViewProfile(pid);
+            }}
+            onOpenConversation={(convId) => {
+              closeSharedCardModal();
+              handleOpenConversation(convId);
+            }}
+            onEditOwnProfile={
+              sharedCardProfile.id === currentUser.id
+                ? () => {
+                    closeSharedCardModal();
+                    setSelectedProfileId(currentUser.id);
+                    navigateTo('profile');
+                  }
+                : undefined
+            }
+            onRequireLogin={() => {
+              closeSharedCardModal();
+              setAuthModalMode('login');
+            }}
+          />
+        </Suspense>
       )}
     </div>
   );

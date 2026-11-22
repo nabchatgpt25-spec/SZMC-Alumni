@@ -16,35 +16,56 @@ import {
   VolumeX,
   Check,
   CheckCheck,
-  ExternalLink,
   Ban,
   AlertCircle,
+  AlertTriangle,
+  PenTool,
+  BellOff,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useMessagingProfileId } from '../../hooks/useMessagingProfileId';
 import {
   findOrCreateDirectConversation,
+  findOnlinePresenceUser,
   listMessages,
+  listMessageReactions,
+  toggleMessageReaction,
+  subscribeToReactionChanges,
   sendMessage,
+  uploadChatImage,
   markConversationRead,
   getPeerLastReadAt,
+  getUserMessageSettings,
   subscribeToMessageChanges,
   subscribeToTypingStatus,
   subscribeToReadReceipts,
   subscribeToOnlinePresence,
   subscribeToRealtimeReconnect,
+  subscribeToDmAnnotationSession,
+  createAnnotationSessionKey,
   sendTypingIndicator,
   getMessengerBlockState,
 } from '../../services/messagingService';
-import type { ChatMessage } from '../../types/messaging';
+import type { ChatMessage, MessageReaction } from '../../types/messaging';
+import type { ActiveDmAnnotationSession, AnnotationTarget } from '../../types/annotation';
 import type { AlumniProfile } from '../../types';
 import { playSound } from '../../utils/audio';
-import { compressImageFileToDataUrl } from '../../utils/mediaStorage';
+import {
+  CLINICAL_STATUS_META,
+  isQuietRecommendedStatus,
+  type ClinicalStatusKey,
+} from '../../utils/clinicalStatus';
+import { parseStructuredChatMessage } from '../../utils/structuredChat';
+import { ClinicalStatusChip } from '../ClinicalStatusChip';
+import { HuddleModal, extractHuddleRoomFromText } from './HuddleModal';
+import { SharedImageAnnotatorModal } from './SharedImageAnnotatorModal';
+import { RichMessageText, StructuredChatCard } from './StructuredChatCard';
 
 interface FacebookMessengerDockProps {
   peer: AlumniProfile;
   onClose: () => void;
   onOpenFullMessenger: (peerProfileId: number) => void;
+  onViewProfile?: (profileId: number) => void;
 }
 
 const PRESET_QUICK_REPLIES = [
@@ -60,6 +81,7 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
   peer,
   onClose,
   onOpenFullMessenger,
+  onViewProfile,
 }) => {
   const { currentUser } = useAuth();
   // public.profiles.id is the FK target for messages.sender_id / participants.profile_id
@@ -68,19 +90,28 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
 
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [reactionsByMessageId, setReactionsByMessageId] = useState<Record<string, MessageReaction[]>>({});
   const [loading, setLoading] = useState(true);
   const [inputText, setInputText] = useState('');
-  const [pendingImage, setPendingImage] = useState<string | null>(null);
+  const [pendingImageFile, setPendingImageFile] = useState<File | null>(null);
+  const [pendingImagePreviewUrl, setPendingImagePreviewUrl] = useState<string | null>(null);
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
   const [peerTyping, setPeerTyping] = useState<string | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
   const [soundEnabled, setSoundEnabled] = useState(true);
+  const [readReceiptsEnabled, setReadReceiptsEnabled] = useState(true);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
-  const [callToast, setCallToast] = useState<string | null>(null);
+  const [huddleMode, setHuddleMode] = useState<'audio' | 'video' | null>(null);
+  const [annotationTarget, setAnnotationTarget] = useState<AnnotationTarget | null>(null);
+  const [liveDmSession, setLiveDmSession] = useState<ActiveDmAnnotationSession | null>(null);
   const [dockError, setDockError] = useState<string | null>(null);
   const [isBlocked, setIsBlocked] = useState(false);
   const [isPeerOnline, setIsPeerOnline] = useState(false);
+  const [peerClinicalStatus, setPeerClinicalStatus] = useState<ClinicalStatusKey | null>(null);
+  const [sendQuietly, setSendQuietly] = useState(false);
   const [peerLastReadAt, setPeerLastReadAt] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -88,7 +119,34 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const conversationIdRef = useRef<string | null>(null);
   conversationIdRef.current = conversationId;
+  const isMinimizedRef = useRef(isMinimized);
+  isMinimizedRef.current = isMinimized;
+  const soundEnabledRef = useRef(soundEnabled);
+  soundEnabledRef.current = soundEnabled;
   const lastTypingSentRef = useRef<number>(0);
+
+  const clearPendingImage = useCallback(() => {
+    setPendingImagePreviewUrl((prevUrl) => {
+      if (prevUrl) URL.revokeObjectURL(prevUrl);
+      return null;
+    });
+    setPendingImageFile(null);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (pendingImagePreviewUrl) URL.revokeObjectURL(pendingImagePreviewUrl);
+    };
+  }, [pendingImagePreviewUrl]);
+
+  useEffect(() => {
+    if (!lightboxUrl) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setLightboxUrl(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [lightboxUrl]);
 
   const scrollToBottom = useCallback((smooth = true) => {
     messagesEndRef.current?.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto' });
@@ -118,13 +176,21 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
         const convId = await findOrCreateDirectConversation(myId, peer.id);
         if (cancelled) return;
         setConversationId(convId);
-        const [initialMessages, lastRead] = await Promise.all([
+        const [initialMessages, lastRead, msgSettings] = await Promise.all([
           listMessages(convId, 50),
           getPeerLastReadAt(convId, myId),
+          getUserMessageSettings(myId).catch(() => null),
         ]);
         if (cancelled) return;
         setMessages(initialMessages);
         setPeerLastReadAt(lastRead);
+        if (msgSettings) {
+          setSoundEnabled(msgSettings.soundEnabled);
+          setReadReceiptsEnabled(msgSettings.readReceiptsEnabled);
+        }
+        const initialReactions = await listMessageReactions(initialMessages.map((m) => m.id));
+        if (cancelled) return;
+        setReactionsByMessageId(initialReactions);
         await markConversationRead(convId, myId);
         setTimeout(() => scrollToBottom(false), 80);
       } catch (err) {
@@ -169,21 +235,27 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
     return () => window.removeEventListener('szmc_blocks_updated', syncBlockState);
   }, [myId, peer.id]);
 
-  // 1c. Subscribe to real online presence for the peer
+  // 1c. Subscribe to real online presence & clinical status for the peer
   useEffect(() => {
+    setSendQuietly(false);
     if (!myId) return;
     return subscribeToOnlinePresence(
       {
         profileId: myId,
+        appProfileId: currentUser.id,
         fullName: currentUser.fullName || 'SZMC Alumnus',
         avatarUrl: currentUser.avatarUrl || '/szmc-logo.png',
         batchYear: currentUser.batchYear || 20,
       },
       (users) => {
-        setIsPeerOnline(users.some((u) => u.profileId === peer.id));
+        const matched =
+          findOnlinePresenceUser(users, peer.id) ??
+          (peer.userId ? findOnlinePresenceUser(users, peer.userId) : undefined);
+        setIsPeerOnline(Boolean(matched));
+        setPeerClinicalStatus(matched?.clinicalStatus ?? null);
       }
     );
-  }, [myId, peer.id, currentUser.fullName, currentUser.avatarUrl, currentUser.batchYear]);
+  }, [myId, peer.id, peer.userId, currentUser.id, currentUser.fullName, currentUser.avatarUrl, currentUser.batchYear]);
 
   // 1d. Live read receipts for this dock conversation
   useEffect(() => {
@@ -200,14 +272,45 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
       const convId = conversationIdRef.current;
       if (!convId) return;
       void listMessages(convId, 50)
-        .then((latest) => {
-          if (conversationIdRef.current === convId) setMessages(latest);
+        .then(async (latest) => {
+          if (conversationIdRef.current !== convId) return;
+          setMessages(latest);
+          const reactions = await listMessageReactions(latest.map((m) => m.id));
+          if (conversationIdRef.current === convId) {
+            setReactionsByMessageId((prev) => ({ ...prev, ...reactions }));
+          }
         })
         .catch(() => {});
     });
   }, []);
 
+  // 1f. Subscribe to live message reactions (for interactive polls & reactions)
+  useEffect(() => {
+    return subscribeToReactionChanges((event) => {
+      const { reaction, eventType } = event;
+      setReactionsByMessageId((prev) => {
+        const current = prev[reaction.messageId] ?? [];
+        if (eventType === 'DELETE') {
+          return {
+            ...prev,
+            [reaction.messageId]: current.filter(
+              (r) => !(r.profileId === reaction.profileId && r.emoji === reaction.emoji)
+            ),
+          };
+        }
+        if (current.some((r) => r.profileId === reaction.profileId && r.emoji === reaction.emoji)) {
+          return prev;
+        }
+        return {
+          ...prev,
+          [reaction.messageId]: [...current, reaction],
+        };
+      });
+    });
+  }, []);
+
   // 2. Real-Time incoming message listener (handles INSERT, UPDATE edits, and DELETE)
+  //    Reads isMinimized/soundEnabled from refs so toggling sound or minimizing never resubscribes.
   useEffect(() => {
     const unsub = subscribeToMessageChanges((incoming, meta) => {
       if (incoming.conversationId === conversationIdRef.current) {
@@ -222,12 +325,13 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
         });
 
         if (meta.eventType === 'INSERT' && incoming.senderId !== myId) {
-          if (isMinimized) {
+          setPeerTyping(null);
+          if (isMinimizedRef.current) {
             setUnreadCount((c) => c + 1);
           } else {
             void markConversationRead(incoming.conversationId, myId);
           }
-          if (soundEnabled) {
+          if (soundEnabledRef.current && !incoming.isSilent) {
             playSound('receive');
           }
         }
@@ -239,7 +343,7 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
     });
 
     return () => unsub();
-  }, [myId, isMinimized, soundEnabled, scrollToBottom]);
+  }, [myId, scrollToBottom]);
 
   // 3. Per-conversation scoped real-time typing indicators (never global)
   useEffect(() => {
@@ -259,6 +363,23 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
     };
   }, [conversationId, myId, peer.fullName]);
 
+  // 3b. Listen for live shared-canvas annotation invites in this DM
+  useEffect(() => {
+    if (!conversationId || isBlocked) {
+      setLiveDmSession(null);
+      return;
+    }
+    const unsub = subscribeToDmAnnotationSession(conversationId, (session) => {
+      if (session.hostProfileId === myId) return;
+      if (!session.active) {
+        setLiveDmSession((prev) => (prev && prev.sessionKey === session.sessionKey ? null : prev));
+        return;
+      }
+      setLiveDmSession(session);
+    });
+    return () => unsub();
+  }, [conversationId, isBlocked, myId]);
+
   // Auto focus input when restored
   useEffect(() => {
     if (!isMinimized && !loading) {
@@ -272,25 +393,30 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
 
   const handleSend = async (textToSend?: string) => {
     const text = (textToSend ?? inputText).trim();
-    const hasImage = Boolean(pendingImage);
+    const fileToUpload = pendingImageFile;
 
-    if ((!text && !hasImage) || !conversationId || sending || isBlocked) return;
+    if ((!text && !fileToUpload) || !conversationId || sending || uploadingImage || isBlocked) return;
 
     if (!textToSend) setInputText('');
-    const imageToSend = pendingImage;
-    setPendingImage(null);
     setShowEmojiPicker(false);
     setSending(true);
+    if (fileToUpload) setUploadingImage(true);
 
     try {
-      if (soundEnabled) {
+      let mediaUrl: string | null = null;
+      if (fileToUpload) {
+        mediaUrl = await uploadChatImage(fileToUpload, conversationId);
+        clearPendingImage();
+      }
+
+      if (soundEnabled && !sendQuietly) {
         playSound('send');
       }
 
-      // Attachments go to public.messages.media_url with type='image' (no body hacks)
       const sent = await sendMessage(conversationId, myId, text, {
-        type: imageToSend ? 'image' : text === '👍' ? 'like' : 'text',
-        mediaUrl: imageToSend,
+        type: mediaUrl ? 'image' : text === '👍' ? 'like' : 'text',
+        mediaUrl,
+        isSilent: sendQuietly,
       });
       setMessages((prev) => {
         if (prev.some((m) => m.id === sent.id)) return prev;
@@ -300,32 +426,58 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
       setTimeout(() => scrollToBottom(true), 40);
     } catch (err) {
       setDockError(err instanceof Error ? err.message : 'Message could not be sent.');
-      if (!textToSend) setInputText(text);
-      if (imageToSend) setPendingImage(imageToSend);
+      if (!textToSend && text) setInputText(text);
     } finally {
+      setUploadingImage(false);
       setSending(false);
       inputRef.current?.focus();
     }
   };
 
-  const handleImageSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleToggleDockReaction = async (messageId: string, emoji: string) => {
+    const existing = reactionsByMessageId[messageId] ?? [];
+    const currentlyReacted = existing.some((r) => r.profileId === myId && r.emoji === emoji);
+    setReactionsByMessageId((prev) => {
+      const curr = prev[messageId] ?? [];
+      if (currentlyReacted) {
+        return {
+          ...prev,
+          [messageId]: curr.filter((r) => !(r.profileId === myId && r.emoji === emoji)),
+        };
+      }
+      return {
+        ...prev,
+        [messageId]: [...curr, { messageId, profileId: myId, emoji }],
+      };
+    });
+    try {
+      await toggleMessageReaction(messageId, myId, emoji, currentlyReacted);
+    } catch {
+      setReactionsByMessageId((prev) => ({ ...prev, [messageId]: existing }));
+    }
+  };
+
+  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    if (e.target) e.target.value = '';
     if (!file) return;
 
-    try {
-      const compressed = await compressImageFileToDataUrl(file);
-      setPendingImage(compressed);
-    } catch {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        if (typeof event.target?.result === 'string') {
-          setPendingImage(event.target.result);
-        }
-      };
-      reader.readAsDataURL(file);
-    } finally {
-      if (e.target) e.target.value = '';
+    if (!file.type || !file.type.startsWith('image/')) {
+      setDockError('Please select a valid image file (JPG, PNG, WebP, or GIF).');
+      return;
     }
+    if (file.size > 8 * 1024 * 1024) {
+      setDockError('Image must be smaller than 8 MB.');
+      return;
+    }
+
+    setPendingImagePreviewUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return URL.createObjectURL(file);
+    });
+    setPendingImageFile(file);
+    setDockError(null);
+    inputRef.current?.focus();
   };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -344,16 +496,6 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
       e.preventDefault();
       void handleSend();
     }
-  };
-
-  const triggerCallSimulation = (type: 'audio' | 'video') => {
-    const text =
-      type === 'audio'
-        ? `Calling Dr. ${peer.fullName}...`
-        : `Starting video call with Dr. ${peer.fullName}...`;
-    setCallToast(text);
-    if (soundEnabled) playSound('notification');
-    setTimeout(() => setCallToast(null), 3500);
   };
 
   const formatMessageTime = (isoString?: string) => {
@@ -379,6 +521,7 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
           <img
             src={peer.avatarUrl || '/assets/aistudio/images__1__2778177d.png'}
             alt={peer.fullName}
+            referrerPolicy="no-referrer"
             className="w-13 h-13 rounded-full object-cover"
           />
           {isPeerOnline && !isBlocked && (
@@ -411,26 +554,36 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
             <img
               src={peer.avatarUrl || '/assets/aistudio/images__1__2778177d.png'}
               alt={peer.fullName}
+              referrerPolicy="no-referrer"
               className="w-9 h-9 rounded-full object-cover ring-2 ring-white/30"
             />
-            {isPeerOnline && !isBlocked && (
-              <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-400 border-2 border-white" />
+            {(isPeerOnline || peerClinicalStatus) && !isBlocked && (
+              <span
+                className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-white ${
+                  peerClinicalStatus
+                    ? CLINICAL_STATUS_META[peerClinicalStatus].dotClass
+                    : 'bg-emerald-400'
+                }`}
+              />
             )}
           </div>
 
           <div className="min-w-0">
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5 flex-wrap">
               <h3 id="dock-chat-title" className="text-sm font-black truncate leading-tight">
                 {peer.fullName}
               </h3>
               {peer.verificationStatus === 'verified' && (
                 <ShieldCheck className="w-3.5 h-3.5 text-sky-200 shrink-0" />
               )}
+              {!isBlocked && peerClinicalStatus && (
+                <ClinicalStatusChip status={peerClinicalStatus} size="xs" onDarkHeader />
+              )}
             </div>
             <p className="text-[11px] text-white/80 truncate">
               {peerTyping ? (
                 <span className="text-amber-200 font-semibold animate-pulse">{peerTyping}</span>
-              ) : isPeerOnline && !isBlocked ? (
+              ) : (isPeerOnline || peerClinicalStatus) && !isBlocked ? (
                 `MBBS Batch ${peer.batchYear} • Active now`
               ) : (
                 `MBBS Batch ${peer.batchYear} • ${peer.profession || 'SZMC Doctor'}`
@@ -439,24 +592,30 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
           </div>
         </div>
 
-        {/* Window Controls & Calls */}
+        {/* Window Controls & Huddle Calls */}
         <div className="flex items-center gap-0.5 shrink-0">
-          <button
-            type="button"
-            onClick={() => triggerCallSimulation('audio')}
-            title="Audio Call"
-            className="p-1.5 rounded-lg text-white/80 hover:text-white hover:bg-white/15 transition-colors cursor-pointer"
-          >
-            <Phone className="w-3.5 h-3.5" />
-          </button>
-          <button
-            type="button"
-            onClick={() => triggerCallSimulation('video')}
-            title="Video Call"
-            className="p-1.5 rounded-lg text-white/80 hover:text-white hover:bg-white/15 transition-colors cursor-pointer"
-          >
-            <Video className="w-3.5 h-3.5" />
-          </button>
+          {!isBlocked && conversationId && (
+            <>
+              <button
+                type="button"
+                onClick={() => setHuddleMode('audio')}
+                title="Voice Huddle"
+                aria-label="Start Voice Huddle"
+                className="p-1.5 rounded-lg text-white/80 hover:text-white hover:bg-white/15 transition-colors cursor-pointer"
+              >
+                <Phone className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setHuddleMode('video')}
+                title="Video Huddle"
+                aria-label="Start Video Huddle"
+                className="p-1.5 rounded-lg text-white/80 hover:text-white hover:bg-white/15 transition-colors cursor-pointer"
+              >
+                <Video className="w-3.5 h-3.5" />
+              </button>
+            </>
+          )}
           <button
             type="button"
             onClick={() => setSoundEnabled(!soundEnabled)}
@@ -492,19 +651,27 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
         </div>
       </div>
 
-      {/* Simulated Call Banner */}
-      {callToast && (
-        <div className="px-3 py-2 bg-blue-50 dark:bg-blue-950/60 border-b border-blue-200 dark:border-blue-800 text-xs font-semibold text-blue-700 dark:text-blue-300 flex items-center justify-between animate-fadeIn">
-          <div className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-blue-600 animate-ping" />
-            <span>{callToast}</span>
+      {/* Live Shared Annotation Invite Banner */}
+      {liveDmSession && !isBlocked && (
+        <div className="px-3 py-1.5 bg-blue-50 dark:bg-blue-950/60 border-b border-blue-200 dark:border-blue-900 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+            <span className="text-[11px] font-semibold text-slate-800 dark:text-slate-100 truncate">
+              {liveDmSession.hostName.split(' ')[0]} is annotating a scan
+            </span>
           </div>
           <button
             type="button"
-            onClick={() => setCallToast(null)}
-            className="text-slate-400 hover:text-slate-600 text-[10px]"
+            onClick={() =>
+              setAnnotationTarget({
+                sessionKey: liveDmSession.sessionKey,
+                imageUrl: liveDmSession.imageUrl,
+                sourceMessageId: liveDmSession.sourceMessageId ?? null,
+              })
+            }
+            className="px-2.5 py-1 rounded-full bg-[#0084FF] hover:bg-[#0073E6] text-white text-[10px] font-bold whitespace-nowrap cursor-pointer shrink-0"
           >
-            Dismiss
+            Join Live
           </button>
         </div>
       )}
@@ -582,11 +749,9 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
               const fromMe = m.senderId === myId;
               const isLike = m.body === '👍' || m.type === 'like';
 
-              // Image attachments live in public.messages.media_url
               let textContent = m.body;
               let imagePayload: string | null = m.mediaUrl ?? null;
               if (!imagePayload && m.body.includes('[image]:')) {
-                // Legacy rows written before the media_url migration
                 const parts = m.body.split('[image]:');
                 textContent = parts[0]?.trim() || '';
                 imagePayload = parts[1]?.trim() || null;
@@ -594,6 +759,12 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
                 imagePayload = m.body;
                 textContent = '';
               }
+              if (m.type === 'image' && m.mediaUrl && m.body === 'Photo') {
+                textContent = '';
+              }
+              const huddleInfo = !m.deletedAt && textContent ? extractHuddleRoomFromText(textContent) : null;
+              const structuredCard = !m.deletedAt && textContent ? parseStructuredChatMessage(textContent) : null;
+              const msgReactions = reactionsByMessageId[m.id] ?? [];
 
               return (
                 <div
@@ -607,38 +778,114 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
                   ) : (
                     <>
                       {imagePayload && (
-                        <div className="max-w-[78%] rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 shadow-sm my-0.5">
-                          <img
-                            src={imagePayload}
-                            alt="Attachment"
-                            className="w-full max-h-48 object-cover hover:opacity-95"
-                          />
+                        <div className={`flex flex-col gap-1 max-w-[78%] ${fromMe ? 'items-end' : 'items-start'}`}>
+                          <button
+                            type="button"
+                            onClick={() => setLightboxUrl(imagePayload)}
+                            className="w-full rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 shadow-sm my-0.5 cursor-pointer block"
+                            aria-label="Open full-size photo"
+                          >
+                            <img
+                              src={imagePayload}
+                              alt="Attachment"
+                              className="w-full max-h-48 object-cover hover:opacity-95"
+                            />
+                          </button>
+                          {!isBlocked && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setAnnotationTarget({
+                                  sessionKey: createAnnotationSessionKey(m.id, imagePayload),
+                                  imageUrl: imagePayload,
+                                  sourceMessageId: m.id,
+                                })
+                              }
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-[#0084FF] text-[10px] font-semibold text-slate-700 dark:text-slate-200 hover:text-[#0084FF] cursor-pointer"
+                            >
+                              <PenTool className="w-2.5 h-2.5 text-[#0084FF]" />
+                              <span>
+                                {liveDmSession &&
+                                (liveDmSession.sourceMessageId === m.id ||
+                                  liveDmSession.imageUrl === imagePayload)
+                                  ? 'Join Live'
+                                  : 'Annotate'}
+                              </span>
+                            </button>
+                          )}
                         </div>
                       )}
 
                       {textContent && (
                         <div
-                          className={`max-w-[78%] px-3.5 py-2 rounded-2xl leading-relaxed break-words shadow-2xs ${
+                          className={`max-w-[88%] leading-relaxed break-words ${
                             isLike
                               ? 'bg-transparent text-3xl shadow-none p-0'
+                              : structuredCard?.kind === 'profile_card' || m.type === 'ProfileShareCard'
+                              ? 'bg-transparent p-0 shadow-none'
                               : fromMe
-                              ? 'bg-[#0084FF] text-white rounded-br-xs'
-                              : 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 border border-slate-200/70 dark:border-slate-700/60 rounded-bl-xs'
+                              ? 'px-3.5 py-2 rounded-2xl shadow-2xs bg-[#0084FF] text-white rounded-br-xs'
+                              : 'px-3.5 py-2 rounded-2xl shadow-2xs bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 border border-slate-200/70 dark:border-slate-700/60 rounded-bl-xs'
                           }`}
                         >
-                          {textContent}
+                          {structuredCard ? (
+                            <StructuredChatCard
+                              data={structuredCard}
+                              mine={fromMe}
+                              compact
+                              myId={myId}
+                              reactions={msgReactions}
+                              onViewProfile={onViewProfile}
+                              onToggleReaction={(em) => void handleToggleDockReaction(m.id, em)}
+                              onQuickReply={(prefill) => {
+                                if (prefill && !inputText.trim()) setInputText(prefill);
+                                inputRef.current?.focus();
+                              }}
+                            />
+                          ) : (
+                            <RichMessageText text={textContent} mine={fromMe} />
+                          )}
+                          {huddleInfo && (
+                            <div className="mt-1.5 pt-1.5 border-t border-current/15">
+                              <button
+                                type="button"
+                                onClick={() => setHuddleMode(huddleInfo.mode)}
+                                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold cursor-pointer ${
+                                  fromMe
+                                    ? 'bg-white text-[#0084FF] hover:bg-blue-50'
+                                    : 'bg-[#0084FF] text-white hover:bg-[#0073E6]'
+                                }`}
+                              >
+                                {huddleInfo.mode === 'audio' ? (
+                                  <Phone className="w-3 h-3" />
+                                ) : (
+                                  <Video className="w-3 h-3" />
+                                )}
+                                <span>Join Huddle</span>
+                              </button>
+                            </div>
+                          )}
                         </div>
                       )}
                     </>
                   )}
 
                   <div className="flex items-center gap-1 text-[9px] text-slate-400 px-1">
+                    {m.isSilent && !m.deletedAt && (
+                      <span
+                        className="inline-flex items-center gap-0.5 text-[9px] font-bold text-slate-500 dark:text-slate-300"
+                        title="Delivered quietly without alert sound"
+                      >
+                        <BellOff className="w-2.5 h-2.5" />
+                        <span>Silent</span>
+                      </span>
+                    )}
                     <span>
                       {formatMessageTime(m.createdAt)}
                       {m.editedAt && !m.deletedAt ? ' · edited' : ''}
                     </span>
                     {fromMe && !m.deletedAt && (
-                      peerLastReadAt && m.createdAt <= peerLastReadAt ? (
+                      readReceiptsEnabled && peerLastReadAt && m.createdAt <= peerLastReadAt ? (
                         <span title="Seen">
                           <CheckCheck className="w-3 h-3 text-[#0084FF]" />
                         </span>
@@ -686,22 +933,23 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
       )}
 
       {/* Image Preview Thumbnail before sending */}
-      {pendingImage && (
+      {pendingImagePreviewUrl && (
         <div className="px-3 py-1.5 bg-slate-100 dark:bg-slate-800 border-t border-slate-200 dark:border-slate-700 flex items-center justify-between">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 min-w-0">
             <img
-              src={pendingImage}
+              src={pendingImagePreviewUrl}
               alt="Preview"
-              className="w-10 h-10 rounded-lg object-cover border border-slate-300 dark:border-slate-600"
+              className="w-10 h-10 rounded-lg object-cover border border-slate-300 dark:border-slate-600 shrink-0"
             />
-            <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-300">
-              Image attached
+            <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-300 truncate">
+              {uploadingImage ? 'Uploading photo...' : pendingImageFile?.name || 'Image attached'}
             </span>
           </div>
           <button
             type="button"
-            onClick={() => setPendingImage(null)}
-            className="p-1 rounded-full text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer"
+            onClick={clearPendingImage}
+            disabled={uploadingImage}
+            className="p-1 rounded-full text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 disabled:opacity-50 cursor-pointer shrink-0"
             title="Remove attachment"
           >
             <X className="w-4 h-4" />
@@ -724,6 +972,34 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
         </div>
       )}
 
+      {/* Warning Banner when peer is In OT or On Call */}
+      {!isBlocked && conversationId && isQuietRecommendedStatus(peerClinicalStatus) && (
+        <div className="px-3 py-1.5 bg-amber-50 dark:bg-amber-950/60 border-t border-amber-200 dark:border-amber-800/80 flex items-center justify-between gap-2 text-[11px]">
+          <div className="flex items-center gap-1.5 min-w-0 text-amber-900 dark:text-amber-200">
+            <AlertTriangle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+            <span className="truncate font-medium">
+              Dr. {peer.fullName.split(' ')[0]} is{' '}
+              <strong>{CLINICAL_STATUS_META[peerClinicalStatus].label}</strong>
+            </span>
+          </div>
+          {!sendQuietly ? (
+            <button
+              type="button"
+              onClick={() => setSendQuietly(true)}
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-bold whitespace-nowrap cursor-pointer shrink-0"
+            >
+              <BellOff className="w-2.5 h-2.5" />
+              <span>Send Quietly</span>
+            </button>
+          ) : (
+            <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 dark:text-emerald-300 shrink-0">
+              <BellOff className="w-2.5 h-2.5" />
+              <span>Quiet on</span>
+            </span>
+          )}
+        </div>
+      )}
+
       {/* Input Composer Footer */}
       {isBlocked || (!loading && !conversationId) ? (
         <div className="px-3 py-2.5 bg-slate-100 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 flex items-center justify-center gap-2 text-[11px] font-semibold text-slate-500 dark:text-slate-400">
@@ -735,7 +1011,7 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
           </span>
         </div>
       ) : (
-        <div className="p-2.5 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 flex items-center gap-1.5">
+        <div className="p-2.5 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 flex items-center gap-1">
           <input
             ref={fileInputRef}
             type="file"
@@ -747,9 +1023,10 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
+            disabled={uploadingImage || sending}
             title="Attach photo or report"
             aria-label="Attach photo or report"
-            className="w-8 h-8 rounded-full text-slate-500 hover:text-[#0084FF] hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center transition-colors cursor-pointer shrink-0"
+            className="w-8 h-8 rounded-full text-slate-500 hover:text-[#0084FF] hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center transition-colors disabled:opacity-50 cursor-pointer shrink-0"
           >
             <ImageIcon className="w-4 h-4" />
           </button>
@@ -770,33 +1047,150 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
             value={inputText}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
-            placeholder="Aa"
-            disabled={loading || sending}
-            className="flex-1 px-3.5 py-2 rounded-full bg-slate-100 dark:bg-slate-800 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 outline-none focus:ring-2 focus:ring-[#0084FF]/40 border-none transition-all"
+            placeholder={
+              pendingImageFile
+                ? 'Add a caption...'
+                : sendQuietly
+                ? 'Send quietly...'
+                : 'Aa'
+            }
+            disabled={loading || sending || uploadingImage}
+            className="flex-1 min-w-0 px-3 py-2 rounded-full bg-slate-100 dark:bg-slate-800 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 outline-none focus:ring-2 focus:ring-[#0084FF]/40 border-none transition-all"
           />
 
-          {inputText.trim() || pendingImage ? (
+          <button
+            type="button"
+            onClick={() => setSendQuietly((prev) => !prev)}
+            aria-pressed={sendQuietly}
+            title={sendQuietly ? 'Send Quietly enabled' : 'Send Quietly (no alert sound)'}
+            aria-label="Toggle Send Quietly"
+            className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors cursor-pointer shrink-0 ${
+              sendQuietly
+                ? 'bg-slate-800 dark:bg-slate-100 text-white dark:text-slate-900'
+                : 'text-slate-500 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800'
+            }`}
+          >
+            <BellOff className="w-3.5 h-3.5" />
+          </button>
+
+          {inputText.trim() || pendingImageFile ? (
             <button
               type="button"
               onClick={() => handleSend()}
-              disabled={sending}
-              aria-label="Send message"
+              disabled={sending || uploadingImage}
+              aria-label={sendQuietly ? 'Send quietly' : 'Send message'}
               className="w-8 h-8 rounded-full bg-[#0084FF] hover:bg-[#0073E6] text-white flex items-center justify-center transition-transform active:scale-90 cursor-pointer shadow-xs disabled:opacity-50 shrink-0"
             >
-              {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+              {sending || uploadingImage ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Send className="w-4 h-4" />
+              )}
             </button>
           ) : (
             <button
               type="button"
               onClick={() => handleSend('👍')}
               aria-label="Send Thumbs Up Like"
-              title="Send Like"
+              title={sendQuietly ? 'Send Like quietly' : 'Send Like'}
               className="w-8 h-8 rounded-full text-[#0084FF] hover:bg-blue-50 dark:hover:bg-slate-800 flex items-center justify-center transition-transform active:scale-125 cursor-pointer shrink-0"
             >
               <ThumbsUp className="w-4 h-4 fill-[#0084FF]" />
             </button>
           )}
         </div>
+      )}
+
+      {/* In-App Photo Lightbox */}
+      {lightboxUrl && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn"
+          onClick={() => setLightboxUrl(null)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Photo preview"
+        >
+          <div
+            className="absolute top-4 right-4 flex items-center gap-2"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {!isBlocked && conversationId && (
+              <button
+                type="button"
+                onClick={() => {
+                  const url = lightboxUrl;
+                  setLightboxUrl(null);
+                  setAnnotationTarget({
+                    sessionKey: createAnnotationSessionKey(null, url),
+                    imageUrl: url,
+                  });
+                }}
+                className="min-h-[44px] px-4 rounded-full bg-[#0084FF] hover:bg-[#0073E6] text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-lg cursor-pointer"
+              >
+                <PenTool className="w-4 h-4" />
+                <span>Annotate Live</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setLightboxUrl(null)}
+              aria-label="Close photo"
+              className="min-w-[44px] min-h-[44px] rounded-full bg-white/15 hover:bg-white/25 text-white flex items-center justify-center cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          <img
+            src={lightboxUrl}
+            alt="Full-size attachment"
+            onClick={(e) => e.stopPropagation()}
+            className="max-w-full max-h-[86vh] rounded-2xl object-contain shadow-2xl"
+          />
+        </div>
+      )}
+
+      {/* Shared Clinical Image Annotation Canvas */}
+      {annotationTarget && conversationId && !isBlocked && (
+        <SharedImageAnnotatorModal
+          isOpen={true}
+          conversationId={conversationId}
+          myId={myId}
+          myDisplayName={currentUser.fullName || 'SZMC Doctor'}
+          myAvatarUrl={currentUser.avatarUrl || '/szmc-logo.png'}
+          peerName={peer.fullName}
+          target={annotationTarget}
+          onClose={() => setAnnotationTarget(null)}
+          onSaveToThread={async ({ mediaUrl, caption: annotatedCaption, replyToMessageId }) => {
+            const sent = await sendMessage(conversationId, myId, annotatedCaption, {
+              type: 'image',
+              mediaUrl,
+              replyToMessageId: replyToMessageId ?? null,
+            });
+            setMessages((prev) => (prev.some((m) => m.id === sent.id) ? prev : [...prev, sent]));
+            setTimeout(() => scrollToBottom(true), 60);
+            return true;
+          }}
+        />
+      )}
+
+      {/* In-App Audio / Video Huddle Modal */}
+      {huddleMode && conversationId && (
+        <HuddleModal
+          isOpen={true}
+          mode={huddleMode}
+          conversationId={conversationId}
+          peerName={peer.fullName}
+          myDisplayName={currentUser.fullName}
+          onClose={() => setHuddleMode(null)}
+          onPostInvite={
+            !isBlocked
+              ? async (inviteText) => {
+                  const sent = await sendMessage(conversationId, myId, inviteText, { type: 'text' });
+                  setMessages((prev) => (prev.some((m) => m.id === sent.id) ? prev : [...prev, sent]));
+                }
+              : undefined
+          }
+        />
       )}
     </div>
   );

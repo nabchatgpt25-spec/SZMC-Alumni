@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   X,
   MapPin,
@@ -7,15 +7,13 @@ import {
   Award,
   Briefcase,
   ShieldCheck,
-  Globe,
   Share2,
   ArrowRight,
-  ExternalLink,
   MessageCircle
 } from 'lucide-react';
 import { AlumniProfile } from '../../types';
-import { WhatsAppIcon, FacebookIcon } from '../SocialIcons';
 import { useAuth } from '../../context/AuthContext';
+import { FrostedProfileCardModal } from '../FrostedProfileCardModal';
 
 interface QuickProfileModalProps {
   profile: AlumniProfile | null;
@@ -29,19 +27,11 @@ export const QuickProfileModal: React.FC<QuickProfileModalProps> = ({
   onLoginPrompt,
 }) => {
   const { isLoggedIn, currentUser } = useAuth();
+  const [showFrostedCard, setShowFrostedCard] = useState(false);
   if (!profile) return null;
 
   const handleShare = () => {
-    if (navigator.share) {
-      navigator.share({
-        title: `${profile.fullName} - SZMC Alumni`,
-        text: `Check out ${profile.fullName} (MBBS Batch ${profile.batchYear}) on the SZMC Alumni Portal!`,
-        url: window.location.href,
-      }).catch(() => {});
-    } else {
-      navigator.clipboard.writeText(window.location.href);
-      alert('Profile link copied to clipboard!');
-    }
+    setShowFrostedCard(true);
   };
 
   return (
@@ -72,14 +62,15 @@ export const QuickProfileModal: React.FC<QuickProfileModalProps> = ({
             <X className="w-5 h-5" />
           </button>
 
-          {/* Share button */}
+          {/* Share Frosted Profile Card button */}
           <button
             type="button"
             onClick={handleShare}
-            className="absolute top-4 right-15 w-9 h-9 rounded-full bg-black/40 hover:bg-black/60 text-white flex items-center justify-center backdrop-blur-md transition-colors cursor-pointer z-10"
-            title="Share profile"
+            className="absolute top-4 right-15 min-w-[36px] h-9 px-3 rounded-full bg-black/50 hover:bg-black/70 text-white text-xs font-bold flex items-center gap-1.5 backdrop-blur-md transition-colors cursor-pointer z-10 border border-white/15"
+            title="Open shareable profile card"
           >
-            <Share2 className="w-4 h-4" />
+            <Share2 className="w-3.5 h-3.5" />
+            <span>Share Card</span>
           </button>
 
           {/* Batch Pill in Cover */}
@@ -270,6 +261,24 @@ export const QuickProfileModal: React.FC<QuickProfileModalProps> = ({
           </div>
         </div>
       </div>
+
+      <FrostedProfileCardModal
+        profile={profile}
+        isOpen={showFrostedCard}
+        onClose={() => setShowFrostedCard(false)}
+        onRequireLogin={() => {
+          setShowFrostedCard(false);
+          onClose();
+          onLoginPrompt();
+        }}
+        onStartMessage={(target) => {
+          setShowFrostedCard(false);
+          onClose();
+          if (typeof (window as any).szmcStartDirectMessage === 'function') {
+            (window as any).szmcStartDirectMessage(target);
+          }
+        }}
+      />
     </div>
   );
 };

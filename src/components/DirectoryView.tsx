@@ -29,6 +29,10 @@ import { vouchForAlumniProfile } from '../utils/verificationService';
 import { fetchAlumniProfilesFromDb } from '../services/supabaseService';
 import { FAMOUS_SZMC_ALUMNI } from './landing/FeaturedAlumniSection';
 import { MEDICAL_SUBJECT_TAGS } from './AlumniDirectoryView';
+import { findOnlinePresenceUser, subscribeToOnlinePresence } from '../services/messagingService';
+import type { OnlinePresenceUser } from '../types/messaging';
+import { CLINICAL_STATUS_META } from '../utils/clinicalStatus';
+import { ClinicalStatusChip } from './ClinicalStatusChip';
 
 export const UNIVERSAL_DIRECTORY_PROFILES: AlumniProfile[] = FAMOUS_SZMC_ALUMNI;
 
@@ -175,8 +179,13 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
   const [countryFilter, setCountryFilter] = useState('');
   const [badgeFilter, setBadgeFilter] = useState('');
   const [onlineOnly, setOnlineOnly] = useState(false);
+  const [onlineUsers, setOnlineUsers] = useState<OnlinePresenceUser[]>([]);
   const [isMobileMedicalDropdownOpen, setIsMobileMedicalDropdownOpen] = useState(false);
   const mobileMedicalDropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    return subscribeToOnlinePresence(null, (users) => setOnlineUsers(users));
+  }, []);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -678,7 +687,14 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filtered.map((profile) => (
+          {filtered.map((profile) => {
+            const livePresence =
+              findOnlinePresenceUser(onlineUsers, profile.id) ??
+              (profile.userId ? findOnlinePresenceUser(onlineUsers, profile.userId) : undefined);
+            const liveStatus = livePresence?.clinicalStatus ?? null;
+            const isOnline = Boolean(livePresence) || profile.online;
+
+            return (
             <div
               key={profile.id}
               className="bg-white dark:bg-slate-900 rounded-3xl p-5 border border-slate-200/80 dark:border-slate-800 shadow-xs hover:shadow-md transition-all duration-200 flex flex-col justify-between"
@@ -690,13 +706,24 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
                     <img
                       src={profile.avatarUrl}
                       alt={profile.fullName}
+                      referrerPolicy="no-referrer"
                       className="w-13 h-13 rounded-full object-cover ring-2 ring-slate-100 dark:ring-slate-800"
                     />
                     <span
                       className={`absolute bottom-0 right-0 w-3 h-3 rounded-full ring-2 ring-white dark:ring-slate-900 ${
-                        profile.online ? 'bg-emerald-500' : 'bg-slate-400'
+                        liveStatus
+                          ? CLINICAL_STATUS_META[liveStatus].dotClass
+                          : isOnline
+                          ? 'bg-emerald-500'
+                          : 'bg-slate-400'
                       }`}
-                      title={profile.online ? 'Online' : 'Offline'}
+                      title={
+                        liveStatus
+                          ? CLINICAL_STATUS_META[liveStatus].label
+                          : isOnline
+                          ? 'Online'
+                          : 'Offline'
+                      }
                     />
                   </div>
 
@@ -715,6 +742,7 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
                         showLabel={false}
                         onClick={() => onViewProfile(profile.id)}
                       />
+                      {liveStatus && <ClinicalStatusChip status={liveStatus} size="xs" />}
                     </div>
 
                     <div className="text-xs font-semibold text-blue-600 dark:text-blue-400 mt-0.5">
@@ -849,7 +877,8 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
                 )}
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

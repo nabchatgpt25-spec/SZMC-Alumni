@@ -46,6 +46,7 @@ interface SidebarProps {
   isOpen: boolean;
   onClose: () => void;
   customNavItems?: NavItemConfig[];
+  unreadMessagesCount?: number;
   onOpenVerificationCenter?: (tab?: 'status' | 'vouch_classmates' | 'upload_id' | 'policy') => void;
 }
 
@@ -61,6 +62,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isOpen,
   onClose,
   customNavItems,
+  unreadMessagesCount = 0,
   onOpenVerificationCenter,
 }) => {
   const { isDark, toggleTheme } = useTheme();
@@ -87,7 +89,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'saved', label: 'Saved Posts', icon: BookmarkCheck },
     { id: 'events', label: 'Events (SZMC DAY)', icon: Calendar, badge: 'NOV 4-5', badgeType: 'hot' },
     { id: 'gallery', label: 'Gallery', icon: Image },
-    { id: 'messages', label: 'Messages', icon: MessageCircle },
+    {
+      id: 'messages',
+      label: 'Messages',
+      icon: MessageCircle,
+      badge: unreadMessagesCount > 0 ? (unreadMessagesCount > 99 ? '99+' : String(unreadMessagesCount)) : undefined,
+      badgeType: unreadMessagesCount > 0 ? 'count' : undefined,
+    },
     { id: 'news', label: 'News & Blog', icon: Newspaper, badge: 'SOON', badgeType: 'soon' },
     { id: 'institutions', label: 'Institutions', icon: Building2, badge: 'SOON', badgeType: 'soon' },
   ];
@@ -162,6 +170,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
             >
               <span className="w-1.5 h-1.5 rounded-full bg-rose-500 dark:bg-rose-400 animate-ping shrink-0" />
               <span>LIVE</span>
+            </span>
+          ) : item.badgeType === 'count' ? (
+            <span
+              className={`shrink-0 min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-black tabular-nums flex items-center justify-center transition-colors ${
+                active
+                  ? 'bg-white text-blue-600'
+                  : 'bg-[#0084FF] text-white shadow-xs shadow-[#0084FF]/30'
+              }`}
+            >
+              {item.badge}
             </span>
           ) : (
             <span

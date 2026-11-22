@@ -70,6 +70,15 @@ import {
   unblockUser,
   fetchBlockedUserIds,
 } from '../services/communitySafetyService';
+import { FrostedProfileCardModal } from './FrostedProfileCardModal';
+import { ClinicalStatusChip, ClinicalStatusSelector } from './ClinicalStatusChip';
+import {
+  findOnlinePresenceUser,
+  subscribeToOnlinePresence,
+  updateMyClinicalStatus,
+} from '../services/messagingService';
+import type { OnlinePresenceUser } from '../types/messaging';
+import { CLINICAL_STATUS_META, loadSavedClinicalStatus } from '../utils/clinicalStatus';
 
 interface ProfileViewProps {
   profileId: number;
@@ -79,6 +88,7 @@ interface ProfileViewProps {
   onNavigate?: (route: string) => void;
   initialTab?: 'about' | 'posts' | 'edit' | 'blood' | 'settings';
   onStartMessage?: (targetProfile: AlumniProfile) => void;
+  onOpenConversation?: (conversationId: string) => void;
 }
 
 export const ProfileView: React.FC<ProfileViewProps> = ({
@@ -89,6 +99,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   onNavigate,
   initialTab,
   onStartMessage,
+  onOpenConversation,
 }) => {
   const { isLoggedIn, currentUser, updateProfile, deleteAccount } = useAuth();
 
@@ -161,6 +172,21 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const [blockActionPending, setBlockActionPending] = useState(false);
   const [reportProfileOpen, setReportProfileOpen] = useState(false);
   const [safetyBanner, setSafetyBanner] = useState<string | null>(null);
+  const [onlineUsers, setOnlineUsers] = useState<OnlinePresenceUser[]>([]);
+
+  useEffect(() => {
+    return subscribeToOnlinePresence(null, (users) => {
+      setOnlineUsers(users);
+    });
+  }, []);
+
+  const livePresence =
+    findOnlinePresenceUser(onlineUsers, profile.id) ??
+    (profile.userId ? findOnlinePresenceUser(onlineUsers, profile.userId) : undefined);
+  const isLiveOnline = Boolean(livePresence) || isMine;
+  const liveClinicalStatus =
+    livePresence?.clinicalStatus ??
+    (isMine ? loadSavedClinicalStatus(profile.id) ?? loadSavedClinicalStatus(currentUser.id) : null);
 
   useEffect(() => {
     if (initialTab) {
@@ -410,7 +436,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   };
 
   const [copiedProfilePostId, setCopiedProfilePostId] = useState<number | null>(null);
-  const [profileShareCopied, setProfileShareCopied] = useState(false);
+  const [showFrostedCardModal, setShowFrostedCardModal] = useState(false);
 
   const handleShareProfilePost = async (postId: number) => {
     if (typeof window === 'undefined') return;
@@ -950,9 +976,19 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                 />
                 <span
                   className={`absolute bottom-2 right-2 w-4 h-4 rounded-full ring-2 ring-white dark:ring-slate-900 ${
-                    profile.online ? 'bg-emerald-500' : 'bg-slate-400'
+                    liveClinicalStatus
+                      ? CLINICAL_STATUS_META[liveClinicalStatus].dotClass
+                      : isLiveOnline
+                      ? 'bg-emerald-500'
+                      : 'bg-slate-400'
                   }`}
-                  title={profile.online ? 'Online' : 'Offline'}
+                  title={
+                    liveClinicalStatus
+                      ? `${CLINICAL_STATUS_META[liveClinicalStatus].label} (Live)`
+                      : isLiveOnline
+                      ? 'Online'
+                      : 'Offline'
+                  }
                 />
 
                 {isMine && (
@@ -992,6 +1028,9 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                     onClick={() => onOpenVerificationCenter?.(isMine ? 'status' : 'vouch_classmates')}
                     size="md"
                   />
+                  {liveClinicalStatus && (
+                    <ClinicalStatusChip status={liveClinicalStatus} size="md" />
+                  )}
                 </div>
 
                 <div className="text-xs sm:text-sm font-bold text-blue-600 dark:text-blue-400 flex flex-wrap items-center justify-center sm:justify-start gap-2 mt-2">
@@ -1137,19 +1176,12 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
 
               <button
                 type="button"
-                onClick={() => {
-                  navigator.clipboard?.writeText(window.location.href);
-                  setProfileShareCopied(true);
-                  setTimeout(() => setProfileShareCopied(false), 2500);
-                }}
-                className="p-1.5 sm:p-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 transition-colors cursor-pointer shrink-0"
-                title="Share profile"
+                onClick={() => setShowFrostedCardModal(true)}
+                className="inline-flex items-center gap-1.5 px-3 sm:px-3.5 py-1.5 sm:py-2 rounded-xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 hover:opacity-90 text-[11px] sm:text-xs font-bold shadow-xs transition-all cursor-pointer shrink-0 whitespace-nowrap"
+                title="Open shareable frosted profile card"
               >
-                {profileShareCopied ? (
-                  <Check className="w-4 h-4 text-emerald-600" />
-                ) : (
-                  <Share2 className="w-4 h-4" />
-                )}
+                <Share2 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                <span>{isMine ? 'Share My Profile Card' : 'Share Card'}</span>
               </button>
             </div>
           </div>
@@ -1172,6 +1204,25 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
               </span>
             </div>
           </div>
+
+          {/* Live Clinical Duty Status Switcher (Broadcast via Supabase Realtime Presence) */}
+          {isMine && (
+            <div className="mt-3 p-3.5 rounded-2xl liquid-glass-subcard border border-slate-200/80 dark:border-slate-800/80 bg-white/70 dark:bg-slate-900/60 flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
+              <div className="min-w-0">
+                <p className="text-xs font-extrabold text-slate-900 dark:text-white flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+                  <span>Live Clinical Status</span>
+                </p>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                  Visible in real time to colleagues. Setting In OT or On Call advises peers to send quietly.
+                </p>
+              </div>
+              <ClinicalStatusSelector
+                currentStatus={liveClinicalStatus ?? null}
+                onSelect={(next) => updateMyClinicalStatus(next, currentUser.id)}
+              />
+            </div>
+          )}
 
           {/* Profile Completion Level Card (Visible on own profile) */}
           {isMine && (
@@ -2801,6 +2852,17 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         targetLabel={`${profile.fullName}'s profile`}
         onClose={() => setReportProfileOpen(false)}
         onSubmitted={(msg) => setSafetyBanner(msg)}
+      />
+
+      {/* Frosted-Glass Shareable Profile Card */}
+      <FrostedProfileCardModal
+        profile={profile}
+        isOpen={showFrostedCardModal}
+        postsCountOverride={profilePosts.length}
+        onClose={() => setShowFrostedCardModal(false)}
+        onStartMessage={isMine ? undefined : onStartMessage}
+        onOpenConversation={onOpenConversation}
+        onEditOwnProfile={isMine ? () => setActiveTab('edit') : undefined}
       />
 
       {safetyBanner && (

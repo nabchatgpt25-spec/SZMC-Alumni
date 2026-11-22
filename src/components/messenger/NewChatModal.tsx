@@ -3,17 +3,19 @@ import { Check, Loader2, Search, UserPlus, Users, X } from 'lucide-react';
 import {
   createGroupConversation,
   findOrCreateDirectConversation,
+  listSuggestedColleaguesForChat,
   searchAlumniForChat,
 } from '../../services/messagingService';
 import type { ChatPerson } from '../../types/messaging';
 
 interface NewChatModalProps {
   myId: number;
+  batchYear?: number;
   onClose: () => void;
   onStarted: (conversationId: string) => void;
 }
 
-export const NewChatModal: React.FC<NewChatModalProps> = ({ myId, onClose, onStarted }) => {
+export const NewChatModal: React.FC<NewChatModalProps> = ({ myId, batchYear, onClose, onStarted }) => {
   const [mode, setMode] = useState<'direct' | 'group'>('direct');
   const [groupTitle, setGroupTitle] = useState('');
   const [selectedMembers, setSelectedMembers] = useState<ChatPerson[]>([]);
@@ -21,10 +23,30 @@ export const NewChatModal: React.FC<NewChatModalProps> = ({ myId, onClose, onSta
 
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<ChatPerson[]>([]);
+  const [suggestedBatchmates, setSuggestedBatchmates] = useState<ChatPerson[]>([]);
+  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [startingId, setStartingId] = useState<number | null>(null);
   const requestRef = useRef(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingSuggestions(true);
+    listSuggestedColleaguesForChat(myId, batchYear)
+      .then((people) => {
+        if (!cancelled) setSuggestedBatchmates(people);
+      })
+      .catch(() => {
+        if (!cancelled) setSuggestedBatchmates([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingSuggestions(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [myId, batchYear]);
 
   useEffect(() => {
     const term = query.trim();
@@ -236,14 +258,14 @@ export const NewChatModal: React.FC<NewChatModalProps> = ({ myId, onClose, onSta
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-2 pb-4 min-h-[160px]">
+        <div className="flex-1 overflow-y-auto px-2 pb-4 min-h-[180px]">
           {error && (
             <p className="mx-2 mb-2 p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 text-xs text-rose-700 dark:text-rose-300">
               {error}
             </p>
           )}
 
-          {searching && (
+          {(searching || (trimmed.length < 2 && loadingSuggestions)) && (
             <div className="flex justify-center py-8">
               <Loader2 className="w-5 h-5 animate-spin text-blue-600" />
             </div>
@@ -255,8 +277,16 @@ export const NewChatModal: React.FC<NewChatModalProps> = ({ myId, onClose, onSta
             </p>
           )}
 
+          {!searching && trimmed.length < 2 && !loadingSuggestions && suggestedBatchmates.length > 0 && (
+            <div className="px-3 pt-1 pb-1.5">
+              <p className="text-[11px] font-bold text-slate-500 dark:text-slate-400">
+                {batchYear ? `MBBS Batch ${batchYear} Colleagues` : 'Suggested SZMC Colleagues'}
+              </p>
+            </div>
+          )}
+
           {!searching &&
-            results.map((person) => {
+            (trimmed.length >= 2 ? results : suggestedBatchmates).map((person) => {
               const isSelected = selectedMembers.some((m) => m.profileId === person.profileId);
               return (
                 <button
@@ -264,7 +294,7 @@ export const NewChatModal: React.FC<NewChatModalProps> = ({ myId, onClose, onSta
                   type="button"
                   onClick={() => (mode === 'group' ? toggleGroupMember(person) : void startDirect(person))}
                   disabled={startingId !== null || creatingGroup}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-colors disabled:opacity-60 cursor-pointer ${
+                  className={`w-full min-h-[48px] flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-colors disabled:opacity-60 cursor-pointer ${
                     mode === 'group' && isSelected
                       ? 'bg-blue-50/80 dark:bg-blue-950/40'
                       : 'hover:bg-slate-50 dark:hover:bg-slate-800/60'
@@ -273,6 +303,7 @@ export const NewChatModal: React.FC<NewChatModalProps> = ({ myId, onClose, onSta
                   <img
                     src={person.avatarUrl}
                     alt={person.fullName}
+                    referrerPolicy="no-referrer"
                     className="w-10 h-10 rounded-full object-cover ring-1 ring-slate-200 dark:ring-slate-700 shrink-0"
                   />
                   <div className="flex-1 min-w-0">

@@ -21,11 +21,15 @@ import {
   deleteMessage,
   editMessage,
   findOrCreateDirectConversation,
+  findOnlinePresenceUser,
+  listConversationParticipants,
   listConversations,
+  listMessageReactions,
   listMessagesPage,
   markConversationRead,
   sendMessage,
   subscribeToMessageChanges,
+  subscribeToReactionChanges,
   subscribeToTypingStatus,
   sendTypingIndicator,
   subscribeToRealtimeConnectionStatus,
@@ -37,14 +41,18 @@ import {
   getRealtimeChannelStatus,
   getUserMessageSettings,
   publishOfficialAnnouncement,
+  toggleMessageReaction,
 } from '../../services/messagingService';
 import type {
   ChatConversation,
   ChatMessage,
+  ChatPerson,
+  MessageReaction,
   OnlinePresenceUser,
   UserMessageSettings,
 } from '../../types/messaging';
 import { playSound } from '../../utils/audio';
+import { formatStructuredPreview } from '../../utils/structuredChat';
 import { ConversationList } from './ConversationList';
 import { ChatThread } from './ChatThread';
 import { NewChatModal } from './NewChatModal';
@@ -54,11 +62,17 @@ import { MessageSettingsModal } from './MessageSettingsModal';
 interface MessengerViewProps {
   initialTargetProfileId?: number | null;
   onClearInitialTarget?: () => void;
+  initialConversationId?: string | null;
+  onClearInitialConversation?: () => void;
+  onViewProfile?: (profileId: number) => void;
 }
 
 export const MessengerView: React.FC<MessengerViewProps> = ({
   initialTargetProfileId,
   onClearInitialTarget,
+  initialConversationId,
+  onClearInitialConversation,
+  onViewProfile,
 }) => {
   const { currentUser, isAdminUser } = useAuth();
   // public.messages.sender_id → public.profiles(id); resolve it from Supabase.
@@ -74,6 +88,8 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
 
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [participants, setParticipants] = useState<ChatPerson[]>([]);
+  const [reactionsByMessageId, setReactionsByMessageId] = useState<Record<string, MessageReaction[]>>({});
   const [hasMoreMessages, setHasMoreMessages] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [threadLoading, setThreadLoading] = useState(false);
@@ -84,10 +100,14 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
     getRealtimeChannelStatus()
   );
   const [onlineUsers, setOnlineUsers] = useState<OnlinePresenceUser[]>([]);
-  const onlineProfileIds = useMemo(
-    () => new Set(onlineUsers.map((u) => u.profileId)),
-    [onlineUsers]
-  );
+  const onlineProfileIds = useMemo(() => {
+    const ids = new Set<number>();
+    onlineUsers.forEach((u) => {
+      ids.add(u.profileId);
+      if (u.appProfileId) ids.add(u.appProfileId);
+    });
+    return ids;
+  }, [onlineUsers]);
   const [userSettings, setUserSettings] = useState<UserMessageSettings | null>(null);
   const userSettingsRef = useRef<UserMessageSettings | null>(null);
   userSettingsRef.current = userSettings;
@@ -203,6 +223,14 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
     };
   }, [initialTargetProfileId, myId, refreshConversations, onClearInitialTarget]);
 
+  // Auto-open a specific DM or Group Chat conversation when jumped from Share Card
+  useEffect(() => {
+    if (!initialConversationId) return;
+    setShowSettings(false);
+    setActiveId(initialConversationId);
+    onClearInitialConversation?.();
+  }, [initialConversationId, onClearInitialConversation]);
+
   // 1. Subscribe to Supabase Realtime channel status
   useEffect(() => {
     return subscribeToRealtimeConnectionStatus((status) => {
@@ -210,12 +238,13 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
     });
   }, []);
 
-  // 1a. Subscribe to real Supabase Realtime Presence (live online colleagues)
+  // 1a. Subscribe to real Supabase Realtime Presence (live online colleagues & clinical status)
   useEffect(() => {
     if (!myId) return;
     return subscribeToOnlinePresence(
       {
         profileId: myId,
+        appProfileId: currentUser.id,
         fullName: currentUser.fullName || 'SZMC Alumnus',
         avatarUrl: currentUser.avatarUrl || '/szmc-logo.png',
         batchYear: currentUser.batchYear || 20,
@@ -224,7 +253,7 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
         setOnlineUsers(users);
       }
     );
-  }, [myId, currentUser.fullName, currentUser.avatarUrl, currentUser.batchYear]);
+  }, [myId, currentUser.id, currentUser.fullName, currentUser.avatarUrl, currentUser.batchYear]);
 
   // 1b. Refresh the inbox (debounced) whenever chat memberships/metadata change in Postgres
   useEffect(() => {
@@ -253,7 +282,7 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
       void refreshConversations();
       const currentActiveId = activeIdRef.current;
       if (!currentActiveId) return;
-      void listMessagesPage(currentActiveId, { limit: 50 }).then(({ messages: latestPage }) => {
+      void listMessagesPage(currentActiveId, { limit: 50 }).then(async ({ messages: latestPage }) => {
         if (activeIdRef.current !== currentActiveId) return;
         setMessages((prev) => {
           const map = new Map<string, ChatMessage>();
@@ -267,6 +296,10 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
             a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0
           );
         });
+        const latestReactions = await listMessageReactions(latestPage.map((m) => m.id));
+        if (activeIdRef.current === currentActiveId) {
+          setReactionsByMessageId((prev) => ({ ...prev, ...latestReactions }));
+        }
       }).catch(() => {});
     });
   }, [refreshConversations]);
@@ -303,10 +336,23 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
     };
   }, [activeId, myId]);
 
-  // 3. Load active conversation messages (cursor-paginated first page) when selection changes
+  const refreshParticipants = useCallback(async (convId: string) => {
+    try {
+      const list = await listConversationParticipants(convId);
+      if (activeIdRef.current === convId) {
+        setParticipants(list);
+      }
+    } catch {
+      /* participant list best-effort */
+    }
+  }, []);
+
+  // 3. Load active conversation messages, participants, and reactions when selection changes
   useEffect(() => {
     if (!activeId) {
       setMessages([]);
+      setParticipants([]);
+      setReactionsByMessageId({});
       setHasMoreMessages(false);
       setActiveTypingText(null);
       return;
@@ -315,14 +361,24 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
     setThreadLoading(true);
     setThreadError(null);
     setHasMoreMessages(false);
+    setReactionsByMessageId({});
     (async () => {
       try {
-        const { messages: rows, hasMore } = await listMessagesPage(activeId, { limit: 50 });
+        const [{ messages: rows, hasMore }, convParticipants] = await Promise.all([
+          listMessagesPage(activeId, { limit: 50 }),
+          listConversationParticipants(activeId),
+        ]);
         if (cancelled) return;
         setMessages(rows);
+        setParticipants(convParticipants);
         setHasMoreMessages(hasMore);
-        await markConversationRead(activeId, myId);
+
+        const [reactionsMap] = await Promise.all([
+          listMessageReactions(rows.map((r) => r.id)),
+          markConversationRead(activeId, myId),
+        ]);
         if (!cancelled) {
+          setReactionsByMessageId(reactionsMap);
           setConversations((prev) =>
             prev.map((c) => (c.id === activeId ? { ...c, unreadCount: 0 } : c))
           );
@@ -337,6 +393,27 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
       cancelled = true;
     };
   }, [activeId, myId]);
+
+  // 3b. Subscribe to live message reaction inserts & deletes
+  useEffect(() => {
+    return subscribeToReactionChanges((event) => {
+      const { reaction, eventType } = event;
+      setReactionsByMessageId((prev) => {
+        const current = prev[reaction.messageId] ?? [];
+        if (eventType === 'DELETE') {
+          const next = current.filter(
+            (r) => !(r.profileId === reaction.profileId && r.emoji === reaction.emoji)
+          );
+          return { ...prev, [reaction.messageId]: next };
+        }
+        const exists = current.some(
+          (r) => r.profileId === reaction.profileId && r.emoji === reaction.emoji
+        );
+        if (exists) return prev;
+        return { ...prev, [reaction.messageId]: [...current, reaction] };
+      });
+    });
+  }, []);
 
   const handleLoadOlder = useCallback(async () => {
     if (!activeId || loadingOlder || !hasMoreMessages) return;
@@ -355,6 +432,8 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
           const uniqueOlder = older.filter((m) => !existingIds.has(m.id));
           return [...uniqueOlder, ...prev];
         });
+        const olderReactions = await listMessageReactions(older.map((m) => m.id));
+        setReactionsByMessageId((prev) => ({ ...olderReactions, ...prev }));
       }
     } catch (err) {
       setThreadError(err instanceof Error ? err.message : 'Could not load older messages.');
@@ -392,7 +471,10 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
           // Reconcile optimistic sending bubble if postgres_changes arrives before sendMessage resolves
           if (isNewInsert && isFromMe) {
             const optimisticIdx = prev.findIndex(
-              (m) => m.status === 'sending' && m.senderId === myId && m.body === message.body
+              (m) =>
+                m.status === 'sending' &&
+                m.senderId === myId &&
+                (m.body === message.body || (Boolean(m.mediaUrl) && m.mediaUrl === message.mediaUrl))
             );
             if (optimisticIdx !== -1) {
               const next = [...prev];
@@ -405,7 +487,7 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
 
         if (isNewInsert && !isFromMe) {
           void markConversationRead(message.conversationId, myId);
-          if (soundAllowed && !isMuted) {
+          if (soundAllowed && !isMuted && !message.isSilent) {
             playSound('notification');
           }
         }
@@ -424,21 +506,24 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
 
         if (targetIdx !== -1) {
           const target = prev[targetIdx];
+          const silentPrefix = !message.deletedAt && message.isSilent ? '🔇 ' : '';
+          const rawPreview = message.deletedAt
+            ? 'Message deleted'
+            : message.type === 'image' || message.mediaUrl
+            ? message.body && message.body !== 'Photo'
+              ? `📷 ${message.body}`
+              : '📷 Photo'
+            : formatStructuredPreview(message.body) || message.body;
+
           const updatedTarget: ChatConversation = {
             ...target,
-            lastMessagePreview: message.deletedAt
-              ? 'Message deleted'
-              : message.type === 'image' || message.mediaUrl
-              ? message.body && message.body !== 'Photo'
-                ? `📷 ${message.body}`
-                : '📷 Photo'
-              : message.body,
+            lastMessagePreview: `${silentPrefix}${rawPreview}`,
             lastMessageAt: message.createdAt,
             lastMessageFromMe: isFromMe,
             unreadCount: isCurrentActive || isFromMe ? 0 : target.unreadCount + 1,
           };
 
-          if (!isCurrentActive && !isFromMe && !target.isMuted) {
+          if (!isCurrentActive && !isFromMe && !target.isMuted && !message.isSilent) {
             setIncomingToast({
               conversationId: message.conversationId,
               senderName: target.person.fullName || 'SZMC Colleague',
@@ -460,6 +545,12 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
   }, [myId, scheduleRefreshConversations]);
 
   const activeConversation = conversations.find((c) => c.id === activeId) ?? null;
+  const activePeerPresence =
+    activeConversation &&
+    activeConversation.type !== 'group' &&
+    activeConversation.type !== 'announcement'
+      ? findOnlinePresenceUser(onlineUsers, activeConversation.person.profileId)
+      : undefined;
 
   // Handle outgoing typing indicator broadcast
   const handleTyping = useCallback(() => {
@@ -472,19 +563,35 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
   }, [activeId, myId, currentUser.fullName]);
 
   // Optimistic message send with server reconciliation and inline retry support
-  const dispatchSend = async (targetConversationId: string, body: string, existingTempId?: string): Promise<boolean> => {
+  const dispatchSend = async (
+    targetConversationId: string,
+    body: string,
+    options?: {
+      type?: 'text' | 'like' | 'image' | 'system' | 'ProfileShareCard';
+      mediaUrl?: string | null;
+      replyToMessageId?: string | null;
+      isSilent?: boolean;
+      existingTempId?: string;
+    }
+  ): Promise<boolean> => {
+    const existingTempId = options?.existingTempId;
     const tempId = existingTempId ?? `temp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const resolvedType =
+      options?.type ?? (options?.mediaUrl ? 'image' : body === '👍' ? 'like' : 'text');
+
     const optimisticMsg: ChatMessage = {
       id: tempId,
       clientTempId: tempId,
       conversationId: targetConversationId,
       senderId: myId,
-      body,
+      body: body || (resolvedType === 'image' ? 'Photo' : ''),
       createdAt: new Date().toISOString(),
       editedAt: null,
       deletedAt: null,
-      type: body === '👍' ? 'like' : 'text',
-      mediaUrl: null,
+      type: resolvedType,
+      mediaUrl: options?.mediaUrl ?? null,
+      replyToMessageId: options?.replyToMessageId ?? null,
+      isSilent: Boolean(options?.isSilent),
       status: 'sending',
     };
 
@@ -498,7 +605,12 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
     });
 
     try {
-      const sent = await sendMessage(targetConversationId, myId, body);
+      const sent = await sendMessage(targetConversationId, myId, body, {
+        type: resolvedType,
+        mediaUrl: options?.mediaUrl ?? null,
+        replyToMessageId: options?.replyToMessageId ?? null,
+        isSilent: Boolean(options?.isSilent),
+      });
       setMessages((prev) => {
         const alreadyHasServerRow = prev.some((m) => m.id === sent.id);
         if (alreadyHasServerRow) {
@@ -519,19 +631,75 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
     }
   };
 
-  const handleSend = async (body: string): Promise<boolean> => {
+  const handleSend = async (
+    body: string,
+    options?: {
+      type?: 'text' | 'like' | 'image' | 'system' | 'ProfileShareCard';
+      mediaUrl?: string | null;
+      replyToMessageId?: string | null;
+      isSilent?: boolean;
+    }
+  ): Promise<boolean> => {
     if (!activeId) return false;
-    return dispatchSend(activeId, body);
+    return dispatchSend(activeId, body, options);
   };
 
   const handleRetrySend = (failedMessage: ChatMessage) => {
     if (!activeId) return;
-    void dispatchSend(activeId, failedMessage.body, failedMessage.id);
+    void dispatchSend(activeId, failedMessage.body, {
+      type: (failedMessage.type as 'text' | 'like' | 'image' | 'system' | 'ProfileShareCard') || 'text',
+      mediaUrl: failedMessage.mediaUrl ?? null,
+      replyToMessageId: failedMessage.replyToMessageId ?? null,
+      isSilent: Boolean(failedMessage.isSilent),
+      existingTempId: failedMessage.id,
+    });
   };
 
   const handleDismissFailed = (tempId: string) => {
     setMessages((prev) => prev.filter((m) => m.id !== tempId));
   };
+
+  const handleToggleReaction = async (messageId: string, emoji: string) => {
+    const existing = reactionsByMessageId[messageId] ?? [];
+    const currentlyReacted = existing.some((r) => r.profileId === myId && r.emoji === emoji);
+
+    setReactionsByMessageId((prev) => {
+      const curr = prev[messageId] ?? [];
+      if (currentlyReacted) {
+        return {
+          ...prev,
+          [messageId]: curr.filter((r) => !(r.profileId === myId && r.emoji === emoji)),
+        };
+      }
+      return {
+        ...prev,
+        [messageId]: [...curr, { messageId, profileId: myId, emoji }],
+      };
+    });
+
+    try {
+      await toggleMessageReaction(messageId, myId, emoji, currentlyReacted);
+    } catch (err) {
+      setReactionsByMessageId((prev) => ({ ...prev, [messageId]: existing }));
+      setThreadError(err instanceof Error ? err.message : 'Could not update reaction.');
+    }
+  };
+
+  const sharedPhotos = useMemo(() => {
+    return messages
+      .filter((m) => !m.deletedAt && (m.mediaUrl || m.type === 'image' || m.body.includes('[image]:')))
+      .map((m) => {
+        let url = m.mediaUrl || '';
+        if (!url && m.body.includes('[image]:')) {
+          url = m.body.split('[image]:')[1]?.trim() || '';
+        } else if (!url && m.body.startsWith('data:image/')) {
+          url = m.body;
+        }
+        return { id: m.id, url, createdAt: m.createdAt };
+      })
+      .filter((item) => Boolean(item.url))
+      .reverse();
+  }, [messages]);
 
   const handleStartDirectFromPresence = async (peerProfileId: number) => {
     try {
@@ -546,7 +714,10 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
 
   const handleEdit = async (messageId: string, body: string): Promise<boolean> => {
     try {
-      const updated = await editMessage(messageId, body);
+      const original = messages.find((m) => m.id === messageId);
+      const updated = await editMessage(messageId, body, {
+        preserveSilent: Boolean(original?.isSilent),
+      });
       setMessages((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
       return true;
     } catch (err) {
@@ -723,7 +894,7 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
       )}
 
       {/* Main Two-Column Meta Messenger Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-4 h-[calc(100vh-210px)] min-h-[540px]">
+      <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-4 h-[calc(100dvh-185px)] lg:h-[calc(100vh-210px)] min-h-[420px] lg:min-h-[540px]">
         {/* Left Column: Conversation List */}
         <div className={`${showThreadOnMobile ? 'hidden lg:flex' : 'flex'} min-h-0`}>
           <ConversationList
@@ -755,9 +926,16 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
               <ConversationSettingsPanel
                 conversation={activeConversation}
                 myId={myId}
+                participants={participants}
+                onlineProfileIds={onlineProfileIds}
+                sharedPhotos={sharedPhotos}
                 onBack={() => setShowSettings(false)}
                 onLeft={handleLeft}
                 onBlockStatusChange={() => void refreshConversations()}
+                onParticipantsChanged={() => {
+                  void refreshParticipants(activeConversation.id);
+                  void refreshConversations();
+                }}
                 onMutedChange={(muted) =>
                   setConversations((prev) =>
                     prev.map((c) => (c.id === activeConversation.id ? { ...c, isMuted: muted } : c))
@@ -769,15 +947,23 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
                 conversation={activeConversation}
                 messages={messages}
                 myId={myId}
+                myDisplayName={currentUser.fullName}
+                myAvatarUrl={currentUser.avatarUrl || '/szmc-logo.png'}
                 isSuperAdmin={isSuperAdmin}
                 readReceiptsEnabled={userSettings?.readReceiptsEnabled ?? true}
+                participants={participants}
+                reactionsByMessageId={reactionsByMessageId}
                 loading={threadLoading}
                 hasMoreMessages={hasMoreMessages}
                 loadingOlder={loadingOlder}
                 error={threadError}
                 sending={sending}
                 typingText={activeTypingText}
-                isPeerOnline={onlineProfileIds.has(activeConversation.person.profileId)}
+                isPeerOnline={
+                  Boolean(activePeerPresence) ||
+                  onlineProfileIds.has(activeConversation.person.profileId)
+                }
+                peerClinicalStatus={activePeerPresence?.clinicalStatus ?? null}
                 onTyping={handleTyping}
                 onBack={() => setActiveId(null)}
                 onOpenSettings={() => setShowSettings(true)}
@@ -787,6 +973,18 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
                 onDismissFailed={handleDismissFailed}
                 onEdit={handleEdit}
                 onDelete={handleDelete}
+                onToggleReaction={(msgId, emoji) => void handleToggleReaction(msgId, emoji)}
+                onViewProfile={onViewProfile}
+                currentProfile={{
+                  id: currentUser.id,
+                  fullName: currentUser.fullName,
+                  batchYear: currentUser.batchYear,
+                  specialty: currentUser.specialty,
+                  position: currentUser.position,
+                  profession: currentUser.profession,
+                  institution: currentUser.institution,
+                  avatarUrl: currentUser.avatarUrl,
+                }}
               />
             )
           ) : (
@@ -855,7 +1053,12 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
       )}
 
       {showNewChat && (
-        <NewChatModal myId={myId} onClose={() => setShowNewChat(false)} onStarted={handleStartChat} />
+        <NewChatModal
+          myId={myId}
+          batchYear={currentUser.batchYear}
+          onClose={() => setShowNewChat(false)}
+          onStarted={handleStartChat}
+        />
       )}
 
       {/* Message & Privacy Settings Modal (Accessible to all alumni; admin diagnostics gated inside) */}
@@ -906,7 +1109,7 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
               </div>
               <div className="flex items-center justify-between text-slate-600 dark:text-slate-400">
                 <span>Total Active Conversations:</span>
-                <span className="font-bold text-slate-900 dark:text-white">{conversations.length}</span>
+                <span className="font-bold tabular-nums text-slate-900 dark:text-white">{conversations.length}</span>
               </div>
               <div className="flex items-center justify-between gap-2 text-slate-600 dark:text-slate-400">
                 <span className="shrink-0">Supabase Endpoint:</span>

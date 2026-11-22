@@ -1,18 +1,28 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Menu, Search, Mail, ChevronDown, User, LogOut, ShieldCheck, ShieldAlert, Clock, X, Settings, MessageCircle } from 'lucide-react';
+import { Menu, Search, Mail, ChevronDown, User, LogOut, ShieldCheck, ShieldAlert, Clock, X, Settings, MessageCircle, Share2 } from 'lucide-react';
 import { ThemeToggle } from './ThemeToggle';
 import { SZMCLogo } from './SZMCLogo';
 import { NotificationDropdown } from './NotificationDropdown';
 import { useAuth } from '../context/AuthContext';
 import { loadVouchRequests } from '../utils/verificationService';
 import { isUserSuperAdmin, isUserGeneralAdmin, isUserSubAdmin } from '../types';
+import {
+  findOnlinePresenceUser,
+  subscribeToOnlinePresence,
+  updateMyClinicalStatus,
+} from '../services/messagingService';
+import type { OnlinePresenceUser } from '../types/messaging';
+import { CLINICAL_STATUS_META, loadSavedClinicalStatus } from '../utils/clinicalStatus';
+import { ClinicalStatusChip, ClinicalStatusSelector } from './ClinicalStatusChip';
 
 interface HeaderProps {
   onToggleSidebar: () => void;
   onNavigate: (route: string) => void;
   searchQuery: string;
   onSearchChange: (q: string) => void;
+  unreadMessagesCount?: number;
   onOpenVerificationCenter?: (tab?: 'status' | 'vouch_classmates' | 'upload_id' | 'policy') => void;
+  onShareMyCard?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -20,14 +30,25 @@ export const Header: React.FC<HeaderProps> = ({
   onNavigate,
   searchQuery,
   onSearchChange,
+  unreadMessagesCount = 0,
   onOpenVerificationCenter,
+  onShareMyCard,
 }) => {
   const { currentUser, logout } = useAuth();
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
+  const [onlineUsers, setOnlineUsers] = useState<OnlinePresenceUser[]>([]);
   const [pendingVouchRequestsCount, setPendingVouchRequestsCount] = useState<number>(() =>
     loadVouchRequests().filter((r) => r.status === 'pending').length
   );
+
+  useEffect(() => {
+    return subscribeToOnlinePresence(null, (users) => setOnlineUsers(users));
+  }, []);
+
+  const myPresence = findOnlinePresenceUser(onlineUsers, currentUser.id);
+  const myClinicalStatus =
+    myPresence?.clinicalStatus ?? loadSavedClinicalStatus(currentUser.id);
 
   const isUserVerified = (currentUser.verificationStatus || 'verified') === 'verified';
   const userVouchesCount = currentUser.vouchesCount ?? (currentUser.verifiedBy?.length ?? (isUserVerified ? 2 : 0));
@@ -174,11 +195,15 @@ export const Header: React.FC<HeaderProps> = ({
             type="button"
             onClick={() => onNavigate('messages')}
             className="hidden sm:flex relative p-2 rounded-xl text-slate-600 dark:text-slate-300 hover:text-[#0084FF] hover:bg-blue-50 dark:hover:bg-slate-800 transition-colors cursor-pointer"
-            title="Messenger"
-            aria-label="Messenger"
+            title={unreadMessagesCount > 0 ? `Messenger (${unreadMessagesCount} unread)` : 'Messenger'}
+            aria-label={unreadMessagesCount > 0 ? `Messenger (${unreadMessagesCount} unread)` : 'Messenger'}
           >
             <MessageCircle className="w-5 h-5 text-[#0084FF]" />
-            <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-[#0084FF] ring-2 ring-white dark:ring-slate-900" />
+            {unreadMessagesCount > 0 && (
+              <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 rounded-full bg-[#0084FF] text-white text-[10px] font-black tabular-nums flex items-center justify-center ring-2 ring-white dark:ring-slate-900 shadow-xs">
+                {unreadMessagesCount > 99 ? '99+' : unreadMessagesCount}
+              </span>
+            )}
           </button>
 
           {/* User Profile Trigger & Dropdown */}
@@ -196,28 +221,45 @@ export const Header: React.FC<HeaderProps> = ({
                   alt={currentUser.fullName}
                   className="w-9 h-9 rounded-full object-cover ring-2 ring-blue-500/20 dark:ring-blue-400/30"
                 />
-                <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-emerald-500 ring-2 ring-white dark:ring-slate-900 rounded-full" />
+                <span
+                  className={`absolute bottom-0 right-0 w-2.5 h-2.5 ring-2 ring-white dark:ring-slate-900 rounded-full ${
+                    myClinicalStatus ? CLINICAL_STATUS_META[myClinicalStatus].dotClass : 'bg-emerald-500'
+                  }`}
+                />
               </div>
               <div className="hidden md:block">
                 <div className="text-xs font-bold text-slate-900 dark:text-slate-100 leading-tight flex items-center gap-1">
                   <span>{currentUser.fullName.split(' ')[0]} {currentUser.fullName.split(' ')[1] || ''}</span>
                   <ShieldCheck className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400 inline" />
                 </div>
-                <div className="text-[11px] text-slate-500 dark:text-slate-400 font-medium">
-                  Batch {currentUser.batchYear} · {currentUser.profession}
+                <div className="text-[11px] text-slate-500 dark:text-slate-400 font-medium flex items-center gap-1.5">
+                  <span>Batch {currentUser.batchYear} · {currentUser.profession}</span>
                 </div>
               </div>
               <ChevronDown className="w-4 h-4 text-slate-400 dark:text-slate-500 hidden sm:block" />
             </button>
 
             {showProfileMenu && (
-              <div className="absolute right-0 mt-2 w-56 max-w-[calc(100vw-1.5rem)] bg-white dark:bg-slate-900 rounded-2xl shadow-xl border border-slate-200 dark:border-slate-800 py-2 z-50 animate-in fade-in slide-in-from-top-2 duration-150">
+              <div className="absolute right-0 mt-2 w-64 max-w-[calc(100vw-1.5rem)] bg-white dark:bg-slate-900 rounded-2xl shadow-xl border border-slate-200 dark:border-slate-800 py-2 z-50 animate-in fade-in slide-in-from-top-2 duration-150">
                 <div className="px-4 py-2 border-b border-slate-100 dark:border-slate-800">
-                  <div className="text-xs font-bold text-slate-900 dark:text-slate-100">
-                    {currentUser.fullName}
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-xs font-bold text-slate-900 dark:text-slate-100 truncate">
+                      {currentUser.fullName}
+                    </div>
+                    {myClinicalStatus && <ClinicalStatusChip status={myClinicalStatus} size="xs" />}
                   </div>
-                  <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                  <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
                     {currentUser.email || 'alumni@szmc.edu.bd'}
+                  </div>
+                  <div className="mt-2 pt-2 border-t border-slate-100 dark:border-slate-800/80">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">
+                      Live Status
+                    </p>
+                    <ClinicalStatusSelector
+                      compact
+                      currentStatus={myClinicalStatus ?? null}
+                      onSelect={(next) => updateMyClinicalStatus(next, currentUser.id)}
+                    />
                   </div>
                 </div>
 
@@ -233,6 +275,20 @@ export const Header: React.FC<HeaderProps> = ({
                     <User className="w-4 h-4 text-slate-400" />
                     My Profile
                   </button>
+
+                  {onShareMyCard && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowProfileMenu(false);
+                        onShareMyCard();
+                      }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors text-left cursor-pointer"
+                    >
+                      <Share2 className="w-4 h-4 text-indigo-500" />
+                      <span>Share Profile Card</span>
+                    </button>
+                  )}
 
                   <button
                     type="button"

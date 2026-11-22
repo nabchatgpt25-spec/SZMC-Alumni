@@ -1,6 +1,9 @@
 import React, { useMemo, useState } from 'react';
 import { AlertTriangle, Megaphone, Plus, Sliders, Search, SquarePen, ShieldCheck, Users, X } from 'lucide-react';
 import type { ChatConversation, OnlinePresenceUser } from '../../types/messaging';
+import { findOnlinePresenceUser } from '../../services/messagingService';
+import { CLINICAL_STATUS_META } from '../../utils/clinicalStatus';
+import { ClinicalStatusChip } from '../ClinicalStatusChip';
 
 interface ConversationListProps {
   conversations: ChatConversation[];
@@ -32,6 +35,8 @@ function formatListTime(iso: string): string {
   return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
+type InboxFilter = 'all' | 'unread' | 'groups';
+
 export const ConversationList: React.FC<ConversationListProps> = ({
   conversations,
   myId,
@@ -47,6 +52,7 @@ export const ConversationList: React.FC<ConversationListProps> = ({
   onRetry,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
+  const [inboxFilter, setInboxFilter] = useState<InboxFilter>('all');
 
   // Live online colleagues from Supabase Realtime Presence (never mock data),
   // excluding myself and any accounts blocked in either direction.
@@ -62,7 +68,19 @@ export const ConversationList: React.FC<ConversationListProps> = ({
     );
   }, [onlineUsers, myId, conversations]);
 
+  const unreadThreadCount = useMemo(
+    () => conversations.filter((c) => c.unreadCount > 0).length,
+    [conversations]
+  );
+
+  const groupThreadCount = useMemo(
+    () => conversations.filter((c) => c.type === 'group' || c.type === 'announcement').length,
+    [conversations]
+  );
+
   const filteredConversations = conversations.filter((c) => {
+    if (inboxFilter === 'unread' && c.unreadCount <= 0) return false;
+    if (inboxFilter === 'groups' && c.type !== 'group' && c.type !== 'announcement') return false;
     if (!searchTerm.trim()) return true;
     const term = searchTerm.toLowerCase();
     const nameMatch = c.person.fullName.toLowerCase().includes(term);
@@ -99,8 +117,8 @@ export const ConversationList: React.FC<ConversationListProps> = ({
         </div>
       </div>
 
-      {/* Meta Messenger Search Bar */}
-      <div className="px-3 pb-2">
+      {/* Meta Messenger Search Bar & Inbox Filter Tabs */}
+      <div className="px-3 pb-2 space-y-2">
         <div className="relative flex items-center">
           <Search className="w-4 h-4 text-slate-400 dark:text-slate-500 absolute left-3.5 pointer-events-none" />
           <input
@@ -108,17 +126,66 @@ export const ConversationList: React.FC<ConversationListProps> = ({
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             placeholder="Search Messenger"
+            aria-label="Search conversations"
             className="w-full pl-9 pr-8 py-2 rounded-full bg-[#F0F2F5] dark:bg-slate-800 text-xs sm:text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 outline-none focus:ring-2 focus:ring-[#0084FF]/30 transition-all"
           />
           {searchTerm && (
             <button
               type="button"
               onClick={() => setSearchTerm('')}
+              aria-label="Clear search"
               className="absolute right-3 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-0.5 cursor-pointer"
             >
               <X className="w-3.5 h-3.5" />
             </button>
           )}
+        </div>
+
+        {/* Segmented Filter Control */}
+        <div className="grid grid-cols-3 p-1 rounded-xl bg-[#F0F2F5] dark:bg-slate-800/80 gap-1">
+          <button
+            type="button"
+            onClick={() => setInboxFilter('all')}
+            className={`py-1.5 px-2 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+              inboxFilter === 'all'
+                ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-2xs'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+            }`}
+          >
+            All
+          </button>
+          <button
+            type="button"
+            onClick={() => setInboxFilter('unread')}
+            className={`py-1.5 px-2 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer flex items-center justify-center gap-1 ${
+              inboxFilter === 'unread'
+                ? 'bg-white dark:bg-slate-900 text-[#0084FF] shadow-2xs'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+            }`}
+          >
+            <span>Unread</span>
+            {unreadThreadCount > 0 && (
+              <span className="text-[10px] font-bold tabular-nums opacity-85">
+                ({unreadThreadCount})
+              </span>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => setInboxFilter('groups')}
+            className={`py-1.5 px-2 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer flex items-center justify-center gap-1 ${
+              inboxFilter === 'groups'
+                ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-2xs'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+            }`}
+          >
+            <span>Groups</span>
+            {groupThreadCount > 0 && (
+              <span className="text-[10px] font-bold tabular-nums opacity-70">
+                ({groupThreadCount})
+              </span>
+            )}
+          </button>
         </div>
       </div>
 
@@ -130,6 +197,9 @@ export const ConversationList: React.FC<ConversationListProps> = ({
               const existingConv = conversations.find(
                 (c) => c.type !== 'group' && c.type !== 'announcement' && c.person.profileId === alumnus.profileId
               );
+              const statusMeta = alumnus.clinicalStatus
+                ? CLINICAL_STATUS_META[alumnus.clinicalStatus]
+                : null;
               return (
                 <button
                   key={alumnus.profileId}
@@ -144,15 +214,24 @@ export const ConversationList: React.FC<ConversationListProps> = ({
                     }
                   }}
                   className="flex flex-col items-center gap-1 group cursor-pointer"
-                  title={`Chat with ${alumnus.fullName} (Online now)`}
+                  title={
+                    statusMeta
+                      ? `Chat with ${alumnus.fullName} (${statusMeta.label})`
+                      : `Chat with ${alumnus.fullName} (Online now)`
+                  }
                 >
                   <div className="relative">
                     <img
                       src={alumnus.avatarUrl}
                       alt={alumnus.fullName}
+                      referrerPolicy="no-referrer"
                       className="w-12 h-12 rounded-full object-cover ring-2 ring-transparent group-hover:ring-[#0084FF] transition-all"
                     />
-                    <span className="absolute bottom-0 right-0 w-3 h-3 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-slate-900 shadow-xs" />
+                    <span
+                      className={`absolute bottom-0 right-0 w-3 h-3 rounded-full ring-2 ring-white dark:ring-slate-900 shadow-xs ${
+                        statusMeta ? statusMeta.dotClass : 'bg-emerald-500'
+                      }`}
+                    />
                   </div>
                   <span className="text-[11px] font-medium text-slate-700 dark:text-slate-300 truncate max-w-[54px] text-center">
                     {alumnus.fullName.split(' ')[0]}
@@ -200,20 +279,42 @@ export const ConversationList: React.FC<ConversationListProps> = ({
         {!loading && !error && filteredConversations.length === 0 && (
           <div className="p-8 text-center">
             <p className="text-sm font-bold text-slate-900 dark:text-white">
-              {searchTerm ? 'No conversations match' : 'No chats yet'}
+              {searchTerm
+                ? 'No conversations match'
+                : inboxFilter === 'unread'
+                ? 'All caught up'
+                : inboxFilter === 'groups'
+                ? 'No group chats yet'
+                : 'No chats yet'}
             </p>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-              {searchTerm ? 'Try searching another colleague name' : 'Say hello to any doctor or alumnus.'}
+              {searchTerm
+                ? 'Try searching another colleague name'
+                : inboxFilter === 'unread'
+                ? 'You have no unread conversations.'
+                : inboxFilter === 'groups'
+                ? 'Create a batch or specialty group to collaborate together.'
+                : 'Say hello to any doctor or alumnus.'}
             </p>
-            {!searchTerm && (
+            {inboxFilter !== 'all' && !searchTerm ? (
               <button
                 type="button"
-                onClick={onNewChat}
-                className="mt-3 inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-[#0084FF] text-white text-xs font-bold hover:bg-[#0073E6] transition-colors cursor-pointer"
+                onClick={() => setInboxFilter('all')}
+                className="mt-3 inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs font-bold hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors cursor-pointer"
               >
-                <Plus className="w-3.5 h-3.5" />
-                Start a Chat
+                Show all chats
               </button>
+            ) : (
+              !searchTerm && (
+                <button
+                  type="button"
+                  onClick={onNewChat}
+                  className="mt-3 inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-[#0084FF] text-white text-xs font-bold hover:bg-[#0073E6] transition-colors cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  Start a Chat
+                </button>
+              )
             )}
           </div>
         )}
@@ -223,10 +324,16 @@ export const ConversationList: React.FC<ConversationListProps> = ({
             const active = conversation.id === activeId;
             const hasUnread = conversation.unreadCount > 0;
             const isDirect = conversation.type !== 'group' && conversation.type !== 'announcement';
+            const livePresence =
+              isDirect && !conversation.isBlockedEitherWay
+                ? findOnlinePresenceUser(onlineUsers, conversation.person.profileId)
+                : undefined;
+            const liveStatus = livePresence?.clinicalStatus ?? null;
             const isOnline =
-              isDirect &&
-              !conversation.isBlockedEitherWay &&
-              onlineProfileIds.has(conversation.person.profileId);
+              Boolean(livePresence) ||
+              (isDirect &&
+                !conversation.isBlockedEitherWay &&
+                onlineProfileIds.has(conversation.person.profileId));
 
             return (
               <button
@@ -252,13 +359,16 @@ export const ConversationList: React.FC<ConversationListProps> = ({
                     <img
                       src={conversation.person.avatarUrl}
                       alt={conversation.person.fullName}
+                      referrerPolicy="no-referrer"
                       className="w-12 h-12 rounded-full object-cover ring-1 ring-slate-200/80 dark:ring-slate-700"
                     />
                   )}
                   {isOnline && (
                     <span
-                      title="Active now"
-                      className="absolute bottom-0 right-0 w-3 h-3 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-slate-900"
+                      title={liveStatus ? CLINICAL_STATUS_META[liveStatus].label : 'Active now'}
+                      className={`absolute bottom-0 right-0 w-3 h-3 rounded-full ring-2 ring-white dark:ring-slate-900 ${
+                        liveStatus ? CLINICAL_STATUS_META[liveStatus].dotClass : 'bg-emerald-500'
+                      }`}
                     />
                   )}
                 </div>
@@ -276,6 +386,7 @@ export const ConversationList: React.FC<ConversationListProps> = ({
                         conversation.type === 'announcement') && (
                         <ShieldCheck className="w-3.5 h-3.5 text-[#0084FF] shrink-0" />
                       )}
+                      {liveStatus && <ClinicalStatusChip status={liveStatus} size="xs" />}
                     </span>
                     <span
                       className={`text-[11px] shrink-0 ${
@@ -302,7 +413,7 @@ export const ConversationList: React.FC<ConversationListProps> = ({
                     <div className="flex items-center gap-1.5 shrink-0">
                       {conversation.isMuted && <span className="text-[10px] text-slate-400">Muted</span>}
                       {hasUnread && (
-                        <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-[#0084FF] text-white text-[10px] font-bold flex items-center justify-center shadow-xs shadow-[#0084FF]/40">
+                        <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-[#0084FF] text-white text-[10px] font-bold tabular-nums flex items-center justify-center shadow-xs shadow-[#0084FF]/40">
                           {conversation.unreadCount > 99 ? '99+' : conversation.unreadCount}
                         </span>
                       )}

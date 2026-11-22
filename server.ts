@@ -19,7 +19,7 @@ process.on('unhandledRejection', (reason: any) => {
 import express, { type Request, type Response, type NextFunction } from 'express';
 import compression from 'compression';
 import { createServer as createHttpServer } from 'http';
-import { existsSync, writeFileSync, readFileSync } from 'fs';
+import { existsSync, writeFileSync, readFileSync, mkdirSync } from 'fs';
 import { readFile } from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -998,7 +998,6 @@ function cleanAndPersistBase64Avatars(members: any[]): any[] {
   const uploadsDir = path.resolve(__dirname, 'public', 'uploads', 'avatars');
   if (!existsSync(uploadsDir)) {
     try {
-      const { mkdirSync } = require('fs');
       mkdirSync(uploadsDir, { recursive: true });
     } catch {}
   }
@@ -4654,23 +4653,51 @@ app.post(
 );
 
 
+// Lightweight health probe for pre-warming and load balancers
+app.get('/api/health', (_req: Request, res: Response) => {
+  res.status(200).json({ status: 'ok', timestamp: Date.now() });
+});
+
 // ---------------------------------------------------------------------------
 // VITE DEV SERVER / STATIC ASSET SERVING
 // ---------------------------------------------------------------------------
 async function startServer() {
   const httpServer = createHttpServer(app);
+  let listenRetries = 0;
+  const MAX_LISTEN_RETRIES = 15;
+  let viteInstance: { close: () => Promise<void> } | null = null;
 
-  httpServer.on('error', (err) => {
+  const bindPort = () => {
+    if (typeof PORT === 'number') {
+      httpServer.listen(PORT, '0.0.0.0', () => {
+        console.log(`SZMC Alumni Server running on http://0.0.0.0:${PORT}`);
+      });
+    } else {
+      httpServer.listen(PORT, () => {
+        console.log(`SZMC Alumni Server running on cPanel socket ${PORT}`);
+      });
+    }
+  };
+
+  httpServer.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE' && listenRetries < MAX_LISTEN_RETRIES) {
+      listenRetries += 1;
+      console.warn(
+        `[Server] Port ${PORT} busy (EADDRINUSE), retrying (${listenRetries}/${MAX_LISTEN_RETRIES})...`
+      );
+      setTimeout(() => {
+        try {
+          httpServer.close();
+        } catch {}
+        bindPort();
+      }, 400);
+      return;
+    }
     console.error('[Server] HTTP Server socket error:', err.message);
   });
 
-  // Hydrate site settings and Hall of Fame from Supabase on boot
-  try {
-    await hydrateServerSiteConfigFromSupabase();
-    console.log('[Server] Successfully hydrated site configuration and Hall of Fame from Supabase.');
-  } catch (hydErr: any) {
-    console.warn('[Server] Notice during initial Supabase site config hydration:', hydErr?.message || hydErr);
-  }
+  // Load cached site config synchronously (<1ms) so routes respond immediately on boot
+  loadServerSiteConfig();
 
   // Serve static assets from public directory (images, fonts, favicons, logos) with browser caching
   const publicPath = path.resolve(__dirname, 'public');
@@ -4686,10 +4713,23 @@ async function startServer() {
         middlewareMode: true,
         allowedHosts: true,
         hmr: false,
+        ws: false,
         watch: null,
       },
+      plugins: [
+        {
+          name: 'szmc-disable-vite-ws-and-watch',
+          config(cfg) {
+            cfg.server = cfg.server || {};
+            cfg.server.hmr = false;
+            cfg.server.ws = false;
+            cfg.server.watch = null;
+          },
+        },
+      ],
       appType: 'custom',
     });
+    viteInstance = vite;
     app.use(vite.middlewares);
 
     app.use('*', async (req: Request, res: Response, next: NextFunction) => {
@@ -4705,7 +4745,7 @@ async function startServer() {
       try {
         let template = await readFile(path.resolve(__dirname, 'index.html'), 'utf-8');
         template = await vite.transformIndexHtml(url, template);
-        res.status(200).set({ 
+        res.status(200).set({
           'Content-Type': 'text/html',
           'Cache-Control': 'no-cache, no-store, must-revalidate'
         }).end(template);
@@ -4740,18 +4780,35 @@ async function startServer() {
     }
   });
 
-  if (typeof PORT === 'number') {
-    httpServer.listen(PORT, '0.0.0.0', () => {
-      console.log(`SZMC Alumni Server running on http://0.0.0.0:${PORT}`);
+  bindPort();
+
+  // Hydrate site settings and Hall of Fame from Supabase asynchronously after binding port 3000
+  Promise.race([
+    hydrateServerSiteConfigFromSupabase(),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('Supabase config hydration timeout (8s)')), 8000)
+    ),
+  ])
+    .then(() => {
+      console.log('[Server] Successfully hydrated site configuration and Hall of Fame from Supabase.');
+    })
+    .catch((hydErr: any) => {
+      console.warn('[Server] Notice during initial Supabase site config hydration:', hydErr?.message || hydErr);
     });
-  } else {
-    httpServer.listen(PORT, () => {
-      console.log(`SZMC Alumni Server running on cPanel socket ${PORT}`);
-    });
-  }
+
+  const gracefulShutdown = async () => {
+    try {
+      httpServer.close();
+      if (viteInstance) {
+        await viteInstance.close();
+      }
+    } catch {}
+    process.exit(0);
+  };
+  process.once('SIGTERM', gracefulShutdown);
+  process.once('SIGINT', gracefulShutdown);
 }
 
 startServer().catch((err) => {
   console.error('[Server] Fatal startup error:', err);
 });
-

@@ -2,6 +2,19 @@ import type { RealtimeChannel } from '@supabase/supabase-js';
 import { supabase, ALUMNI_PUBLIC_COLUMNS, isSupabaseConfigured, SUPABASE_API_URL } from '../lib/supabase';
 import { fetchBlockedUserIds } from './communitySafetyService';
 import { compressImageFileToDataUrl } from '../utils/mediaStorage';
+import {
+  buildProfileShareCardMessageText,
+  formatStructuredPreview,
+  parseStructuredChatMessage,
+} from '../utils/structuredChat';
+import {
+  decodeSilentMessageBody,
+  encodeSilentMessageBody,
+  isValidClinicalStatus,
+  loadSavedClinicalStatus,
+  saveClinicalStatus,
+  type ClinicalStatusKey,
+} from '../utils/clinicalStatus';
 import type {
   ChatConversation,
   ChatMessage,
@@ -13,6 +26,13 @@ import type {
   ReadReceiptEvent,
   UserMessageSettings,
 } from '../types/messaging';
+import type {
+  ActiveDmAnnotationSession,
+  AnnotationCollaborator,
+  AnnotationCursor,
+  AnnotationObject,
+  AnnotationStrokePreview,
+} from '../types/annotation';
 
 /**
  * =============================================================================
@@ -129,32 +149,45 @@ function toChatPerson(profile: ProfileLite | undefined, fallbackId: number): Cha
 }
 
 function toChatMessage(row: any): ChatMessage {
+  const rawBody = typeof row.body === 'string' ? row.body : '';
+  const { isSilent, body } = decodeSilentMessageBody(rawBody);
+  const isProfileCard =
+    row.type === 'ProfileShareCard' || parseStructuredChatMessage(body)?.kind === 'profile_card';
   return {
     id: String(row.id),
     conversationId: String(row.conversation_id ?? row.conversationId ?? ''),
     senderId: Number(row.sender_id ?? row.senderId ?? 0),
-    body: typeof row.body === 'string' ? row.body : '',
+    body,
     createdAt: row.created_at || row.createdAt || new Date().toISOString(),
     editedAt: row.edited_at ?? row.editedAt ?? null,
     deletedAt: row.deleted_at ?? row.deletedAt ?? null,
-    type: row.type || 'text',
+    type: isProfileCard ? 'ProfileShareCard' : (row.type || 'text'),
     mediaUrl: row.media_url ?? row.mediaUrl ?? null,
     replyToMessageId: row.reply_to_message_id ?? row.replyToMessageId ?? null,
+    isSilent,
   };
 }
 
 function previewOf(message: ChatMessage | undefined, fallbackText?: string | null): string {
   if (!message) {
-    const text = (fallbackText || '').trim();
-    if (!text) return '';
-    return text.length > PREVIEW_LENGTH ? `${text.slice(0, PREVIEW_LENGTH)}…` : text;
+    const raw = (fallbackText || '').trim();
+    if (!raw) return '';
+    const decoded = decodeSilentMessageBody(raw);
+    const structured = formatStructuredPreview(decoded.body);
+    const base = structured || decoded.body || (decoded.isSilent ? 'Silent message' : '');
+    const display = decoded.isSilent ? `🔇 ${base}` : base;
+    return display.length > PREVIEW_LENGTH ? `${display.slice(0, PREVIEW_LENGTH)}…` : display;
   }
   if (message.deletedAt) return 'Message deleted';
+  const silentPrefix = message.isSilent ? '🔇 ' : '';
   if (message.type === 'image' || message.mediaUrl) {
-    return message.body ? `📷 ${message.body}` : '📷 Photo';
+    const base = message.body && message.body !== 'Photo' ? `📷 ${message.body}` : '📷 Photo';
+    return `${silentPrefix}${base}`;
   }
-  if (message.body === '👍' || message.type === 'like') return '👍';
-  return message.body.length > PREVIEW_LENGTH ? `${message.body.slice(0, PREVIEW_LENGTH)}…` : message.body;
+  if (message.body === '👍' || message.type === 'like') return `${silentPrefix}👍`;
+  const structured = formatStructuredPreview(message.body);
+  const display = `${silentPrefix}${structured || message.body}`;
+  return display.length > PREVIEW_LENGTH ? `${display.slice(0, PREVIEW_LENGTH)}…` : display;
 }
 
 // ---------------------------------------------------------------------------
@@ -671,6 +704,33 @@ export async function listConversations(myProfileId?: number | null): Promise<Ch
   );
 }
 
+/**
+ * Returns total unread message count across all conversations for the signed-in user.
+ * Prefers the authoritative server RPC (`get_unread_counts_by_conversation`) and falls
+ * back gracefully if the RPC has not been applied yet.
+ */
+export async function getTotalUnreadCount(myProfileId?: number | null): Promise<number> {
+  if (!isSupabaseConfigured) return 0;
+  try {
+    const { data: rpcUnreads, error: rpcErr } = await supabase.rpc('get_unread_counts_by_conversation');
+    if (!rpcErr && Array.isArray(rpcUnreads)) {
+      return rpcUnreads.reduce(
+        (sum, row: any) => sum + Math.max(0, Number(row?.unread_count || 0)),
+        0
+      );
+    }
+  } catch {
+    /* fallback below */
+  }
+
+  try {
+    const convs = await listConversations(myProfileId);
+    return convs.reduce((sum, c) => sum + Math.max(0, c.unreadCount || 0), 0);
+  } catch {
+    return 0;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // 2. FIND OR CREATE DIRECT CONVERSATION
 //    Preferred path: RPC public.start_direct_conversation(target_profile_id)
@@ -1009,12 +1069,14 @@ export async function listMessages(conversationId: string, limit = 50): Promise<
 // 4. SEND MESSAGE — inserts into public.messages (supports media & replies)
 // ---------------------------------------------------------------------------
 export interface SendMessageOptions {
-  /** 'text' | 'like' | 'image' | 'system' */
-  type?: 'text' | 'like' | 'image' | 'system';
+  /** 'text' | 'like' | 'image' | 'system' | 'ProfileShareCard' */
+  type?: 'text' | 'like' | 'image' | 'system' | 'ProfileShareCard';
   /** Public URL (or compressed data URL fallback) for image messages → messages.media_url */
   mediaUrl?: string | null;
   /** Optional replied-to message ID → messages.reply_to_message_id */
   replyToMessageId?: string | null;
+  /** When true, marks the message as quiet so recipients do not receive an audio/toast alert */
+  isSilent?: boolean;
 }
 
 export async function sendMessage(
@@ -1055,12 +1117,17 @@ export async function sendMessage(
   }
 
   const resolvedType = options.type ?? (cleanBody === '👍' && !options.mediaUrl ? 'like' : options.mediaUrl ? 'image' : 'text');
+  // Database check constraint restricts messages.type to ('text', 'like', 'system', 'image');
+  // ProfileShareCard payloads are stored as 'text' with structured markers and normalized to 'ProfileShareCard' in toChatMessage().
+  const dbType = resolvedType === 'ProfileShareCard' ? 'text' : resolvedType;
+  const visibleBody = cleanBody || (resolvedType === 'image' ? (options.isSilent ? '' : 'Photo') : '');
+  const storedBody = options.isSilent ? encodeSilentMessageBody(visibleBody) : visibleBody;
 
   const payload: Record<string, any> = {
     conversation_id: conversationId,
     sender_id: authorId,
-    type: resolvedType,
-    body: cleanBody || (resolvedType === 'image' ? 'Photo' : ''),
+    type: dbType,
+    body: storedBody,
   };
   if (options.mediaUrl) payload.media_url = options.mediaUrl;
   if (options.replyToMessageId && replyColumnSupported !== false) {
@@ -1099,6 +1166,56 @@ export async function sendMessage(
 
   // Real-time delivery happens strictly through RLS-filtered postgres_changes (never global broadcast)
   return toChatMessage(data);
+}
+
+export interface ProfileCardShareInput {
+  id: number;
+  fullName: string;
+  batchYear: number;
+  specialty?: string[];
+  position?: string;
+  profession?: string;
+  institution?: string;
+  avatarUrl?: string;
+}
+
+export async function sendProfileShareCard(
+  conversationId: string,
+  senderId: number,
+  profile: ProfileCardShareInput,
+  options?: {
+    note?: string;
+    profileUrl?: string;
+    mediaUrl?: string | null;
+    replyToMessageId?: string | null;
+  }
+): Promise<ChatMessage> {
+  const specialtyText =
+    (profile.specialty && profile.specialty.length > 0
+      ? profile.specialty.slice(0, 3).join(' · ')
+      : profile.position || profile.profession || 'SZMC Physician');
+
+  const defaultUrl =
+    typeof window !== 'undefined'
+      ? `${window.location.origin}${window.location.pathname}?card=${profile.id}`
+      : `?card=${profile.id}`;
+
+  const body = buildProfileShareCardMessageText({
+    profileId: profile.id,
+    fullName: profile.fullName,
+    batchYear: profile.batchYear || 20,
+    specialty: specialtyText,
+    institution: profile.institution,
+    avatarUrl: profile.avatarUrl,
+    profileUrl: options?.profileUrl || defaultUrl,
+    note: options?.note,
+  });
+
+  return sendMessage(conversationId, senderId, body, {
+    type: 'ProfileShareCard',
+    mediaUrl: options?.mediaUrl ?? null,
+    replyToMessageId: options?.replyToMessageId ?? null,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -1180,13 +1297,18 @@ export async function toggleMessageReaction(
 // ---------------------------------------------------------------------------
 // 5. EDIT MESSAGE — strictly original sender only (columns body + edited_at)
 // ---------------------------------------------------------------------------
-export async function editMessage(messageId: string, body: string): Promise<ChatMessage> {
+export async function editMessage(
+  messageId: string,
+  body: string,
+  options?: { preserveSilent?: boolean }
+): Promise<ChatMessage> {
   const cleanBody = (body ?? '').trim();
   if (!cleanBody) throw new MessagingError('Message cannot be empty.');
+  const storedBody = options?.preserveSilent ? encodeSilentMessageBody(cleanBody) : cleanBody;
 
   const { data, error } = await supabase
     .from('messages')
-    .update({ body: cleanBody, edited_at: new Date().toISOString() })
+    .update({ body: storedBody, edited_at: new Date().toISOString() })
     .eq('id', messageId)
     .select(MESSAGE_COLUMNS)
     .maybeSingle();
@@ -1734,6 +1856,57 @@ export async function searchAlumniForChat(query: string, myProfileId?: number | 
     );
 }
 
+/**
+ * Loads fellow MBBS batchmates (or recent alumni if batchYear is unavailable) for
+ * one-tap New Chat / Group Chat creation before typing a search query.
+ */
+export async function listSuggestedColleaguesForChat(
+  myProfileId?: number | null,
+  batchYear?: number | null
+): Promise<ChatPerson[]> {
+  if (!isSupabaseConfigured) return [];
+  const myId = (await getMessagingProfileId()) ?? myProfileId ?? null;
+
+  let query = supabase
+    .from('alumni_profiles')
+    .select(ALUMNI_PUBLIC_COLUMNS)
+    .order('full_name', { ascending: true })
+    .limit(25);
+
+  if (batchYear && Number.isFinite(Number(batchYear)) && Number(batchYear) > 0) {
+    query = query.eq('batch_year', Number(batchYear));
+  }
+
+  const [{ data, error }, blockState] = await Promise.all([
+    query,
+    getMessengerBlockState(myId),
+  ]);
+
+  if (error) return [];
+
+  return (data ?? [])
+    .filter((row: any) => {
+      const rowId = Number(row.id);
+      return rowId !== Number(myId) && !blockState.blockedEitherWay.has(rowId);
+    })
+    .map((row: any) =>
+      toChatPerson(
+        {
+          id: Number(row.id),
+          user_id: row.auth_user_id ?? null,
+          full_name: row.full_name || '',
+          avatar_url: row.avatar_url || '',
+          batch: row.batch_year ?? null,
+          is_verified: row.verification_status === 'verified',
+          profession: row.profession,
+          batch_year: row.batch_year,
+          verification_status: row.verification_status,
+        },
+        Number(row.id)
+      )
+    );
+}
+
 // ---------------------------------------------------------------------------
 // 11. SUPABASE REALTIME — STRICTLY SCOPED ISOLATION + AUTO-RECONNECT + PRESENCE
 //     • 'messages-db-sync': RLS-protected postgres_changes ONLY (zero global broadcast!)
@@ -1745,6 +1918,7 @@ export type MessagingRealtimeStatus = 'SUBSCRIBED' | 'CONNECTING' | 'CLOSED' | '
 interface ScopedRoomEntry {
   channel: RealtimeChannel;
   listeners: Set<(data: { conversationId: string; profileId: number; fullName: string }) => void>;
+  annotationSessionListeners: Set<(session: ActiveDmAnnotationSession) => void>;
 }
 
 let sharedDbSyncChannel: RealtimeChannel | null = null;
@@ -2058,6 +2232,7 @@ function acquireConversationRoom(conversationId: string): ScopedRoomEntry | null
   if (existing) return existing;
 
   const listeners = new Set<(data: { conversationId: string; profileId: number; fullName: string }) => void>();
+  const annotationSessionListeners = new Set<(session: ActiveDmAnnotationSession) => void>();
   const channel = supabase.channel(`conversation-room:${conversationId}`, {
     config: {
       broadcast: { self: false },
@@ -2077,16 +2252,35 @@ function acquireConversationRoom(conversationId: string): ScopedRoomEntry | null
         } catch {}
       });
     })
+    .on('broadcast', { event: 'annotation_session' }, ({ payload }) => {
+      if (!payload || String(payload.conversationId) !== conversationId) return;
+      const session: ActiveDmAnnotationSession = {
+        conversationId,
+        sessionKey: String(payload.sessionKey || ''),
+        imageUrl: String(payload.imageUrl || ''),
+        sourceMessageId: payload.sourceMessageId ? String(payload.sourceMessageId) : null,
+        hostProfileId: Number(payload.hostProfileId || 0),
+        hostName: String(payload.hostName || 'SZMC Colleague'),
+        startedAt: Number(payload.startedAt || Date.now()),
+        active: Boolean(payload.active),
+      };
+      if (!session.sessionKey || !session.imageUrl) return;
+      annotationSessionListeners.forEach((fn) => {
+        try {
+          fn(session);
+        } catch {}
+      });
+    })
     .subscribe();
 
-  const entry: ScopedRoomEntry = { channel, listeners };
+  const entry: ScopedRoomEntry = { channel, listeners, annotationSessionListeners };
   scopedRoomChannels.set(conversationId, entry);
   return entry;
 }
 
 function releaseConversationRoomIfUnused(conversationId: string) {
   const entry = scopedRoomChannels.get(conversationId);
-  if (!entry || entry.listeners.size > 0) return;
+  if (!entry || entry.listeners.size > 0 || entry.annotationSessionListeners.size > 0) return;
   try {
     void supabase.removeChannel(entry.channel);
   } catch {}
@@ -2131,11 +2325,262 @@ export function subscribeToTypingStatus(
 }
 
 // ---------------------------------------------------------------------------
-// 11B. REAL SUPABASE REALTIME PRESENCE ('messenger-presence')
-//      Replaces hardcoded green dots and mock Active Now trays with live state.
+// 11C. SHARED CANVAS ANNOTATION REALTIME (DM-SCOPED COLLABORATION ROOMS)
 // ---------------------------------------------------------------------------
+export function createAnnotationSessionKey(sourceMessageId?: string | null, imageUrl?: string): string {
+  const input = (imageUrl || '').trim();
+  if (input) {
+    let hash1 = 2166136261;
+    let hash2 = 5381;
+    for (let i = 0; i < input.length; i += 1) {
+      const ch = input.charCodeAt(i);
+      hash1 ^= ch;
+      hash1 = Math.imul(hash1, 16777619);
+      hash2 = Math.imul(hash2, 33) ^ ch;
+    }
+    return `img-${(hash1 >>> 0).toString(36)}${(hash2 >>> 0).toString(36)}`;
+  }
+  if (sourceMessageId && !sourceMessageId.startsWith('temp-')) {
+    return `msg-${sourceMessageId.replace(/[^a-zA-Z0-9_-]/g, '')}`;
+  }
+  return 'img-shared';
+}
+
+export function subscribeToDmAnnotationSession(
+  conversationId: string | null | undefined,
+  onSessionChange: (session: ActiveDmAnnotationSession) => void
+): () => void {
+  if (!conversationId || !isSupabaseConfigured) {
+    return () => {};
+  }
+  const room = acquireConversationRoom(conversationId);
+  if (!room) return () => {};
+  room.annotationSessionListeners.add(onSessionChange);
+  return () => {
+    room.annotationSessionListeners.delete(onSessionChange);
+    releaseConversationRoomIfUnused(conversationId);
+  };
+}
+
+export function broadcastDmAnnotationSession(
+  conversationId: string,
+  payload: Omit<ActiveDmAnnotationSession, 'conversationId'>
+) {
+  if (!isSupabaseConfigured || !conversationId) return;
+  const room = scopedRoomChannels.get(conversationId) ?? acquireConversationRoom(conversationId);
+  if (!room) return;
+  try {
+    void room.channel.send({
+      type: 'broadcast',
+      event: 'annotation_session',
+      payload: {
+        conversationId,
+        ...payload,
+      },
+    });
+  } catch {}
+}
+
+export interface AnnotationRoomHandlers {
+  onStatusChange?: (status: 'CONNECTING' | 'SUBSCRIBED' | 'CLOSED') => void;
+  onCollaboratorsChange?: (collaborators: AnnotationCollaborator[]) => void;
+  onStrokePreview?: (preview: AnnotationStrokePreview) => void;
+  onObjectUpsert?: (object: AnnotationObject) => void;
+  onObjectDelete?: (objectId: string) => void;
+  onClear?: (payload: { scope: 'all' | 'author'; authorId: number; clearedAt: number }) => void;
+  onCursorMove?: (cursor: AnnotationCursor) => void;
+  onSyncRequested?: (requesterId: number) => void;
+  onSyncState?: (payload: { objects: AnnotationObject[]; responderId: number }) => void;
+  onSavedToThread?: (payload: { saverId: number; saverName: string; savedAt: number }) => void;
+}
+
+export interface AnnotationRoomConnection {
+  sendStrokePreview: (preview: AnnotationStrokePreview) => void;
+  upsertObject: (object: AnnotationObject) => void;
+  deleteObject: (objectId: string) => void;
+  clearObjects: (scope: 'all' | 'author', authorId: number) => void;
+  sendCursor: (cursor: AnnotationCursor) => void;
+  requestSync: (requesterId: number) => void;
+  sendSyncState: (objects: AnnotationObject[], responderId: number) => void;
+  notifySaved: (saverId: number, saverName: string) => void;
+  disconnect: () => void;
+}
+
+export function connectAnnotationRoom(params: {
+  conversationId: string;
+  sessionKey: string;
+  me: AnnotationCollaborator;
+  handlers: AnnotationRoomHandlers;
+}): AnnotationRoomConnection {
+  const { conversationId, sessionKey, me, handlers } = params;
+
+  if (!isSupabaseConfigured || !conversationId || !sessionKey) {
+    handlers.onStatusChange?.('CLOSED');
+    handlers.onCollaboratorsChange?.([me]);
+    return {
+      sendStrokePreview: () => {},
+      upsertObject: () => {},
+      deleteObject: () => {},
+      clearObjects: () => {},
+      sendCursor: () => {},
+      requestSync: () => {},
+      sendSyncState: () => {},
+      notifySaved: () => {},
+      disconnect: () => {},
+    };
+  }
+
+  handlers.onStatusChange?.('CONNECTING');
+  const roomName = `annotation-room:${conversationId}:${sessionKey}`;
+  const channel = supabase.channel(roomName, {
+    config: {
+      broadcast: { self: false },
+      presence: { key: String(me.profileId) },
+    },
+  });
+
+  const emitPresence = () => {
+    const state = channel.presenceState<any>();
+    const byId = new Map<number, AnnotationCollaborator>();
+    byId.set(me.profileId, me);
+    Object.values(state).forEach((entries) => {
+      if (!Array.isArray(entries)) return;
+      entries.forEach((entry: any) => {
+        const pid = Number(entry?.profileId);
+        if (!Number.isFinite(pid) || pid <= 0) return;
+        byId.set(pid, {
+          profileId: pid,
+          fullName: String(entry.fullName || 'SZMC Doctor'),
+          avatarUrl: String(entry.avatarUrl || FALLBACK_AVATAR),
+          color: String(entry.color || '#0084FF'),
+          joinedAt: String(entry.joinedAt || new Date().toISOString()),
+        });
+      });
+    });
+    handlers.onCollaboratorsChange?.(Array.from(byId.values()));
+  };
+
+  let closed = false;
+
+  channel
+    .on('presence', { event: 'sync' }, emitPresence)
+    .on('presence', { event: 'join' }, emitPresence)
+    .on('presence', { event: 'leave' }, emitPresence)
+    .on('broadcast', { event: 'stroke_preview' }, ({ payload }) => {
+      if (!payload || Number(payload.authorId) === me.profileId) return;
+      handlers.onStrokePreview?.(payload as AnnotationStrokePreview);
+    })
+    .on('broadcast', { event: 'object_upsert' }, ({ payload }) => {
+      if (!payload?.object || Number(payload.senderId) === me.profileId) return;
+      handlers.onObjectUpsert?.(payload.object as AnnotationObject);
+    })
+    .on('broadcast', { event: 'object_delete' }, ({ payload }) => {
+      if (!payload?.objectId || Number(payload.senderId) === me.profileId) return;
+      handlers.onObjectDelete?.(String(payload.objectId));
+    })
+    .on('broadcast', { event: 'clear' }, ({ payload }) => {
+      if (!payload || Number(payload.senderId) === me.profileId) return;
+      handlers.onClear?.({
+        scope: payload.scope === 'author' ? 'author' : 'all',
+        authorId: Number(payload.authorId || 0),
+        clearedAt: Number(payload.clearedAt || Date.now()),
+      });
+    })
+    .on('broadcast', { event: 'cursor' }, ({ payload }) => {
+      if (!payload || Number(payload.profileId) === me.profileId) return;
+      handlers.onCursorMove?.(payload as AnnotationCursor);
+    })
+    .on('broadcast', { event: 'sync_request' }, ({ payload }) => {
+      const requesterId = Number(payload?.requesterId || 0);
+      if (!requesterId || requesterId === me.profileId) return;
+      handlers.onSyncRequested?.(requesterId);
+    })
+    .on('broadcast', { event: 'sync_state' }, ({ payload }) => {
+      if (!payload || Number(payload.responderId) === me.profileId) return;
+      if (Array.isArray(payload.objects)) {
+        handlers.onSyncState?.({
+          objects: payload.objects as AnnotationObject[],
+          responderId: Number(payload.responderId || 0),
+        });
+      }
+    })
+    .on('broadcast', { event: 'saved' }, ({ payload }) => {
+      if (!payload || Number(payload.saverId) === me.profileId) return;
+      handlers.onSavedToThread?.({
+        saverId: Number(payload.saverId || 0),
+        saverName: String(payload.saverName || 'Colleague'),
+        savedAt: Number(payload.savedAt || Date.now()),
+      });
+    })
+    .subscribe((status) => {
+      if (closed) return;
+      if (status === 'SUBSCRIBED') {
+        handlers.onStatusChange?.('SUBSCRIBED');
+        void channel.track(me);
+        emitPresence();
+        void channel.send({
+          type: 'broadcast',
+          event: 'sync_request',
+          payload: { requesterId: me.profileId },
+        });
+      } else if (status === 'CLOSED' || status === 'TIMED_OUT' || status === 'CHANNEL_ERROR') {
+        handlers.onStatusChange?.('CLOSED');
+      } else {
+        handlers.onStatusChange?.('CONNECTING');
+      }
+    });
+
+  const safeSend = (event: string, payload: Record<string, any>) => {
+    if (closed) return;
+    try {
+      void channel.send({
+        type: 'broadcast',
+        event,
+        payload,
+      });
+    } catch {}
+  };
+
+  return {
+    sendStrokePreview: (preview) => safeSend('stroke_preview', preview),
+    upsertObject: (object) => safeSend('object_upsert', { object, senderId: me.profileId }),
+    deleteObject: (objectId) => safeSend('object_delete', { objectId, senderId: me.profileId }),
+    clearObjects: (scope, authorId) =>
+      safeSend('clear', { scope, authorId, clearedAt: Date.now(), senderId: me.profileId }),
+    sendCursor: (cursor) => safeSend('cursor', cursor),
+    requestSync: (requesterId) => safeSend('sync_request', { requesterId }),
+    sendSyncState: (objects, responderId) => safeSend('sync_state', { objects, responderId }),
+    notifySaved: (saverId, saverName) =>
+      safeSend('saved', { saverId, saverName, savedAt: Date.now() }),
+    disconnect: () => {
+      closed = true;
+      try {
+        void channel.untrack();
+        void supabase.removeChannel(channel);
+      } catch {}
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 11B. REAL SUPABASE REALTIME PRESENCE ('messenger-presence')
+//      Replaces hardcoded green dots and mock Active Now trays with live state
+//      and broadcasts real-time doctor clinical status ('On Duty', 'In OT', etc.).
+// ---------------------------------------------------------------------------
+interface SelfPresencePayload {
+  profileId: number;
+  appProfileId?: number;
+  fullName: string;
+  avatarUrl: string;
+  batchYear: number;
+  clinicalStatus: ClinicalStatusKey | null;
+  onlineAt: string;
+  statusUpdatedAt: string | null;
+}
+
 let presenceChannel: RealtimeChannel | null = null;
 let presenceTrackedProfileId: number | null = null;
+let lastSelfPresencePayload: SelfPresencePayload | null = null;
 const onlineUsersMap = new Map<number, OnlinePresenceUser>();
 const presenceListeners = new Set<(users: OnlinePresenceUser[]) => void>();
 
@@ -2158,12 +2603,17 @@ function rebuildPresenceMapFromChannel(channel: RealtimeChannel) {
     presences.forEach((entry: any) => {
       const pid = Number(entry?.profileId);
       if (!Number.isFinite(pid) || pid <= 0) return;
+      const appPid = Number(entry?.appProfileId);
+      const rawStatus = entry?.clinicalStatus;
       onlineUsersMap.set(pid, {
         profileId: pid,
+        appProfileId: Number.isFinite(appPid) && appPid > 0 ? appPid : undefined,
         fullName: String(entry.fullName || 'SZMC Alumnus'),
         avatarUrl: String(entry.avatarUrl || FALLBACK_AVATAR),
         batchYear: Number(entry.batchYear) || 20,
         onlineAt: String(entry.onlineAt || new Date().toISOString()),
+        clinicalStatus: isValidClinicalStatus(rawStatus) ? rawStatus : null,
+        statusUpdatedAt: typeof entry?.statusUpdatedAt === 'string' ? entry.statusUpdatedAt : null,
       });
     });
   });
@@ -2178,8 +2628,94 @@ export function getOnlineProfileIds(): Set<number> {
   return new Set(onlineUsersMap.keys());
 }
 
+export function findOnlinePresenceUser(
+  users: OnlinePresenceUser[],
+  targetProfileId?: number | null
+): OnlinePresenceUser | undefined {
+  if (!targetProfileId || !Number.isFinite(targetProfileId)) return undefined;
+  return users.find(
+    (u) => u.profileId === targetProfileId || (u.appProfileId !== undefined && u.appProfileId === targetProfileId)
+  );
+}
+
+export function getUserClinicalStatus(profileId?: number | null): {
+  online: boolean;
+  clinicalStatus: ClinicalStatusKey | null;
+} {
+  if (!profileId || !Number.isFinite(profileId)) {
+    return { online: false, clinicalStatus: null };
+  }
+  const direct = onlineUsersMap.get(profileId);
+  if (direct) {
+    return { online: true, clinicalStatus: direct.clinicalStatus ?? null };
+  }
+  for (const user of onlineUsersMap.values()) {
+    if (user.appProfileId === profileId) {
+      return { online: true, clinicalStatus: user.clinicalStatus ?? null };
+    }
+  }
+  return { online: false, clinicalStatus: null };
+}
+
+export function updateMyClinicalStatus(
+  status: ClinicalStatusKey | null,
+  profileHint?: number | null
+): void {
+  if (presenceTrackedProfileId) {
+    saveClinicalStatus(presenceTrackedProfileId, status);
+  }
+  if (profileHint) {
+    saveClinicalStatus(profileHint, status);
+  }
+  if (lastSelfPresencePayload?.appProfileId) {
+    saveClinicalStatus(lastSelfPresencePayload.appProfileId, status);
+  }
+
+  const nowIso = new Date().toISOString();
+  if (lastSelfPresencePayload) {
+    lastSelfPresencePayload = {
+      ...lastSelfPresencePayload,
+      clinicalStatus: status,
+      statusUpdatedAt: status ? nowIso : null,
+    };
+  }
+
+  const targetId = presenceTrackedProfileId ?? profileHint ?? null;
+  if (targetId) {
+    const existing = onlineUsersMap.get(targetId);
+    if (existing || lastSelfPresencePayload) {
+      onlineUsersMap.set(targetId, {
+        profileId: targetId,
+        appProfileId: lastSelfPresencePayload?.appProfileId ?? existing?.appProfileId,
+        fullName: lastSelfPresencePayload?.fullName ?? existing?.fullName ?? 'SZMC Alumnus',
+        avatarUrl: lastSelfPresencePayload?.avatarUrl ?? existing?.avatarUrl ?? FALLBACK_AVATAR,
+        batchYear: lastSelfPresencePayload?.batchYear ?? existing?.batchYear ?? 20,
+        onlineAt: lastSelfPresencePayload?.onlineAt ?? existing?.onlineAt ?? nowIso,
+        clinicalStatus: status,
+        statusUpdatedAt: status ? nowIso : null,
+      });
+      emitPresenceSnapshot();
+    }
+  }
+
+  if (presenceChannel && lastSelfPresencePayload) {
+    try {
+      void presenceChannel.track(lastSelfPresencePayload);
+    } catch {
+      /* ignore transient track error when reconnecting */
+    }
+  }
+}
+
 export function subscribeToOnlinePresence(
-  selfProfile: { profileId: number; fullName: string; avatarUrl: string; batchYear: number } | null,
+  selfProfile: {
+    profileId: number;
+    appProfileId?: number;
+    fullName: string;
+    avatarUrl: string;
+    batchYear: number;
+    clinicalStatus?: ClinicalStatusKey | null;
+  } | null,
   onOnlineUsersChange: (users: OnlinePresenceUser[]) => void
 ): () => void {
   presenceListeners.add(onOnlineUsersChange);
@@ -2200,6 +2736,31 @@ export function subscribeToOnlinePresence(
     presenceTrackedProfileId = null;
   }
 
+  const resolvedInitialStatus =
+    selfProfile.clinicalStatus !== undefined
+      ? selfProfile.clinicalStatus
+      : lastSelfPresencePayload?.profileId === selfProfile.profileId
+      ? lastSelfPresencePayload.clinicalStatus
+      : loadSavedClinicalStatus(selfProfile.profileId) ??
+        loadSavedClinicalStatus(selfProfile.appProfileId);
+
+  const nextPayload: SelfPresencePayload = {
+    profileId: selfProfile.profileId,
+    appProfileId: selfProfile.appProfileId,
+    fullName: selfProfile.fullName || 'SZMC Alumnus',
+    avatarUrl: selfProfile.avatarUrl || FALLBACK_AVATAR,
+    batchYear: selfProfile.batchYear || 20,
+    clinicalStatus: resolvedInitialStatus ?? null,
+    onlineAt: lastSelfPresencePayload?.onlineAt || new Date().toISOString(),
+    statusUpdatedAt:
+      lastSelfPresencePayload?.clinicalStatus === (resolvedInitialStatus ?? null)
+        ? lastSelfPresencePayload?.statusUpdatedAt ?? null
+        : resolvedInitialStatus
+        ? new Date().toISOString()
+        : null,
+  };
+  lastSelfPresencePayload = nextPayload;
+
   if (!presenceChannel) {
     presenceTrackedProfileId = selfProfile.profileId;
     const channel = supabase.channel('messenger-presence', {
@@ -2215,16 +2776,16 @@ export function subscribeToOnlinePresence(
       .on('presence', { event: 'leave' }, () => rebuildPresenceMapFromChannel(channel))
       .subscribe((status) => {
         if (status === 'SUBSCRIBED') {
-          void channel.track({
-            profileId: selfProfile.profileId,
-            fullName: selfProfile.fullName || 'SZMC Alumnus',
-            avatarUrl: selfProfile.avatarUrl || FALLBACK_AVATAR,
-            batchYear: selfProfile.batchYear || 20,
-            onlineAt: new Date().toISOString(),
-          });
+          const payloadToTrack = lastSelfPresencePayload ?? nextPayload;
+          void channel.track(payloadToTrack);
           void touchMyLastSeen();
         }
       });
+  } else {
+    // Re-track only if metadata changed on an already-subscribed channel
+    try {
+      void presenceChannel.track(nextPayload);
+    } catch {}
   }
 
   return () => {
@@ -2233,6 +2794,7 @@ export function subscribeToOnlinePresence(
       const ch = presenceChannel;
       presenceChannel = null;
       presenceTrackedProfileId = null;
+      lastSelfPresencePayload = null;
       onlineUsersMap.clear();
       void touchMyLastSeen();
       try {
