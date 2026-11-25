@@ -105,7 +105,7 @@ import {
 import { SZMCLogo } from '../SZMCLogo';
 import { compressImageFileToDataUrl } from '../../utils/mediaStorage';
 import { loadStoredAlumniProfiles } from '../../data/mockData';
-import { supabase } from '../../lib/supabase';
+import { supabase, getClientAuthHeaders } from '../../lib/supabase';
 import { AlumniProfile, isUserSuperAdmin, isUserGeneralAdmin, isUserSubAdmin } from '../../types';
 
 interface AdminHubViewProps {
@@ -158,9 +158,37 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
 
   // Toast
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
+  const [isDownloadingDist, setIsDownloadingDist] = useState(false);
   const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3800);
+  };
+
+  const handleDownloadDistArchive = async () => {
+    if (isDownloadingDist) return;
+    setIsDownloadingDist(true);
+    try {
+      const headers = await getClientAuthHeaders(false);
+      const res = await fetch('/download/szmc-alumni-dist.zip', { headers });
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        throw new Error(errText || `Download failed (HTTP ${res.status})`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'szmc-alumni-dist.zip';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      showToast('Production dist bundle downloaded.', 'success');
+    } catch (err: any) {
+      showToast(err?.message || 'Could not download dist archive.', 'error');
+    } finally {
+      setIsDownloadingDist(false);
+    }
   };
 
   const handleManualSave = async () => {
@@ -686,16 +714,21 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
               <span>{isSaving ? 'Saving...' : hasUnsavedChanges ? 'Save Changes *' : 'Save Changes'}</span>
             </button>
 
-            {/* Direct Production Dist Download Button */}
-            <a
-              href="/download/szmc-alumni-dist.zip"
-              download="szmc-alumni-dist.zip"
-              className="flex items-center gap-2 px-3.5 py-2 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white text-xs font-black tracking-wide transition-all shadow-md shadow-blue-600/25 border border-blue-400/30 cursor-pointer active:scale-95"
-              title="Download compiled production build (dist.zip) for deployment"
+            {/* Direct Production Dist Download Button (authenticated Super Admin fetch) */}
+            <button
+              type="button"
+              onClick={handleDownloadDistArchive}
+              disabled={isDownloadingDist}
+              className="flex items-center gap-2 px-3.5 py-2 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:opacity-60 text-white text-xs font-black tracking-wide transition-all shadow-md shadow-blue-600/25 border border-blue-400/30 cursor-pointer active:scale-95"
+              title="Download compiled production build (szmc-alumni-dist.zip) for deployment"
             >
-              <Download className="w-4 h-4 shrink-0" />
-              <span>Download Dist (ZIP)</span>
-            </a>
+              {isDownloadingDist ? (
+                <RefreshCw className="w-4 h-4 animate-spin shrink-0" />
+              ) : (
+                <Download className="w-4 h-4 shrink-0" />
+              )}
+              <span>{isDownloadingDist ? 'Preparing ZIP...' : 'Download Dist (ZIP)'}</span>
+            </button>
 
             {/* Quick Refresh */}
             <button

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   ArrowLeft,
   Calendar,
@@ -19,9 +19,14 @@ import {
   Eye,
   Camera,
   Layers,
-  Trash2
+  Trash2,
+  Pencil,
+  X
 } from 'lucide-react';
 import { GalleryAlbum, GalleryPhoto } from '../../types';
+import { isVideoUrl } from '../../utils/mediaStorage';
+import { downloadImageAsJpg } from '../../utils/imageDownload';
+import { ConfirmActionModal } from '../common/ConfirmActionModal';
 
 interface AlbumShowcaseViewProps {
   album: GalleryAlbum;
@@ -35,6 +40,16 @@ interface AlbumShowcaseViewProps {
   canDeletePhoto?: (photo: GalleryPhoto) => boolean;
   onDeleteAlbum?: (albumId: number) => void;
   onDeletePhoto?: (photoId: string) => void;
+  onUpdateAlbum?: (
+    albumId: number,
+    updates: {
+      title: string;
+      description: string;
+      category: GalleryAlbum['category'];
+      eventDateLabel: string;
+      location: string;
+    }
+  ) => Promise<void> | void;
 }
 
 export const AlbumShowcaseView: React.FC<AlbumShowcaseViewProps> = ({
@@ -49,12 +64,26 @@ export const AlbumShowcaseView: React.FC<AlbumShowcaseViewProps> = ({
   canDeletePhoto,
   onDeleteAlbum,
   onDeletePhoto,
+  onUpdateAlbum,
 }) => {
   const [selectedTag, setSelectedTag] = useState<string>('All');
   const [viewLayout, setViewLayout] = useState<'masonry' | 'grid' | 'filmstrip'>('masonry');
   const [filmstripIndex, setFilmstripIndex] = useState<number>(0);
   const [copiedLink, setCopiedLink] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  const [isEditingAlbum, setIsEditingAlbum] = useState(false);
+  const [editTitle, setEditTitle] = useState(album.title);
+  const [editDescription, setEditDescription] = useState(album.description || '');
+  const [editCategory, setEditCategory] = useState<GalleryAlbum['category']>(album.category);
+  const [editDate, setEditDate] = useState(album.date || '');
+  const [editLocation, setEditLocation] = useState(album.location || '');
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [pendingConfirm, setPendingConfirm] = useState<{
+    title: string;
+    message: string;
+    confirmLabel: string;
+    onConfirm: () => void;
+  } | null>(null);
 
   // Extract all unique tags in this album's photos
   const availableTags = useMemo(() => {
@@ -71,18 +100,73 @@ export const AlbumShowcaseView: React.FC<AlbumShowcaseViewProps> = ({
     return album.photos.filter((p) => p.tags?.includes(selectedTag));
   }, [album.photos, selectedTag]);
 
+  // Clamp filmstripIndex safely if photos are deleted in real time or tag filters shrink the list
+  useEffect(() => {
+    if (displayedPhotos.length === 0) {
+      setFilmstripIndex(0);
+    } else if (filmstripIndex >= displayedPhotos.length) {
+      setFilmstripIndex(displayedPhotos.length - 1);
+    }
+  }, [displayedPhotos.length, filmstripIndex]);
+
+  // Keep edit form synchronized if album updates in real time
+  useEffect(() => {
+    if (!isEditingAlbum) {
+      setEditTitle(album.title);
+      setEditDescription(album.description || '');
+      setEditCategory(album.category);
+      setEditDate(album.date || '');
+      setEditLocation(album.location || '');
+    }
+  }, [album.title, album.description, album.category, album.date, album.location, isEditingAlbum]);
+
+  const handleSaveAlbumEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editTitle.trim() || isSavingEdit || !onUpdateAlbum) return;
+    setIsSavingEdit(true);
+    try {
+      await onUpdateAlbum(album.id, {
+        title: editTitle.trim(),
+        description: editDescription.trim(),
+        category: editCategory,
+        eventDateLabel: editDate.trim() || album.date || 'Recent',
+        location: editLocation.trim(),
+      });
+      setIsEditingAlbum(false);
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
   const handleShare = () => {
     navigator.clipboard?.writeText(window.location.href);
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 2500);
   };
 
-  const handleDownloadAll = () => {
+  const handleDownloadAll = async () => {
+    if (downloading) return;
+    const photoItems = album.photos.filter((p) => !isVideoUrl(p.url));
+    if (photoItems.length === 0) return;
     setDownloading(true);
-    setTimeout(() => {
+    try {
+      const safeAlbum = album.title
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/(^-|-$)/g, '');
+      for (let i = 0; i < photoItems.length; i++) {
+        const photo = photoItems[i];
+        await downloadImageAsJpg(
+          photo.url,
+          `szmc-${safeAlbum || 'album'}-${i + 1}.jpg`
+        );
+        if (i < photoItems.length - 1) {
+          await new Promise((r) => window.setTimeout(r, 180));
+        }
+      }
+    } finally {
       setDownloading(false);
-      alert(`Downloading ${album.photos.length} high-resolution photographs from "${album.title}"`);
-    }, 1200);
+    }
   };
 
   const categoryBadgeColors: Record<string, string> = {
@@ -215,22 +299,37 @@ export const AlbumShowcaseView: React.FC<AlbumShowcaseViewProps> = ({
 
             <button
               type="button"
-              onClick={handleDownloadAll}
+              onClick={() => void handleDownloadAll()}
               disabled={downloading}
-              className="p-2.5 bg-white/10 hover:bg-white/20 text-white rounded-2xl transition-colors cursor-pointer border border-white/10"
-              title="Download album zip"
+              className="p-2.5 bg-white/10 hover:bg-white/20 text-white rounded-2xl transition-colors cursor-pointer border border-white/10 disabled:opacity-50"
+              title="Download album photos as high-quality JPG"
             >
               <Download className="w-4 h-4" />
             </button>
 
+            {canDeleteAlbum && onUpdateAlbum && (
+              <button
+                type="button"
+                onClick={() => setIsEditingAlbum(true)}
+                className="px-4 py-2.5 bg-white/15 hover:bg-white/25 text-white backdrop-blur-md border border-white/20 text-xs font-bold rounded-2xl transition-colors flex items-center gap-2 cursor-pointer"
+                title="Edit album details (Owner or Admin)"
+              >
+                <Pencil className="w-4 h-4" />
+                <span>Edit Album</span>
+              </button>
+            )}
+
             {canDeleteAlbum && (
               <button
                 type="button"
-                onClick={() => {
-                  if (window.confirm(`Are you sure you want to delete the album "${album.title}" and all its photos? This action cannot be undone.`)) {
-                    onDeleteAlbum?.(album.id);
-                  }
-                }}
+                onClick={() =>
+                  setPendingConfirm({
+                    title: 'Delete Album',
+                    message: `Are you sure you want to delete the album "${album.title}" and all its photos? This action cannot be undone.`,
+                    confirmLabel: 'Delete Album',
+                    onConfirm: () => onDeleteAlbum?.(album.id),
+                  })
+                }
                 className="px-4 py-2.5 bg-rose-600/90 hover:bg-rose-600 text-white text-xs font-bold rounded-2xl transition-colors flex items-center gap-2 cursor-pointer shadow-md"
                 title="Delete album (Owner or Admin)"
               >
@@ -324,19 +423,30 @@ export const AlbumShowcaseView: React.FC<AlbumShowcaseViewProps> = ({
       {viewLayout === 'filmstrip' && displayedPhotos.length > 0 && (
         <div className="bg-slate-900 rounded-3xl p-4 sm:p-6 text-white space-y-4 shadow-xl border border-slate-800">
           <div className="relative h-[380px] sm:h-[480px] rounded-2xl overflow-hidden bg-black flex items-center justify-center">
-            <img
-              src={displayedPhotos[filmstripIndex]?.url}
-              alt={displayedPhotos[filmstripIndex]?.caption}
-              className="max-h-full max-w-full object-contain cursor-pointer"
-              onClick={() => {
-                const origIndex = album.photos.findIndex(
-                  (p) => p.id === displayedPhotos[filmstripIndex]?.id
-                );
-                onOpenLightbox(origIndex >= 0 ? origIndex : 0);
-              }}
-            />
+            {displayedPhotos[filmstripIndex] &&
+            (displayedPhotos[filmstripIndex].mediaType === 'video' ||
+              isVideoUrl(displayedPhotos[filmstripIndex].url)) ? (
+              <video
+                src={displayedPhotos[filmstripIndex].url}
+                controls
+                playsInline
+                className="max-h-full max-w-full object-contain"
+              />
+            ) : (
+              <img
+                src={displayedPhotos[filmstripIndex]?.url}
+                alt={displayedPhotos[filmstripIndex]?.caption}
+                className="max-h-full max-w-full object-contain cursor-pointer"
+                onClick={() => {
+                  const origIndex = album.photos.findIndex(
+                    (p) => p.id === displayedPhotos[filmstripIndex]?.id
+                  );
+                  onOpenLightbox(origIndex >= 0 ? origIndex : 0);
+                }}
+              />
+            )}
             {displayedPhotos[filmstripIndex]?.caption && (
-              <div className="absolute bottom-3 inset-x-4 p-3 bg-black/60 backdrop-blur-md rounded-xl text-xs font-medium text-slate-200 text-center">
+              <div className="absolute bottom-3 inset-x-4 p-3 bg-black/60 backdrop-blur-md rounded-xl text-xs font-medium text-slate-200 text-center pointer-events-none">
                 {displayedPhotos[filmstripIndex]?.caption}
               </div>
             )}
@@ -346,9 +456,13 @@ export const AlbumShowcaseView: React.FC<AlbumShowcaseViewProps> = ({
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
-                  if (window.confirm('Delete this photograph from the album?')) {
-                    onDeletePhoto?.(displayedPhotos[filmstripIndex].id);
-                  }
+                  const photoId = displayedPhotos[filmstripIndex].id;
+                  setPendingConfirm({
+                    title: 'Delete Photograph',
+                    message: 'Delete this photograph from the album? This action cannot be undone.',
+                    confirmLabel: 'Delete Photo',
+                    onConfirm: () => onDeletePhoto?.(photoId),
+                  });
                 }}
                 title="Delete photograph (Owner or Admin)"
                 className="absolute top-4 left-4 z-10 p-2 rounded-xl bg-rose-600/80 hover:bg-rose-600 text-white backdrop-blur-md transition-colors cursor-pointer shadow-md flex items-center gap-1.5 text-xs font-bold"
@@ -363,17 +477,27 @@ export const AlbumShowcaseView: React.FC<AlbumShowcaseViewProps> = ({
           <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-thin">
             {displayedPhotos.map((photo, idx) => {
               const active = idx === filmstripIndex;
+              const isVid = photo.mediaType === 'video' || isVideoUrl(photo.url);
               return (
                 <div
                   key={photo.id}
                   onClick={() => setFilmstripIndex(idx)}
-                  className={`relative w-20 h-20 rounded-xl overflow-hidden shrink-0 cursor-pointer border-2 transition-all ${
+                  className={`relative w-20 h-20 rounded-xl overflow-hidden shrink-0 cursor-pointer border-2 transition-all bg-black ${
                     active
                       ? 'border-blue-500 scale-105 ring-2 ring-blue-500/30'
                       : 'border-transparent opacity-60 hover:opacity-100'
                   }`}
                 >
-                  <img src={photo.url} alt="Thumbnail" className="w-full h-full object-cover" />
+                  {isVid ? (
+                    <>
+                      <video src={photo.url} muted playsInline className="w-full h-full object-cover" />
+                      <div className="absolute inset-0 bg-black/35 flex items-center justify-center">
+                        <Play className="w-4 h-4 text-white fill-current" />
+                      </div>
+                    </>
+                  ) : (
+                    <img src={photo.url} alt="Thumbnail" className="w-full h-full object-cover" />
+                  )}
                 </div>
               );
             })}
@@ -394,24 +518,42 @@ export const AlbumShowcaseView: React.FC<AlbumShowcaseViewProps> = ({
         >
           {displayedPhotos.map((photo, index) => {
             const originalIndex = album.photos.findIndex((p) => p.id === photo.id);
+            const isVid = photo.mediaType === 'video' || isVideoUrl(photo.url);
             return (
               <div
                 key={photo.id}
                 className="group relative bg-white dark:bg-slate-900 rounded-3xl overflow-hidden border border-slate-200/80 dark:border-slate-800 shadow-xs hover:shadow-xl transition-all duration-300 flex flex-col"
               >
-                {/* Photo Image Container */}
+                {/* Photo or Video Container */}
                 <div
-                  className={`relative overflow-hidden cursor-pointer ${
+                  className={`relative overflow-hidden cursor-pointer bg-slate-950 ${
                     viewLayout === 'grid' ? 'aspect-square' : 'h-64 sm:h-72'
                   }`}
                   onClick={() => onOpenLightbox(originalIndex >= 0 ? originalIndex : index)}
                 >
-                  <img
-                    src={photo.url}
-                    alt={photo.caption || 'SZMC Memory'}
-                    className="w-full h-full object-cover group-hover:scale-108 transition-transform duration-500"
-                    loading="lazy"
-                  />
+                  {isVid ? (
+                    <>
+                      <video
+                        src={photo.url}
+                        muted
+                        playsInline
+                        preload="metadata"
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                      />
+                      <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                        <div className="w-12 h-12 rounded-full bg-black/60 text-white backdrop-blur-md flex items-center justify-center border border-white/30 shadow-lg">
+                          <Play className="w-5 h-5 fill-current ml-0.5" />
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <img
+                      src={photo.url}
+                      alt={photo.caption || 'SZMC Memory'}
+                      className="w-full h-full object-cover group-hover:scale-108 transition-transform duration-500"
+                      loading="lazy"
+                    />
+                  )}
 
                   {/* Gradient Overlay */}
                   <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/10 to-transparent opacity-80 group-hover:opacity-95 transition-opacity" />
@@ -427,9 +569,12 @@ export const AlbumShowcaseView: React.FC<AlbumShowcaseViewProps> = ({
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
-                        if (window.confirm('Are you sure you want to delete this photograph? This cannot be undone.')) {
-                          onDeletePhoto?.(photo.id);
-                        }
+                        setPendingConfirm({
+                          title: 'Delete Photograph',
+                          message: 'Are you sure you want to delete this photograph? This cannot be undone.',
+                          confirmLabel: 'Delete Photo',
+                          onConfirm: () => onDeletePhoto?.(photo.id),
+                        });
                       }}
                       title="Delete photograph (Owner or Admin)"
                       className="absolute top-3 left-3 z-10 w-8 h-8 rounded-full bg-rose-600/80 hover:bg-rose-600 text-white backdrop-blur-md opacity-90 hover:opacity-100 transition-all flex items-center justify-center cursor-pointer shadow-md hover:scale-105"
@@ -524,6 +669,122 @@ export const AlbumShowcaseView: React.FC<AlbumShowcaseViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* Edit Album Modal */}
+      {isEditingAlbum && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-lg w-full border border-slate-200/80 dark:border-slate-800 shadow-2xl overflow-hidden">
+            <div className="p-5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
+              <h3 className="text-base font-black text-slate-900 dark:text-slate-100">
+                Edit Album Details
+              </h3>
+              <button
+                type="button"
+                onClick={() => setIsEditingAlbum(false)}
+                className="p-1.5 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <form onSubmit={(e) => void handleSaveAlbumEdit(e)} className="p-5 space-y-3.5">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  Album Title
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={editTitle}
+                  onChange={(e) => setEditTitle(e.target.value)}
+                  className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:border-blue-500"
+                />
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Category
+                  </label>
+                  <select
+                    value={editCategory}
+                    onChange={(e) => setEditCategory(e.target.value as GalleryAlbum['category'])}
+                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:border-blue-500"
+                  >
+                    <option value="reunion">Reunions</option>
+                    <option value="academic">Academic & CME</option>
+                    <option value="campus">Campus Life</option>
+                    <option value="convocation">Convocation</option>
+                    <option value="sports">Sports</option>
+                    <option value="cultural">Cultural</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Date / Period
+                  </label>
+                  <input
+                    type="text"
+                    value={editDate}
+                    onChange={(e) => setEditDate(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  Location
+                </label>
+                <input
+                  type="text"
+                  value={editLocation}
+                  onChange={(e) => setEditLocation(e.target.value)}
+                  className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:border-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  Description
+                </label>
+                <textarea
+                  rows={3}
+                  value={editDescription}
+                  onChange={(e) => setEditDescription(e.target.value)}
+                  className="w-full px-3.5 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:border-blue-500 resize-none"
+                />
+              </div>
+              <div className="pt-2 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsEditingAlbum(false)}
+                  disabled={isSavingEdit}
+                  className="px-4 py-2 text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingEdit || !editTitle.trim()}
+                  className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-xs cursor-pointer disabled:opacity-50"
+                >
+                  {isSavingEdit ? 'Saving...' : 'Save Changes'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      <ConfirmActionModal
+        isOpen={Boolean(pendingConfirm)}
+        title={pendingConfirm?.title || 'Confirm Action'}
+        message={pendingConfirm?.message || ''}
+        confirmLabel={pendingConfirm?.confirmLabel || 'Confirm'}
+        onConfirm={() => {
+          const action = pendingConfirm?.onConfirm;
+          setPendingConfirm(null);
+          action?.();
+        }}
+        onCancel={() => setPendingConfirm(null)}
+      />
     </div>
   );
 };

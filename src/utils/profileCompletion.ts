@@ -21,10 +21,12 @@ export interface ProfileCompletionResult {
 export function calculateProfileCompletion(
   profile: Partial<AlumniProfile>
 ): ProfileCompletionResult {
+  const batchNum = Number(profile.batchYear);
   const hasValidBatch =
     profile.batchYear !== undefined &&
     profile.batchYear !== null &&
-    /^\d{4}$/.test(String(profile.batchYear).trim());
+    Number.isFinite(batchNum) &&
+    ((batchNum >= 1 && batchNum <= 99) || /^\d{4}$/.test(String(profile.batchYear).trim()));
 
   const hasSpecialty =
     Array.isArray(profile.specialty) &&
@@ -33,10 +35,6 @@ export function calculateProfileCompletion(
   const hasDegree =
     Array.isArray(profile.degree) &&
     profile.degree.map((d) => d.trim()).filter(Boolean).length > 0;
-
-  const hasBadges =
-    Array.isArray(profile.badges) &&
-    profile.badges.map((b) => b.trim()).filter(Boolean).length > 0;
 
   const hasCareerHistory =
     Array.isArray(profile.careerHistory) &&
@@ -117,7 +115,7 @@ export function calculateProfileCompletion(
       source: 'registration',
     },
 
-    // 6 Additional Edit Profile Full Form Fields
+    // 5 Additional Edit Profile Full Form Fields
     {
       key: 'bio',
       label: 'Biography / About Me',
@@ -170,4 +168,72 @@ export function calculateProfileCompletion(
     editProfileTotalCount: editProfileFields.length,
     fields,
   };
+}
+
+const PUBLIC_COMPLETION_KEYS = new Set([
+  'fullName',
+  'batchYear',
+  'position',
+  'institution',
+  'specialty',
+  'degree',
+  'city',
+  'country',
+  'bio',
+  'profession',
+  'cadre',
+  'careerHistory',
+]);
+
+/**
+ * Returns true when a member has completed all profile information.
+ * Uses all 17 fields when full contact/ID details are available on the profile object;
+ * for public-only projections (ALUMNI_PUBLIC_COLUMNS, where email/phone/whatsapp/fbLink/collegeRoll
+ * are withheld for privacy), verifies all 12 public profile fields are filled.
+ */
+export function isProfileFullyCompleted(
+  profile?: Partial<AlumniProfile> | null
+): boolean {
+  if (!profile) return false;
+  const result = calculateProfileCompletion(profile);
+  const hasPrivateContactProjection =
+    profile.email !== undefined ||
+    profile.phone !== undefined ||
+    profile.whatsapp !== undefined ||
+    profile.fbLink !== undefined ||
+    profile.collegeRoll !== undefined;
+
+  if (hasPrivateContactProjection) {
+    return result.percentage === 100;
+  }
+
+  return result.fields
+    .filter((f) => PUBLIC_COMPLETION_KEYS.has(f.key))
+    .every((f) => f.filled);
+}
+
+/**
+ * Evaluates completion from a raw snake_case `alumni_profiles` DB row.
+ */
+export function isPublicRowProfileCompleted(row: any): boolean {
+  if (!row || typeof row !== 'object') return false;
+  return isProfileFullyCompleted({
+    fullName: row.full_name,
+    batchYear: row.batch_year !== undefined && row.batch_year !== null ? Number(row.batch_year) : undefined,
+    collegeRoll: row.college_roll ?? undefined,
+    phone: row.phone ?? undefined,
+    email: row.email ?? undefined,
+    whatsapp: row.whatsapp ?? undefined,
+    fbLink: row.fb_link ?? undefined,
+    profession: row.profession ?? undefined,
+    position: row.position ?? undefined,
+    institution: row.institution ?? undefined,
+    cadre: row.cadre ?? undefined,
+    specialty: Array.isArray(row.specialty) ? row.specialty : [],
+    degree: Array.isArray(row.degree) ? row.degree : [],
+    city: row.city ?? undefined,
+    country: row.country ?? undefined,
+    bio: row.bio ?? undefined,
+    careerHistory: Array.isArray(row.career_history) ? row.career_history : [],
+  });
 }

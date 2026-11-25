@@ -46,7 +46,7 @@ export async function fetchUnreadNotificationsFromDb(userId: number): Promise<No
 /**
  * Fetch all recent notifications from the notifications table for this alumnus.
  */
-export async function fetchNotificationsFromDb(userId: number): Promise<NotificationItem[]> {
+export async function fetchNotificationsFromDb(userId: number, limit = 80): Promise<NotificationItem[]> {
   try {
     const [blockedIds, notifRes] = await Promise.all([
       fetchBlockedUserIds(userId),
@@ -55,7 +55,7 @@ export async function fetchNotificationsFromDb(userId: number): Promise<Notifica
         .select('*, actor:alumni_profiles!notifications_actor_id_fkey(id, full_name, avatar_url)')
         .eq('recipient_id', userId)
         .order('created_at', { ascending: false })
-        .limit(50),
+        .limit(limit),
     ]);
 
     const { data, error } = notifRes;
@@ -142,6 +142,24 @@ export async function markNotificationReadInDb(notificationId: string | number):
     await supabase
       .from('notifications')
       .update({ unread: false })
+      .eq('id', Number(notificationId));
+  } catch {}
+}
+
+export async function markNotificationUnreadInDb(notificationId: string | number): Promise<void> {
+  try {
+    await supabase
+      .from('notifications')
+      .update({ unread: true })
+      .eq('id', Number(notificationId));
+  } catch {}
+}
+
+export async function deleteNotificationInDb(notificationId: string | number): Promise<void> {
+  try {
+    await supabase
+      .from('notifications')
+      .delete()
       .eq('id', Number(notificationId));
   } catch {}
 }

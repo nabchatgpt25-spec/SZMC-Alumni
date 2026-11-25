@@ -14,7 +14,9 @@ import {
   Camera,
   Layers,
   ArrowRight,
-  Trash2
+  Trash2,
+  AlertCircle,
+  X
 } from 'lucide-react';
 import { GalleryAlbum, GalleryPhoto } from '../types';
 import { INITIAL_ALBUMS } from '../data/galleryData';
@@ -22,8 +24,9 @@ import { AlbumShowcaseView } from './gallery/AlbumShowcaseView';
 import { CreateAlbumModal } from './gallery/CreateAlbumModal';
 import { UploadPhotosModal } from './gallery/UploadPhotosModal';
 import { PhotoLightbox } from './gallery/PhotoLightbox';
+import { ConfirmActionModal } from './common/ConfirmActionModal';
 import { useAuth } from '../context/AuthContext';
-import { getClientAuthHeaders } from '../lib/supabase';
+import { getClientAuthHeaders, isSupabaseConfigured } from '../lib/supabase';
 import {
   fetchGalleryAlbumsFromDb,
   createGalleryAlbumInDb,
@@ -31,6 +34,8 @@ import {
   createFeedPostInDb,
   deleteGalleryAlbumInDb,
   deleteGalleryPhotoInDb,
+  toggleGalleryPhotoLikeInDb,
+  updateGalleryAlbumInDb,
 } from '../services/supabaseService';
 import { realtimeManager } from '../services/supabaseRealtimeService';
 
@@ -46,6 +51,7 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
   onBackToFeed,
 }) => {
   const { currentUser, isAdminUser } = useAuth();
+  const [pendingDeleteAlbum, setPendingDeleteAlbum] = useState<{ id: number; title: string } | null>(null);
 
   const isSuperAdmin =
     isAdminUser || currentUser?.role === 'admin' || (currentUser as any)?.role === 'super_admin';
@@ -86,18 +92,16 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
     return false;
   };
 
-  // Load albums from localStorage or fallback to INITIAL_ALBUMS
+  const [galleryError, setGalleryError] = useState<string | null>(null);
+
+  // Load cached albums for instant first paint, then replace with live Supabase source of truth
   const [albums, setAlbums] = useState<GalleryAlbum[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          // Merge to ensure all preset initial albums exist
-          const map = new Map<string | number, GalleryAlbum>();
-          INITIAL_ALBUMS.forEach((a) => map.set(a.id, a));
-          parsed.forEach((a: GalleryAlbum) => map.set(a.id, a));
-          return Array.from(map.values());
+          return parsed;
         }
       }
     } catch {
@@ -106,11 +110,13 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
     return INITIAL_ALBUMS;
   });
 
-  // Save to localStorage on change and load from Supabase on mount & Realtime
+  // Load from Supabase on mount & stay synced in real time across all users
   useEffect(() => {
     let isMounted = true;
+    let reloadTimer: ReturnType<typeof setTimeout> | null = null;
+
     const loadAlbums = () => {
-      fetchGalleryAlbumsFromDb()
+      fetchGalleryAlbumsFromDb({ currentUserId: currentUser?.id })
         .then((dbAlbums) => {
           if (isMounted && Array.isArray(dbAlbums)) {
             setAlbums(dbAlbums);
@@ -121,16 +127,43 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
         });
     };
 
+    const scheduleReload = () => {
+      if (reloadTimer) clearTimeout(reloadTimer);
+      reloadTimer = setTimeout(() => {
+        if (isMounted) loadAlbums();
+      }, 250);
+    };
+
     loadAlbums();
-    const unsubRealtime = realtimeManager.subscribeToGallery(() => {
-      loadAlbums();
+    const unsubRealtime = realtimeManager.subscribeToGallery((evt) => {
+      if (!isMounted) return;
+      // Fast-path in-place update for live photo likes without flickering the grid
+      if (
+        evt?.action === 'PHOTO_LIKED' &&
+        evt?.photoId &&
+        typeof evt?.likesCount === 'number'
+      ) {
+        setAlbums((prev) =>
+          prev.map((alb) => ({
+            ...alb,
+            photos: alb.photos.map((p) =>
+              String(p.id) === String(evt.photoId)
+                ? { ...p, likesCount: evt.likesCount }
+                : p
+            ),
+          }))
+        );
+        return;
+      }
+      scheduleReload();
     });
 
     return () => {
       isMounted = false;
+      if (reloadTimer) clearTimeout(reloadTimer);
       unsubRealtime();
     };
-  }, []);
+  }, [currentUser?.id]);
 
   useEffect(() => {
     try {
@@ -215,11 +248,29 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
     return () => clearInterval(timer);
   }, [isPlayingSlideshow, lightboxState.isOpen, activeLightboxPhotos.length]);
 
+  // Keep lightbox index safely within bounds if another user deletes photos in real time
+  useEffect(() => {
+    if (!lightboxState.isOpen) return;
+    if (activeLightboxPhotos.length === 0) {
+      setLightboxState((prev) => ({ ...prev, isOpen: false, currentIndex: 0 }));
+      setIsPlayingSlideshow(false);
+    } else if (lightboxState.currentIndex >= activeLightboxPhotos.length) {
+      setLightboxState((prev) => ({
+        ...prev,
+        currentIndex: activeLightboxPhotos.length - 1,
+      }));
+    }
+  }, [lightboxState.isOpen, lightboxState.currentIndex, activeLightboxPhotos.length]);
+
   // Filtered albums for grid
   const filteredAlbums = useMemo(() => {
     return albums.filter((album) => {
-      if (activeCategory !== 'all' && album.category !== activeCategory) {
-        return false;
+      if (activeCategory !== 'all') {
+        if (activeCategory === 'sports') {
+          if (album.category !== 'sports' && album.category !== 'cultural') return false;
+        } else if (album.category !== activeCategory) {
+          return false;
+        }
       }
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase().trim();
@@ -241,6 +292,7 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
 
   // Handlers
   const handleCreateAlbum = async (newAlbum: GalleryAlbum) => {
+    setGalleryError(null);
     const albumWithUser: GalleryAlbum = {
       ...newAlbum,
       createdById: newAlbum.createdById || currentUser?.id,
@@ -251,9 +303,9 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
     setAlbums((prev) => [albumWithUser, ...prev]);
     setSelectedAlbumId(albumWithUser.id);
 
-    let realId: number | null = null;
+    let realAlbumId: number | null = null;
     try {
-      realId = await createGalleryAlbumInDb({
+      const created = await createGalleryAlbumInDb({
         title: albumWithUser.title,
         description: albumWithUser.description,
         category: albumWithUser.category,
@@ -265,19 +317,39 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
         createdBy: albumWithUser.createdBy,
       });
 
-      if (realId && realId !== albumWithUser.id) {
+      if (created?.albumId) {
+        realAlbumId = created.albumId;
         setAlbums((prev) =>
-          prev.map((a) => (a.id === albumWithUser.id ? { ...a, id: realId! } : a))
+          prev.map((a) => {
+            if (a.id !== albumWithUser.id) return a;
+            const reconciledPhotos = a.photos.map((p, idx) =>
+              idx === 0 && created.coverPhotoId
+                ? { ...p, id: created.coverPhotoId, albumId: created.albumId }
+                : { ...p, albumId: created.albumId }
+            );
+            return { ...a, id: created.albumId, photos: reconciledPhotos };
+          })
         );
-        setSelectedAlbumId(realId);
+        setSelectedAlbumId(created.albumId);
+      } else if (isSupabaseConfigured) {
+        setAlbums((prev) => prev.filter((a) => a.id !== albumWithUser.id));
+        setSelectedAlbumId(null);
+        setGalleryError('Could not save the new album to Supabase. Please make sure you are signed in and try again.');
+        return;
       }
     } catch (err) {
       console.warn('createGalleryAlbumInDb fallback:', err);
+      if (isSupabaseConfigured) {
+        setAlbums((prev) => prev.filter((a) => a.id !== albumWithUser.id));
+        setSelectedAlbumId(null);
+        setGalleryError('Could not save the new album to Supabase. Please try again.');
+        return;
+      }
     }
 
-    // 2. AUTOMATICALLY PUBLISH AS A PUBLIC FEED POST WITH "SEE ALBUM" ACTION
+    // 2. Automatically publish ONE public feed post with "See Album" action (no duplicates)
     try {
-      const targetAlbumId = realId || albumWithUser.id;
+      const targetAlbumId = realAlbumId || albumWithUser.id;
       const photoUrls = albumWithUser.photos?.map((p) => p.url).filter(Boolean) || [];
       const imagesToPost = photoUrls.length > 0 ? photoUrls : [albumWithUser.coverUrl];
 
@@ -285,14 +357,14 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
         albumWithUser.description ? albumWithUser.description + '\n\n' : ''
       }Click "See Album" below to browse the complete album photographs in the gallery!\n[szmc_album_ref:${targetAlbumId}]`;
 
-      // A. Post to Express endpoint /api/posts for immediate availability to all users
+      let postedViaApi = false;
       try {
         const authHeaders = await getClientAuthHeaders();
-        await fetch('/api/posts', {
+        const resp = await fetch('/api/posts', {
           method: 'POST',
           headers: authHeaders,
           body: JSON.stringify({
-            author_id: currentUser?.id || 10002,
+            author_id: currentUser?.id,
             content: postContent,
             category: 'Reunion',
             images: imagesToPost,
@@ -301,18 +373,20 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
             albumCategory: albumWithUser.category,
           }),
         });
+        postedViaApi = resp.ok;
       } catch (postFetchErr) {
         console.warn('API /api/posts album post error:', postFetchErr);
       }
 
-      // B. Also invoke Supabase DB helper
-      createFeedPostInDb({
-        content: postContent,
-        category: 'Reunion',
-        images: imagesToPost,
-      }).catch((sbErr) => console.warn('Supabase createFeedPostInDb notice:', sbErr));
+      // Only fall back to direct Supabase feed insert if the API route failed
+      if (!postedViaApi) {
+        await createFeedPostInDb({
+          content: postContent,
+          category: 'Reunion',
+          images: imagesToPost,
+        }).catch((sbErr) => console.warn('Supabase createFeedPostInDb notice:', sbErr));
+      }
 
-      // C. Dispatch event so FeedView instantly displays the new album post
       if (typeof window !== 'undefined') {
         window.dispatchEvent(
           new CustomEvent('szmc:album-posted', {
@@ -332,23 +406,10 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
     }
   };
 
-  const handleUploadPhotos = (albumId: number, newPhotos: GalleryPhoto[]) => {
-    newPhotos.forEach((photo) => {
-      addPhotoToGalleryAlbumInDb({
-        albumId,
-        url: photo.url,
-        caption: photo.caption,
-        batchYear: photo.batchYear,
-        tags: photo.tags,
-        mediaType: photo.mediaType,
-        fileSize: photo.fileSize,
-        uploaderId: photo.uploaderId || currentUser?.id,
-        uploaderName: photo.uploaderName || currentUser?.fullName || 'SZMC Alumnus',
-      }).catch((err) => {
-        console.warn('addPhotoToGalleryAlbumInDb fallback:', err);
-      });
-    });
+  const handleUploadPhotos = async (albumId: number, newPhotos: GalleryPhoto[]) => {
+    setGalleryError(null);
 
+    // 1. Optimistic insert
     setAlbums((prev) =>
       prev.map((alb) => {
         if (alb.id === albumId) {
@@ -362,9 +423,79 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
         return alb;
       })
     );
+
+    // 2. Persist each photo to Supabase & reconcile real DB UUIDs immediately
+    const idReconciliation = new Map<string, string>();
+    const failedTempIds = new Set<string>();
+
+    for (const photo of newPhotos) {
+      try {
+        const realPhotoId = await addPhotoToGalleryAlbumInDb({
+          albumId,
+          url: photo.url,
+          storagePath: photo.storagePath,
+          caption: photo.caption,
+          batchYear: photo.batchYear,
+          tags: photo.tags,
+          mediaType: photo.mediaType,
+          fileSize: photo.fileSize,
+          uploaderId: photo.uploaderId || currentUser?.id,
+          uploaderName: photo.uploaderName || currentUser?.fullName || 'SZMC Alumnus',
+          skipBroadcast: true,
+        });
+
+        if (realPhotoId) {
+          idReconciliation.set(photo.id, realPhotoId);
+        } else if (isSupabaseConfigured) {
+          failedTempIds.add(photo.id);
+        }
+      } catch (err) {
+        console.warn('addPhotoToGalleryAlbumInDb error:', err);
+        if (isSupabaseConfigured) {
+          failedTempIds.add(photo.id);
+        }
+      }
+    }
+
+    // Reconcile DB IDs and drop any failed optimistic entries
+    if (idReconciliation.size > 0 || failedTempIds.size > 0) {
+      setAlbums((prev) =>
+        prev.map((alb) => {
+          if (alb.id !== albumId) return alb;
+          const reconciled = alb.photos
+            .filter((p) => !failedTempIds.has(p.id))
+            .map((p) => {
+              const realId = idReconciliation.get(p.id);
+              return realId ? { ...p, id: realId } : p;
+            });
+          return {
+            ...alb,
+            photos: reconciled,
+            photosCount: reconciled.length,
+          };
+        })
+      );
+    }
+
+    if (idReconciliation.size > 0) {
+      void realtimeManager.broadcastGalleryUpdate('PHOTO_ADDED', {
+        albumId,
+        count: idReconciliation.size,
+      });
+    }
+
+    if (failedTempIds.size > 0) {
+      setGalleryError(
+        `${failedTempIds.size} item${failedTempIds.size === 1 ? '' : 's'} could not be saved to Supabase. Please make sure you are signed in.`
+      );
+    }
   };
 
   const handleDeleteAlbum = async (albumId: number) => {
+    setGalleryError(null);
+    const previousAlbums = albums;
+    const previousSelectedId = selectedAlbumId;
+
     // Optimistic removal from state
     setAlbums((prev) => prev.filter((a) => a.id !== albumId && Number(a.id) !== Number(albumId)));
     if (selectedAlbumId === albumId || Number(selectedAlbumId) === Number(albumId)) {
@@ -375,17 +506,26 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
     }
 
     try {
-      await deleteGalleryAlbumInDb(
+      const result = await deleteGalleryAlbumInDb(
         albumId,
         currentUser?.id,
         isAdminUser || currentUser?.role === 'admin'
       );
-    } catch (err) {
-      console.warn('deleteGalleryAlbumInDb notice:', err);
+      if (!result.success) {
+        setAlbums(previousAlbums);
+        setSelectedAlbumId(previousSelectedId);
+        setGalleryError(result.error || 'Could not delete album from Supabase.');
+      }
+    } catch (err: any) {
+      setAlbums(previousAlbums);
+      setSelectedAlbumId(previousSelectedId);
+      setGalleryError(err?.message || 'Could not delete album from Supabase.');
     }
   };
 
   const handleDeletePhoto = async (photoId: string) => {
+    setGalleryError(null);
+    const previousAlbums = albums;
     let foundAlbumId: number | undefined;
 
     setAlbums((prev) =>
@@ -406,7 +546,6 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
       })
     );
 
-    // If lightbox is currently viewing this photo
     if (lightboxState.isOpen) {
       if (activeLightboxPhotos.length <= 1) {
         setLightboxState((prev) => ({ ...prev, isOpen: false }));
@@ -419,34 +558,101 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
     }
 
     try {
-      await deleteGalleryPhotoInDb(
+      const result = await deleteGalleryPhotoInDb(
         photoId,
         foundAlbumId || lightboxState.albumId || undefined,
         currentUser?.id,
         isAdminUser || currentUser?.role === 'admin'
       );
-    } catch (err) {
-      console.warn('deleteGalleryPhotoInDb notice:', err);
+      if (!result.success) {
+        setAlbums(previousAlbums);
+        setGalleryError(result.error || 'Could not delete photo from Supabase.');
+      }
+    } catch (err: any) {
+      setAlbums(previousAlbums);
+      setGalleryError(err?.message || 'Could not delete photo from Supabase.');
     }
   };
 
-  const handleToggleLike = (photoId: string) => {
+  const handleToggleLike = async (photoId: string) => {
+    let targetAlbumId: number | undefined;
+    let nextLiked = true;
+
     setAlbums((prev) =>
       prev.map((alb) => ({
         ...alb,
         photos: alb.photos.map((p) => {
-          if (p.id === photoId) {
-            const liked = !p.likedByMe;
+          if (String(p.id) === String(photoId)) {
+            targetAlbumId = alb.id;
+            nextLiked = !p.likedByMe;
             return {
               ...p,
-              likedByMe: liked,
-              likesCount: (p.likesCount || 0) + (liked ? 1 : -1),
+              likedByMe: nextLiked,
+              likesCount: Math.max(0, (p.likesCount || 0) + (nextLiked ? 1 : -1)),
             };
           }
           return p;
         }),
       }))
     );
+
+    const res = await toggleGalleryPhotoLikeInDb({
+      photoId,
+      albumId: targetAlbumId,
+      liked: nextLiked,
+      userId: currentUser?.id,
+    });
+
+    if (res.success && typeof res.likesCount === 'number') {
+      setAlbums((prev) =>
+        prev.map((alb) => ({
+          ...alb,
+          photos: alb.photos.map((p) =>
+            String(p.id) === String(photoId)
+              ? {
+                  ...p,
+                  likesCount: res.likesCount!,
+                  likedByMe: typeof res.likedByMe === 'boolean' ? res.likedByMe : nextLiked,
+                }
+              : p
+          ),
+        }))
+      );
+    }
+  };
+
+  const handleUpdateAlbum = async (
+    albumId: number,
+    updates: {
+      title: string;
+      description: string;
+      category: GalleryAlbum['category'];
+      eventDateLabel: string;
+      location: string;
+    }
+  ) => {
+    setGalleryError(null);
+    const previousAlbums = albums;
+    setAlbums((prev) =>
+      prev.map((alb) =>
+        alb.id === albumId
+          ? {
+              ...alb,
+              title: updates.title.trim() || alb.title,
+              description: updates.description.trim(),
+              category: updates.category,
+              date: updates.eventDateLabel.trim() || alb.date,
+              location: updates.location.trim(),
+            }
+          : alb
+      )
+    );
+
+    const res = await updateGalleryAlbumInDb(albumId, updates);
+    if (!res.success) {
+      setAlbums(previousAlbums);
+      setGalleryError(res.error || 'Could not update album in Supabase.');
+    }
   };
 
   const openUploadModalForAlbum = (albumId?: number) => {
@@ -467,6 +673,21 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
   if (activeAlbum) {
     return (
       <>
+        {galleryError && (
+          <div className="mb-4 p-3.5 rounded-2xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800 flex items-center justify-between gap-3 text-xs font-semibold text-rose-700 dark:text-rose-300">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{galleryError}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setGalleryError(null)}
+              className="p-1 rounded-lg hover:bg-rose-100 dark:hover:bg-rose-900/50 cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
         <AlbumShowcaseView
           album={activeAlbum}
           onBack={() => {
@@ -491,6 +712,7 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
           canDeletePhoto={(photo) => canDeletePhoto(photo, activeAlbum)}
           onDeleteAlbum={handleDeleteAlbum}
           onDeletePhoto={handleDeletePhoto}
+          onUpdateAlbum={handleUpdateAlbum}
         />
 
         {/* Lightbox */}
@@ -541,6 +763,21 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
   // Otherwise: Main Album Gallery Grid View
   return (
     <div className="space-y-6">
+      {galleryError && (
+        <div className="p-3.5 rounded-2xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800 flex items-center justify-between gap-3 text-xs font-semibold text-rose-700 dark:text-rose-300">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>{galleryError}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setGalleryError(null)}
+            className="p-1 rounded-lg hover:bg-rose-100 dark:hover:bg-rose-900/50 cursor-pointer"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
       {/* ------------------------------------------------------------- */}
       {/* 1. Page Header & Actions */}
       {/* ------------------------------------------------------------- */}
@@ -625,10 +862,10 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
             Latest Archive
           </div>
           <div className="text-sm font-black text-slate-900 dark:text-slate-50 truncate pt-1">
-            Reunion 2025
+            {albums[0]?.title || 'SZMC Archives'}
           </div>
-          <div className="text-[10px] text-purple-600 dark:text-purple-400 font-semibold">
-            Updated recently
+          <div className="text-[10px] text-purple-600 dark:text-purple-400 font-semibold truncate">
+            {albums[0]?.date || 'Updated recently'}
           </div>
         </div>
       </div>
@@ -681,6 +918,40 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
       {/* ------------------------------------------------------------- */}
       {/* 4. Albums Showcase Grid */}
       {/* ------------------------------------------------------------- */}
+      {filteredAlbums.length === 0 ? (
+        <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/80 dark:border-slate-800 p-10 text-center space-y-3">
+          <div className="w-14 h-14 mx-auto rounded-2xl bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400 flex items-center justify-center">
+            <ImageIcon className="w-7 h-7" />
+          </div>
+          <h3 className="text-base font-black text-slate-900 dark:text-slate-100">
+            No matching photo albums found
+          </h3>
+          <p className="text-xs text-slate-500 dark:text-slate-400 max-w-md mx-auto">
+            Try clearing your search or category filter, or start a new album for your batch memories.
+          </p>
+          <div className="pt-1 flex items-center justify-center gap-2">
+            {(searchQuery || activeCategory !== 'all') && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchQuery('');
+                  setActiveCategory('all');
+                }}
+                className="px-4 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-xs font-bold text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700 cursor-pointer"
+              >
+                Reset Filters
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setIsCreateAlbumOpen(true)}
+              className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold cursor-pointer"
+            >
+              + Create New Album
+            </button>
+          </div>
+        </div>
+      ) : (
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 gap-5 sm:gap-6">
         {filteredAlbums.map((album) => {
           const previewPhotos = album.photos.slice(0, 4);
@@ -718,13 +989,7 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
-                          if (
-                            window.confirm(
-                              `Are you sure you want to delete the album "${album.title}" and all its photos? This action cannot be undone.`
-                            )
-                          ) {
-                            handleDeleteAlbum(album.id);
-                          }
+                          setPendingDeleteAlbum({ id: album.id, title: album.title });
                         }}
                         title="Delete album (Owner or Admin)"
                         className="w-7 h-7 rounded-full bg-rose-600/80 hover:bg-rose-600 text-white backdrop-blur-md flex items-center justify-center transition-all cursor-pointer shadow-md hover:scale-105"
@@ -796,6 +1061,7 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
           );
         })}
       </div>
+      )}
 
       {/* ------------------------------------------------------------- */}
       {/* 5. Modals */}
@@ -816,6 +1082,24 @@ export const GalleryView: React.FC<GalleryViewProps> = ({
           setIsUploadPhotosOpen(false);
           setIsCreateAlbumOpen(true);
         }}
+      />
+
+      <ConfirmActionModal
+        isOpen={Boolean(pendingDeleteAlbum)}
+        title="Delete Album"
+        message={
+          pendingDeleteAlbum
+            ? `Are you sure you want to delete the album "${pendingDeleteAlbum.title}" and all its photos? This action cannot be undone.`
+            : ''
+        }
+        confirmLabel="Delete Album"
+        onConfirm={() => {
+          if (pendingDeleteAlbum) {
+            void handleDeleteAlbum(pendingDeleteAlbum.id);
+          }
+          setPendingDeleteAlbum(null);
+        }}
+        onCancel={() => setPendingDeleteAlbum(null)}
       />
     </div>
   );

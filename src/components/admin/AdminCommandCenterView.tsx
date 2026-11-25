@@ -34,6 +34,7 @@ import {
   PUBLISHED_AI_STUDIO_URL,
   CLOUD_RUN_BACKEND_URL,
 } from '../../lib/apiConfig';
+import { ConfirmActionModal } from '../common/ConfirmActionModal';
 
 interface StreamGroupConfig {
   id: number;
@@ -198,6 +199,17 @@ export const AdminCommandCenterView: React.FC<AdminCommandCenterViewProps> = ({
   const [submissions, setSubmissions] = useState<VerificationSubmissionItem[]>([]);
   const [verifFilter, setVerifFilter] = useState('all');
   const [reviewNotes, setReviewNotes] = useState<Record<number, string>>({});
+  const [pendingRevokePhone, setPendingRevokePhone] = useState<{
+    profileId: number;
+    fullName: string;
+    phone: string | null;
+  } | null>(null);
+  const [pendingVerifyPhone, setPendingVerifyPhone] = useState<{
+    profileId: number;
+    fullName: string;
+    phone: string | null;
+  } | null>(null);
+  const [verifyPhoneNote, setVerifyPhoneNote] = useState('Verified by central administrator');
 
   // Blood & Notices state
   const [bloodRequests, setBloodRequests] = useState<BloodEmergencyItem[]>([]);
@@ -342,18 +354,22 @@ export const AdminCommandCenterView: React.FC<AdminCommandCenterViewProps> = ({
     }
   };
 
-  const handleVerifyPhoneOwnership = async (
+  const handleVerifyPhoneOwnership = (
     profileId: number,
     fullName: string,
     phone: string | null
   ) => {
-    try {
-      const notes = window.prompt(
-        `Verify Phone Ownership for ${fullName} (${phone || 'No Phone'})?\nEnter optional verification notes (e.g. "Called alumnus on mobile / confirmed roll with batch coordinator"):`,
-        'Verified by central administrator'
-      );
-      if (notes === null) return; // User cancelled prompt
+    setVerifyPhoneNote('Verified by central administrator');
+    setPendingVerifyPhone({ profileId, fullName, phone });
+  };
 
+  const executeVerifyPhoneOwnership = async (
+    profileId: number,
+    fullName: string,
+    phone: string | null,
+    notes: string
+  ) => {
+    try {
       const trimmedNotes = notes.trim() || 'Verified by central administrator';
       let verifiedPhone = phone || '';
 
@@ -419,19 +435,20 @@ export const AdminCommandCenterView: React.FC<AdminCommandCenterViewProps> = ({
     }
   };
 
-  const handleRevokePhoneOwnership = async (
+  const handleRevokePhoneOwnership = (
+    profileId: number,
+    fullName: string,
+    phone: string | null
+  ) => {
+    setPendingRevokePhone({ profileId, fullName, phone });
+  };
+
+  const executeRevokePhoneOwnership = async (
     profileId: number,
     fullName: string,
     phone: string | null
   ) => {
     try {
-      if (
-        !window.confirm(
-          `Are you sure you want to revoke phone ownership verification for ${fullName} (${phone || 'Alumnus'})?\nThis will disable phone login for this account until verified again.`
-        )
-      ) {
-        return;
-      }
 
       // 1. Try Supabase Edge Function 'admin-verify-phone'
       let edgeSuccess = false;
@@ -1957,6 +1974,92 @@ export const AdminCommandCenterView: React.FC<AdminCommandCenterViewProps> = ({
                   </button>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <ConfirmActionModal
+        isOpen={Boolean(pendingRevokePhone)}
+        title="Revoke Phone Verification"
+        message={
+          pendingRevokePhone
+            ? `Are you sure you want to revoke phone ownership verification for ${pendingRevokePhone.fullName} (${pendingRevokePhone.phone || 'Alumnus'})? This will disable phone login for this account until verified again.`
+            : ''
+        }
+        confirmLabel="Revoke Verification"
+        onConfirm={() => {
+          const target = pendingRevokePhone;
+          setPendingRevokePhone(null);
+          if (target) {
+            void executeRevokePhoneOwnership(target.profileId, target.fullName, target.phone);
+          }
+        }}
+        onCancel={() => setPendingRevokePhone(null)}
+      />
+
+      {pendingVerifyPhone && (
+        <div
+          className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-slate-950/65 backdrop-blur-xs"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setPendingVerifyPhone(null)}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-xl bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
+                <Phone className="w-4 h-4" />
+              </div>
+              <div className="min-w-0">
+                <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 truncate">
+                  Verify Phone Ownership
+                </h3>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                  {pendingVerifyPhone.fullName} ({pendingVerifyPhone.phone || 'No Phone'})
+                </p>
+              </div>
+            </div>
+            <div className="p-5 space-y-3">
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+                Verification notes (e.g. confirmed mobile / batch roll)
+              </label>
+              <input
+                type="text"
+                value={verifyPhoneNote}
+                onChange={(e) => setVerifyPhoneNote(e.target.value)}
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+            </div>
+            <div className="px-5 py-3.5 bg-slate-50 dark:bg-slate-800/40 border-t border-slate-100 dark:border-slate-800 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setPendingVerifyPhone(null)}
+                className="px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const target = pendingVerifyPhone;
+                  const note = verifyPhoneNote;
+                  setPendingVerifyPhone(null);
+                  if (target) {
+                    void executeVerifyPhoneOwnership(
+                      target.profileId,
+                      target.fullName,
+                      target.phone,
+                      note
+                    );
+                  }
+                }}
+                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold cursor-pointer"
+              >
+                Confirm Verify
+              </button>
             </div>
           </div>
         </div>

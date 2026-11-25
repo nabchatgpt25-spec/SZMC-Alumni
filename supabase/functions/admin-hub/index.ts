@@ -244,7 +244,7 @@ serve(async (req: Request) => {
       const recentAuditLogs = (auditLogsRes.data || []).map((r: any) => ({
         id: r.id,
         actorUid: r.actor_auth_id || "system",
-        actorEmail: r.actor_auth_id || "admin@ndcalumni.org",
+        actorEmail: r.actor_auth_id || "admin@szmcalumni.net",
         actorRole: "admin",
         action: r.action,
         targetType: r.entity_table,
@@ -457,7 +457,7 @@ serve(async (req: Request) => {
       const profiles = (data || []).map((r: any) => ({
         id: Number(r.id),
         fullName: r.full_name || "SZMC Alumnus",
-        avatarUrl: r.avatar_url || "/ndc-logo.png",
+        avatarUrl: r.avatar_url || "/assets/aistudio/images__1__2778177d.png",
         batchYear: Number(r.batch_year) || 68,
         session: r.session || null,
         collegeRoll: r.college_roll || null,
@@ -748,7 +748,7 @@ serve(async (req: Request) => {
           submissionCode: `DOC-${String(r.id).slice(0, 8)}`,
           profileId: r.user_id,
           fullName: "SZMC Alumnus",
-          avatarUrl: "/ndc-logo.png",
+          avatarUrl: "/assets/aistudio/images__1__2778177d.png",
           batchYear: r.batch_year,
           collegeRoll: r.college_roll,
           academicStream: r.academic_stream,

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { supabase, isSupabaseConfigured, getClientAuthHeaders } from '../lib/supabase';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 
 export type RealtimeStatus = 'CONNECTING' | 'SUBSCRIBED' | 'TIMED_OUT' | 'CLOSED' | 'OFFLINE';
@@ -701,31 +701,115 @@ class SupabaseRealtimeManager {
   }
 
   // ---------------------------------------------------------------------------
-  // 6. GALLERY ALBUMS & PHOTOS REALTIME CHANNEL
+  // 6. GALLERY ALBUMS & PHOTOS REALTIME CHANNEL (postgres_changes + broadcast + SSE)
   // ---------------------------------------------------------------------------
   private galleryChannel: RealtimeChannel | null = null;
   private galleryListeners = new Set<(event: any) => void>();
 
   public subscribeToGallery(listener: (event: any) => void): () => void {
     this.galleryListeners.add(listener);
+    // Always ensure the unified SSE stream is active so GALLERY_UPDATED events arrive
+    // even when a user lands directly on Gallery without visiting the Feed first.
+    this.ensureUnifiedSseStream();
+
     if (!this.galleryChannel && isSupabaseConfigured) {
       try {
         this.galleryChannel = supabase
-          .channel('realtime:gallery')
-          .on('postgres_changes', { event: '*', schema: 'public', table: 'gallery_albums' }, (payload) => {
-            this.galleryListeners.forEach((cb) => cb({ table: 'gallery_albums', payload }));
+          .channel('realtime:gallery', {
+            config: { broadcast: { self: false } },
           })
-          .on('postgres_changes', { event: '*', schema: 'public', table: 'gallery_photos' }, (payload) => {
-            this.galleryListeners.forEach((cb) => cb({ table: 'gallery_photos', payload }));
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'gallery_albums' },
+            (payload) => {
+              this.galleryListeners.forEach((cb) => cb({ table: 'gallery_albums', payload }));
+            }
+          )
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'gallery_photos' },
+            (payload) => {
+              this.galleryListeners.forEach((cb) => cb({ table: 'gallery_photos', payload }));
+            }
+          )
+          .on('broadcast', { event: 'gallery:changed' }, (msg) => {
+            this.galleryListeners.forEach((cb) =>
+              cb({ source: 'broadcast', ...(msg?.payload || {}) })
+            );
           })
           .subscribe();
       } catch (err) {
         console.warn('Realtime gallery subscription warning:', err);
       }
     }
+
     return () => {
       this.galleryListeners.delete(listener);
+      if (this.galleryListeners.size === 0 && this.galleryChannel) {
+        try {
+          supabase.removeChannel(this.galleryChannel);
+        } catch {}
+        this.galleryChannel = null;
+      }
     };
+  }
+
+  public async broadcastGalleryUpdate(
+    action: string,
+    payload: Record<string, any> = {}
+  ): Promise<void> {
+    const eventPayload = {
+      type: 'GALLERY_UPDATED',
+      action,
+      ...payload,
+      timestamp: Date.now(),
+    };
+
+    // 1. Supabase Realtime Broadcast (works across all connected browsers/tabs immediately)
+    if (isSupabaseConfigured) {
+      try {
+        if (this.galleryChannel) {
+          await this.galleryChannel.send({
+            type: 'broadcast',
+            event: 'gallery:changed',
+            payload: eventPayload,
+          });
+        } else {
+          const tempChannel = supabase.channel('realtime:gallery');
+          await new Promise<void>((resolve) => {
+            const timeout = setTimeout(resolve, 1500);
+            tempChannel.subscribe(async (status) => {
+              if (status === 'SUBSCRIBED') {
+                clearTimeout(timeout);
+                try {
+                  await tempChannel.send({
+                    type: 'broadcast',
+                    event: 'gallery:changed',
+                    payload: eventPayload,
+                  });
+                } catch {}
+                resolve();
+              }
+            });
+          });
+          supabase.removeChannel(tempChannel);
+        }
+      } catch (err) {
+        console.warn('Gallery Supabase broadcast notice:', err);
+      }
+    }
+
+    // 2. Unified SSE broadcast via Express server (guarantees delivery to all SSE clients)
+    try {
+      const authHeaders = await getClientAuthHeaders();
+      await fetch('/api/feed/broadcast', {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify(eventPayload),
+      });
+    } catch {
+      // Non-blocking fallback
+    }
   }
 
   // ---------------------------------------------------------------------------

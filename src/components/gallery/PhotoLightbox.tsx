@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   X,
   ChevronLeft,
@@ -18,6 +18,8 @@ import {
 } from 'lucide-react';
 import { GalleryPhoto } from '../../types';
 import { isVideoUrl } from '../../utils/mediaStorage';
+import { downloadImageAsJpg } from '../../utils/imageDownload';
+import { ConfirmActionModal } from '../common/ConfirmActionModal';
 
 interface PhotoLightboxProps {
   photos: GalleryPhoto[];
@@ -45,6 +47,7 @@ export const PhotoLightbox: React.FC<PhotoLightboxProps> = ({
   onDeletePhoto,
 }) => {
   const currentPhoto = photos[currentIndex];
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
 
   // Handle keyboard navigation
   useEffect(() => {
@@ -93,15 +96,35 @@ export const PhotoLightbox: React.FC<PhotoLightboxProps> = ({
     }
   };
 
-  const handleDownload = () => {
-    const link = document.createElement('a');
-    link.href = currentPhoto.url;
-    link.download = `szmc-gallery-${currentPhoto.id}.jpg`;
-    link.target = '_blank';
-    link.rel = 'noreferrer';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+  const isCurrentVideo =
+    currentPhoto.mediaType === 'video' || isVideoUrl(currentPhoto.url);
+
+  const formattedUploadDate = (() => {
+    if (!currentPhoto.uploadedAt) return '';
+    const parsed = new Date(currentPhoto.uploadedAt);
+    if (!Number.isNaN(parsed.getTime()) && currentPhoto.uploadedAt.includes('T')) {
+      return parsed.toLocaleDateString(undefined, {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+      });
+    }
+    return currentPhoto.uploadedAt;
+  })();
+
+  const handleDownload = async () => {
+    if (isCurrentVideo) {
+      const link = document.createElement('a');
+      link.href = currentPhoto.url;
+      link.download = `szmc-gallery-${currentPhoto.id}.mp4`;
+      link.target = '_blank';
+      link.rel = 'noreferrer';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      return;
+    }
+    await downloadImageAsJpg(currentPhoto.url, `szmc-gallery-${currentPhoto.id}.jpg`);
   };
 
   return (
@@ -141,8 +164,8 @@ export const PhotoLightbox: React.FC<PhotoLightboxProps> = ({
           {/* Download Photo */}
           <button
             type="button"
-            onClick={handleDownload}
-            title="Download high-resolution image"
+            onClick={() => void handleDownload()}
+            title="Download high-quality JPG image"
             className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-colors cursor-pointer"
           >
             <Download className="w-4 h-4" />
@@ -152,11 +175,7 @@ export const PhotoLightbox: React.FC<PhotoLightboxProps> = ({
           {canDeleteCurrentPhoto && (
             <button
               type="button"
-              onClick={() => {
-                if (window.confirm('Are you sure you want to delete this photograph? This cannot be undone.')) {
-                  onDeletePhoto?.(currentPhoto.id);
-                }
-              }}
+              onClick={() => setConfirmDeleteOpen(true)}
               title="Delete photograph (Owner or Admin)"
               className="p-2 rounded-xl bg-rose-500/20 hover:bg-rose-600 text-rose-300 hover:text-white border border-rose-500/30 transition-colors cursor-pointer"
             >
@@ -188,14 +207,25 @@ export const PhotoLightbox: React.FC<PhotoLightboxProps> = ({
           <ChevronLeft className="w-6 h-6 sm:w-8 sm:h-8" />
         </button>
 
-        {/* Current Photo with smooth enter transition */}
+        {/* Current Photo or Video with smooth enter transition */}
         <div className="relative max-w-full max-h-full flex items-center justify-center">
-          <img
-            key={currentPhoto.id}
-            src={currentPhoto.url}
-            alt={currentPhoto.caption || 'SZMC Alumni Memory'}
-            className="max-w-full max-h-[75vh] sm:max-h-[80vh] object-contain rounded-2xl shadow-2xl transition-all duration-300 pointer-events-auto"
-          />
+          {isCurrentVideo ? (
+            <video
+              key={currentPhoto.id}
+              src={currentPhoto.url}
+              controls
+              autoPlay
+              playsInline
+              className="max-w-full max-h-[75vh] sm:max-h-[80vh] rounded-2xl shadow-2xl bg-black pointer-events-auto"
+            />
+          ) : (
+            <img
+              key={currentPhoto.id}
+              src={currentPhoto.url}
+              alt={currentPhoto.caption || 'SZMC Alumni Memory'}
+              className="max-w-full max-h-[75vh] sm:max-h-[80vh] object-contain rounded-2xl shadow-2xl transition-all duration-300 pointer-events-auto"
+            />
+          )}
         </div>
 
         {/* Next Button */}
@@ -235,10 +265,10 @@ export const PhotoLightbox: React.FC<PhotoLightboxProps> = ({
                 </div>
               )}
 
-              {currentPhoto.uploadedAt && (
+              {formattedUploadDate && (
                 <div className="flex items-center gap-1 text-slate-400">
                   <Calendar className="w-3.5 h-3.5" />
-                  <span>{currentPhoto.uploadedAt}</span>
+                  <span>{formattedUploadDate}</span>
                 </div>
               )}
 
@@ -277,6 +307,18 @@ export const PhotoLightbox: React.FC<PhotoLightboxProps> = ({
           </div>
         </div>
       </div>
+
+      <ConfirmActionModal
+        isOpen={confirmDeleteOpen}
+        title="Delete Photograph"
+        message="Are you sure you want to delete this photograph? This action cannot be undone."
+        confirmLabel="Delete Photo"
+        onConfirm={() => {
+          setConfirmDeleteOpen(false);
+          onDeletePhoto?.(currentPhoto.id);
+        }}
+        onCancel={() => setConfirmDeleteOpen(false)}
+      />
     </div>
   );
 };

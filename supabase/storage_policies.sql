@@ -1,6 +1,6 @@
 -- =============================================================================
 -- SUPABASE STORAGE SECURITY & RLS POLICIES FOR PRODUCTION BUCKETS
--- Project: Notre Dame College (NDC) Alumni Platform
+-- Project: SZMC Alumni Portal (Bogura)
 -- Target: Supabase Storage (`storage.objects`)
 --
 -- Configured Buckets:
@@ -8,6 +8,7 @@
 --   2. post-media              — Public  (Alumni feed attachments & photos)
 --   3. gallery                 — Public  (Campus archives & albums)
 --   4. verification-documents  — Private (Sensitive institutional IDs & transcripts)
+--   5. chat-media              — Private (Participant-scoped Messenger media)
 -- =============================================================================
 
 BEGIN;
@@ -20,7 +21,8 @@ VALUES
   ('avatars', 'avatars', true, 5242880, ARRAY['image/jpeg', 'image/png', 'image/webp', 'image/gif']),
   ('post-media', 'post-media', true, 20971520, ARRAY['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'video/mp4', 'video/webm']),
   ('gallery', 'gallery', true, 20971520, ARRAY['image/jpeg', 'image/png', 'image/webp', 'image/gif']),
-  ('verification-documents', 'verification-documents', false, 10485760, ARRAY['image/jpeg', 'image/png', 'image/webp', 'application/pdf'])
+  ('verification-documents', 'verification-documents', false, 10485760, ARRAY['image/jpeg', 'image/png', 'image/webp', 'application/pdf']),
+  ('chat-media', 'chat-media', false, 8388608, ARRAY['image/jpeg', 'image/png', 'image/webp', 'image/gif'])
 ON CONFLICT (id) DO UPDATE SET
   public = EXCLUDED.public,
   file_size_limit = EXCLUDED.file_size_limit,
@@ -183,6 +185,53 @@ USING (
     OR (auth.uid() IS NOT NULL AND auth.uid()::text = (storage.foldername(name))[1])
     OR public.is_admin_or_mod()
   )
+);
+
+-- -----------------------------------------------------------------------------
+-- 5. CHAT-MEDIA (PRIVATE BUCKET — CONVERSATION PARTICIPANTS ONLY)
+-- -----------------------------------------------------------------------------
+DROP POLICY IF EXISTS "Chat Media: Participant Select" ON storage.objects;
+CREATE POLICY "Chat Media: Participant Select"
+ON storage.objects FOR SELECT
+TO authenticated
+USING (
+  bucket_id = 'chat-media'
+  AND (
+    auth.uid() = owner
+    OR public.is_admin_or_mod()
+    OR EXISTS (
+      SELECT 1
+      FROM public.conversation_participants cp
+      JOIN public.profiles p ON p.id = cp.profile_id
+      WHERE p.user_id = auth.uid()
+        AND cp.conversation_id::text = (storage.foldername(name))[1]
+    )
+  )
+);
+
+DROP POLICY IF EXISTS "Chat Media: Participant Upload" ON storage.objects;
+CREATE POLICY "Chat Media: Participant Upload"
+ON storage.objects FOR INSERT
+TO authenticated
+WITH CHECK (
+  bucket_id = 'chat-media'
+  AND owner = auth.uid()
+  AND EXISTS (
+    SELECT 1
+    FROM public.conversation_participants cp
+    JOIN public.profiles p ON p.id = cp.profile_id
+    WHERE p.user_id = auth.uid()
+      AND cp.conversation_id::text = (storage.foldername(name))[1]
+  )
+);
+
+DROP POLICY IF EXISTS "Chat Media: Owner or Admin Delete" ON storage.objects;
+CREATE POLICY "Chat Media: Owner or Admin Delete"
+ON storage.objects FOR DELETE
+TO authenticated
+USING (
+  bucket_id = 'chat-media'
+  AND (owner = auth.uid() OR public.is_admin_or_mod())
 );
 
 COMMIT;

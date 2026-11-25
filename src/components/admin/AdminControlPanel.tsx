@@ -64,6 +64,7 @@ import {
   ClassicOverviewSummaryCard,
   ClassicWaveKpiCard,
 } from './AdminClassicOverviewWidgets';
+import { ConfirmActionModal } from '../common/ConfirmActionModal';
 
 export { AdminSettingsProvider, useAdminSettings, useOptionalAdminSettings };
 
@@ -278,6 +279,13 @@ const AdminControlPanelInner: React.FC<AdminControlPanelProps> = ({
   // Messages CRUD state
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editMessageBody, setEditMessageBody] = useState('');
+
+  const [pendingConfirm, setPendingConfirm] = useState<{
+    title: string;
+    message: string;
+    confirmLabel: string;
+    action: () => Promise<void>;
+  } | null>(null);
 
   const notify = (type: 'success' | 'error', text: string) => {
     setFeedback({ type, text });
@@ -1931,12 +1939,18 @@ const AdminControlPanelInner: React.FC<AdminControlPanelProps> = ({
                             <button
                               type="button"
                               onClick={() => {
-                                if (!window.confirm(`Delete site setting "${row.key}"?`)) return;
-                                void runAction(
-                                  `del-${row.key}`,
-                                  () => deleteSiteSetting(row.key),
-                                  `Deleted "${row.key}".`
-                                );
+                                setPendingConfirm({
+                                  title: 'Delete Site Setting',
+                                  message: `Delete site setting "${row.key}"? This cannot be undone.`,
+                                  confirmLabel: 'Delete Setting',
+                                  action: async () => {
+                                    await runAction(
+                                      `del-${row.key}`,
+                                      () => deleteSiteSetting(row.key),
+                                      `Deleted "${row.key}".`
+                                    );
+                                  },
+                                });
                               }}
                               className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer"
                             >
@@ -2157,12 +2171,18 @@ const AdminControlPanelInner: React.FC<AdminControlPanelProps> = ({
                           <button
                             type="button"
                             onClick={() => {
-                              if (!window.confirm(`Permanently delete post #${post.id} from Supabase?`)) return;
-                              void runAction(
-                                `harddel-${post.id}`,
-                                () => deletePost(post.id, true),
-                                `Post #${post.id} permanently deleted.`
-                              );
+                              setPendingConfirm({
+                                title: 'Permanently Delete Post',
+                                message: `Permanently delete post #${post.id} from Supabase? This action cannot be undone.`,
+                                confirmLabel: 'Delete Post',
+                                action: async () => {
+                                  await runAction(
+                                    `harddel-${post.id}`,
+                                    () => deletePost(post.id, true),
+                                    `Post #${post.id} permanently deleted.`
+                                  );
+                                },
+                              });
                             }}
                             className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer whitespace-nowrap"
                           >
@@ -2412,12 +2432,18 @@ const AdminControlPanelInner: React.FC<AdminControlPanelProps> = ({
                           <button
                             type="button"
                             onClick={() => {
-                              if (!window.confirm(`Delete album "${album.title}" and all its photos?`)) return;
-                              void runAction(
-                                `del-alb-${album.id}`,
-                                () => deleteAlbum(album.id),
-                                `Album "${album.title}" deleted.`
-                              );
+                              setPendingConfirm({
+                                title: 'Delete Album',
+                                message: `Delete album "${album.title}" and all its photos? This action cannot be undone.`,
+                                confirmLabel: 'Delete Album',
+                                action: async () => {
+                                  await runAction(
+                                    `del-alb-${album.id}`,
+                                    () => deleteAlbum(album.id),
+                                    `Album "${album.title}" deleted.`
+                                  );
+                                },
+                              });
                             }}
                             className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer whitespace-nowrap"
                           >
@@ -2584,12 +2610,18 @@ const AdminControlPanelInner: React.FC<AdminControlPanelProps> = ({
                         <button
                           type="button"
                           onClick={() => {
-                            if (!window.confirm(`Delete photo #${photo.id}?`)) return;
-                            void runAction(
-                              `del-photo-${photo.id}`,
-                              () => deleteGalleryPhoto(photo.id),
-                              'Photo deleted.'
-                            );
+                            setPendingConfirm({
+                              title: 'Delete Photograph',
+                              message: `Delete photo #${photo.id}? This cannot be undone.`,
+                              confirmLabel: 'Delete Photo',
+                              action: async () => {
+                                await runAction(
+                                  `del-photo-${photo.id}`,
+                                  () => deleteGalleryPhoto(photo.id),
+                                  'Photo deleted.'
+                                );
+                              },
+                            });
                           }}
                           className="text-[11px] font-medium text-rose-600 dark:text-rose-400 hover:underline cursor-pointer"
                         >
@@ -2753,12 +2785,18 @@ const AdminControlPanelInner: React.FC<AdminControlPanelProps> = ({
                           <button
                             type="button"
                             onClick={() => {
-                              if (!window.confirm(`Delete notice "${notice.title}"?`)) return;
-                              void runAction(
-                                `del-notice-${notice.id}`,
-                                () => deleteNotice(notice.id),
-                                'Notice deleted.'
-                              );
+                              setPendingConfirm({
+                                title: 'Delete Notice',
+                                message: `Delete notice "${notice.title}"? This action cannot be undone.`,
+                                confirmLabel: 'Delete Notice',
+                                action: async () => {
+                                  await runAction(
+                                    `del-notice-${notice.id}`,
+                                    () => deleteNotice(notice.id),
+                                    'Notice deleted.'
+                                  );
+                                },
+                              });
                             }}
                             className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer whitespace-nowrap"
                           >
@@ -2885,12 +2923,18 @@ const AdminControlPanelInner: React.FC<AdminControlPanelProps> = ({
                         <button
                           type="button"
                           onClick={() => {
-                            if (!window.confirm('Permanently delete this message from Supabase?')) return;
-                            void runAction(
-                              `harddel-msg-${msg.id}`,
-                              () => deleteMessage(msg.id, true),
-                              'Message permanently deleted.'
-                            );
+                            setPendingConfirm({
+                              title: 'Delete Message',
+                              message: 'Permanently delete this message from Supabase? This action cannot be undone.',
+                              confirmLabel: 'Delete Message',
+                              action: async () => {
+                                await runAction(
+                                  `harddel-msg-${msg.id}`,
+                                  () => deleteMessage(msg.id, true),
+                                  'Message permanently deleted.'
+                                );
+                              },
+                            });
                           }}
                           className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer whitespace-nowrap"
                         >
@@ -2987,6 +3031,19 @@ const AdminControlPanelInner: React.FC<AdminControlPanelProps> = ({
           </div>
         )}
       </motion.div>
+
+      <ConfirmActionModal
+        isOpen={Boolean(pendingConfirm)}
+        title={pendingConfirm?.title || 'Confirm Action'}
+        message={pendingConfirm?.message || ''}
+        confirmLabel={pendingConfirm?.confirmLabel || 'Confirm'}
+        onConfirm={async () => {
+          const action = pendingConfirm?.action;
+          setPendingConfirm(null);
+          if (action) await action();
+        }}
+        onCancel={() => setPendingConfirm(null)}
+      />
     </div>
   );
 };

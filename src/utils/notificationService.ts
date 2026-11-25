@@ -4,7 +4,7 @@ import {
   fetchNotificationsFromDb,
 } from '../services/supabaseNotificationService';
 import { formatFacebookTime } from './facebookTime';
-import { playSound } from './audio';
+import { emitMobileToast, playNotificationChimeOnce } from './mobileToastBus';
 
 export const PORTAL_NOTIFICATIONS_STORAGE_KEY = 'szmc_portal_notifications';
 
@@ -33,6 +33,21 @@ export function saveLocalNotifications(notifications: NotificationItem[]): void 
   } catch (e) {
     console.warn('Failed to save notifications', e);
   }
+}
+
+export function setLocalNotificationsReadState(ids: number[], unread: boolean): void {
+  if (!ids.length) return;
+  const idSet = new Set(ids.map(Number));
+  const current = getLocalNotifications();
+  const updated = current.map((n) => (idSet.has(Number(n.id)) ? { ...n, unread } : n));
+  saveLocalNotifications(updated);
+}
+
+export function removeLocalNotificationsByIds(ids: number[]): void {
+  if (!ids.length) return;
+  const idSet = new Set(ids.map(Number));
+  const current = getLocalNotifications();
+  saveLocalNotifications(current.filter((n) => !idSet.has(Number(n.id))));
 }
 
 function getUserPreferences(): UserPreferences {
@@ -131,7 +146,7 @@ export async function sendSocialNotification(params: {
   const updated = [notification, ...current.filter((n) => n.id !== newId)].slice(0, 100);
   saveLocalNotifications(updated);
 
-  // 2. Play Web Audio chime if recipient is the active user
+  // 2. Show live mobile banner & play chime if recipient is the active user
   if (typeof window !== 'undefined') {
     try {
       const rawUser = localStorage.getItem('szmc_current_user');
@@ -141,7 +156,26 @@ export async function sendSocialNotification(params: {
         if (currentUid === recipientId) {
           const prefs = getUserPreferences();
           if (prefs.in_app_notifications !== false) {
-            playSound('notification');
+            playNotificationChimeOnce();
+            emitMobileToast({
+              dedupeKey: `notif:${params.type}:${actorId}:${params.postId || params.bloodRequestId || ''}:${params.title}`,
+              type: params.type,
+              title: params.actor.fullName || params.title,
+              subtitle: params.actor.fullName
+                ? params.title.replace(params.actor.fullName, '').replace(/^[\s.,:-]+/, '').trim() || undefined
+                : undefined,
+              body: params.message || params.title,
+              avatarUrl: params.actor.avatarUrl,
+              actorName: params.actor.fullName,
+              actorId: actorId > 0 ? actorId : undefined,
+              notificationId: newId,
+              postId: params.postId,
+              bloodRequestId: params.bloodRequestId,
+              targetRoute: notification.targetRoute,
+              createdAt: nowIso,
+              urgent: params.type === 'blood',
+              playChime: false,
+            });
           }
         }
       }

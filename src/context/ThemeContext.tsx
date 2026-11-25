@@ -1,7 +1,9 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { ThemeId, ThemeOption } from '../types';
 import { THEMES_LIST, DEFAULT_THEME_ID, getThemeById } from '../data/themes';
 import { playSound } from '../utils/audio';
+
+export type AppVisualMode = 'classic' | 'glass' | 'clear-glass';
 
 interface ThemeContextType {
   theme: ThemeId;
@@ -12,12 +14,18 @@ interface ThemeContextType {
   toggleTheme: () => void;
   cycleNextTheme: () => void;
   setRandomTheme: () => void;
+  visualMode: AppVisualMode;
+  isGlassMode: boolean;
+  isClearGlassMode: boolean;
+  setVisualMode: (mode: AppVisualMode, playAudio?: boolean) => void;
+  toggleGlassMode: () => void;
 }
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
 const THEME_STORAGE_KEY = 'szmc_alumni_theme_v2';
 const LEGACY_STORAGE_KEY = 'szmc_alumni_theme';
+const VISUAL_MODE_STORAGE_KEY = 'szmc_app_visual_mode';
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [themeId, setThemeId] = useState<ThemeId>(() => {
@@ -43,8 +51,21 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     return DEFAULT_THEME_ID;
   });
 
+  const [visualMode, setVisualModeState] = useState<AppVisualMode>(() => {
+    try {
+      const stored = localStorage.getItem(VISUAL_MODE_STORAGE_KEY);
+      if (stored === 'clear-glass') return 'clear-glass';
+      if (stored === 'glass') return 'glass';
+      return 'classic';
+    } catch {
+      return 'classic';
+    }
+  });
+
   const currentThemeConfig = getThemeById(themeId);
   const isDark = currentThemeConfig.isDark;
+  const isGlassMode = visualMode === 'glass' || visualMode === 'clear-glass';
+  const isClearGlassMode = visualMode === 'clear-glass';
 
   useEffect(() => {
     const root = document.documentElement;
@@ -79,44 +100,84 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     }
   }, [themeId, isDark, currentThemeConfig]);
 
-  const setTheme = (newThemeId: ThemeId, playAudio = true) => {
-    const normalized: ThemeId = (newThemeId === 'dark' || newThemeId === 'midnight') ? 'dark' : 'light';
-    if (normalized === themeId) return;
-    setThemeId(normalized);
-    if (playAudio) {
-      playSound('theme');
+  useEffect(() => {
+    const root = document.documentElement;
+    if (visualMode === 'glass' || visualMode === 'clear-glass') {
+      root.setAttribute('data-app-style', visualMode);
+    } else {
+      root.removeAttribute('data-app-style');
     }
-  };
 
-  const toggleTheme = () => {
+    try {
+      localStorage.setItem(VISUAL_MODE_STORAGE_KEY, visualMode);
+    } catch {
+      // safe ignore
+    }
+  }, [visualMode]);
+
+  const setTheme = useCallback((newThemeId: ThemeId, playAudio = true) => {
+    const normalized: ThemeId = (newThemeId === 'dark' || newThemeId === 'midnight') ? 'dark' : 'light';
+    setThemeId((prev) => {
+      if (normalized === prev) return prev;
+      if (playAudio) playSound('theme');
+      return normalized;
+    });
+  }, []);
+
+  const toggleTheme = useCallback(() => {
     setThemeId((prev) => (prev === 'dark' || prev === 'midnight' ? 'light' : 'dark'));
     playSound('theme');
-  };
+  }, []);
 
-  const cycleNextTheme = () => {
-    toggleTheme();
-  };
+  const setVisualMode = useCallback((mode: AppVisualMode, playAudio = true) => {
+    const normalized: AppVisualMode =
+      mode === 'clear-glass' ? 'clear-glass' : mode === 'glass' ? 'glass' : 'classic';
+    setVisualModeState((prev) => {
+      if (normalized === prev) return prev;
+      if (playAudio) playSound('theme');
+      return normalized;
+    });
+  }, []);
 
-  const setRandomTheme = () => {
-    toggleTheme();
-  };
+  const toggleGlassMode = useCallback(() => {
+    setVisualModeState((prev) => {
+      if (prev === 'classic') return 'glass';
+      if (prev === 'glass') return 'clear-glass';
+      return 'classic';
+    });
+    playSound('theme');
+  }, []);
 
-  return (
-    <ThemeContext.Provider
-      value={{
-        theme: isDark ? 'dark' : 'light',
-        currentThemeConfig,
-        availableThemes: THEMES_LIST,
-        isDark,
-        setTheme,
-        toggleTheme,
-        cycleNextTheme,
-        setRandomTheme,
-      }}
-    >
-      {children}
-    </ThemeContext.Provider>
+  const contextValue = useMemo<ThemeContextType>(
+    () => ({
+      theme: isDark ? 'dark' : 'light',
+      currentThemeConfig,
+      availableThemes: THEMES_LIST,
+      isDark,
+      setTheme,
+      toggleTheme,
+      cycleNextTheme: toggleTheme,
+      setRandomTheme: toggleTheme,
+      visualMode,
+      isGlassMode,
+      isClearGlassMode,
+      setVisualMode,
+      toggleGlassMode,
+    }),
+    [
+      isDark,
+      currentThemeConfig,
+      setTheme,
+      toggleTheme,
+      visualMode,
+      isGlassMode,
+      isClearGlassMode,
+      setVisualMode,
+      toggleGlassMode,
+    ]
   );
+
+  return <ThemeContext.Provider value={contextValue}>{children}</ThemeContext.Provider>;
 }
 
 export function useTheme(): ThemeContextType {

@@ -14,6 +14,8 @@ import {
   User,
   ShieldCheck
 } from 'lucide-react';
+import { downloadImageAsJpg } from '../utils/imageDownload';
+import { VerifiedAvatar } from './verification/VerifiedAvatar';
 
 export interface PostLightboxProps {
   isOpen: boolean;
@@ -25,6 +27,8 @@ export interface PostLightboxProps {
     avatarUrl: string;
     batchYear?: number;
     createdAt?: string;
+    verified?: boolean;
+    profileCompleted?: boolean;
   };
   postCaption?: string;
 }
@@ -95,17 +99,13 @@ export const PostLightboxModal: React.FC<PostLightboxProps> = ({
     }
   };
 
-  const handleDownload = () => {
+  const handleDownload = async () => {
     const currentImg = images[currentIndex];
     if (!currentImg) return;
-    const a = document.createElement('a');
-    a.href = currentImg;
-    a.download = `szmc-media-${Date.now()}-${currentIndex + 1}.jpg`;
-    a.target = '_blank';
-    a.rel = 'noreferrer';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    await downloadImageAsJpg(
+      currentImg,
+      `szmc-media-${Date.now()}-${currentIndex + 1}.jpg`
+    );
   };
 
   // Keyboard navigation
@@ -160,15 +160,21 @@ export const PostLightboxModal: React.FC<PostLightboxProps> = ({
         <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
           {postAuthor ? (
             <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
-              <img
+              <VerifiedAvatar
                 src={postAuthor.avatarUrl}
                 alt={postAuthor.fullName}
-                className="w-8 h-8 sm:w-10 sm:h-10 rounded-full object-cover ring-2 ring-blue-500/40 shrink-0"
+                verified={Boolean(postAuthor.verified)}
+                profileCompleted={Boolean(postAuthor.profileCompleted)}
+                size="md"
+                imgClassName="w-8 h-8 sm:w-10 sm:h-10"
+                unverifiedClassName="rounded-full ring-2 ring-blue-500/40"
               />
               <div className="min-w-0">
                 <div className="flex items-center gap-1 sm:gap-1.5 font-bold text-xs sm:text-sm text-white truncate">
                   <span className="truncate">{postAuthor.fullName}</span>
-                  <ShieldCheck className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-blue-400 shrink-0" />
+                  {postAuthor.verified && (
+                    <ShieldCheck className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-blue-400 shrink-0" />
+                  )}
                 </div>
                 <div className="text-[10px] sm:text-[11px] text-slate-300 flex items-center gap-1.5 sm:gap-2 truncate">
                   {postAuthor.batchYear && (
@@ -246,8 +252,8 @@ export const PostLightboxModal: React.FC<PostLightboxProps> = ({
           {/* Download button */}
           <button
             type="button"
-            onClick={handleDownload}
-            title="Download Image"
+            onClick={() => void handleDownload()}
+            title="Download High-Quality JPG"
             className="p-2 text-slate-200 hover:text-white bg-white/10 hover:bg-white/20 rounded-xl transition-colors cursor-pointer"
           >
             <Download className="w-4 h-4" />

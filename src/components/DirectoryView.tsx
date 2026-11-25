@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useDeferredValue } from 'react';
 import {
   Search,
   Filter,
@@ -25,6 +25,7 @@ import { getCachedDirectory, cacheDirectory, getDirectoryCacheTimestamp } from '
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { useAuth } from '../context/AuthContext';
 import { VerificationStatusBadge } from './verification/VerificationStatusBadge';
+import { VerifiedAvatar } from './verification/VerifiedAvatar';
 import { vouchForAlumniProfile } from '../utils/verificationService';
 import { fetchAlumniProfilesFromDb } from '../services/supabaseService';
 import { FAMOUS_SZMC_ALUMNI } from './landing/FeaturedAlumniSection';
@@ -174,6 +175,7 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   const [search, setSearch] = useState(initialSearch);
+  const deferredSearch = useDeferredValue(search);
   const [batchFilter, setBatchFilter] = useState(initialBatch ? initialBatch.toString() : '');
   const [specialtyFilter, setSpecialtyFilter] = useState('');
   const [countryFilter, setCountryFilter] = useState('');
@@ -214,16 +216,9 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
     }
   }, [initialBatch]);
 
-  // Update cached directory if updated
+  // Sync live profiles from Supabase (cached + deduplicated in supabaseService)
   useEffect(() => {
     let isMounted = true;
-    const cached = getCachedDirectory();
-    const stored = loadStoredAlumniProfiles();
-    setProfiles(
-      [...stored, ...cached, ...UNIVERSAL_DIRECTORY_PROFILES].filter(
-        (v, i, a) => a.findIndex((t) => t.id === v.id) === i
-      )
-    );
 
     // Fetch live profiles from Supabase database
     fetchAlumniProfilesFromDb()
@@ -291,20 +286,34 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
     return Array.from(set).sort();
   }, [profiles]);
 
-  // Filtered profiles using Universal Search
+  const onlineProfileIds = useMemo(() => {
+    const ids = new Set<number>();
+    onlineUsers.forEach((u) => {
+      if (u.profileId) ids.add(Number(u.profileId));
+    });
+    return ids;
+  }, [onlineUsers]);
+
+  // Filtered profiles using Universal Search (deferred so typing never stutters)
   const filtered = useMemo(() => {
     return profiles.filter((p) => {
-      if (search.trim() && !matchesUniversalSearch(p, search)) {
+      if (deferredSearch.trim() && !matchesUniversalSearch(p, deferredSearch)) {
         return false;
       }
       if (batchFilter && p.batchYear !== parseInt(batchFilter, 10)) return false;
       if (countryFilter && p.country !== countryFilter) return false;
       if (specialtyFilter && !p.specialty.some((s) => s.toLowerCase().includes(specialtyFilter.toLowerCase()))) return false;
       if (badgeFilter && !p.badges?.includes(badgeFilter)) return false;
-      if (onlineOnly && !p.online) return false;
+      if (onlineOnly) {
+        const isLiveOnline =
+          onlineProfileIds.has(Number(p.id)) ||
+          (p.userId ? onlineProfileIds.has(Number(p.userId)) : false) ||
+          Boolean(p.online);
+        if (!isLiveOnline) return false;
+      }
       return true;
     });
-  }, [profiles, search, batchFilter, countryFilter, specialtyFilter, badgeFilter, onlineOnly]);
+  }, [profiles, deferredSearch, batchFilter, countryFilter, specialtyFilter, badgeFilter, onlineOnly, onlineProfileIds]);
 
   const handleExportCSV = () => {
     const headers = ['Full Name', 'Batch', 'Profession', 'Position', 'Institution', 'Specialty', 'Location', 'WhatsApp', 'Email'];
@@ -702,30 +711,35 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
               <div>
                 {/* Header: Avatar, Name, Batch */}
                 <div className="flex items-start gap-3.5">
-                  <div className="relative">
-                    <img
-                      src={profile.avatarUrl}
-                      alt={profile.fullName}
-                      referrerPolicy="no-referrer"
-                      className="w-13 h-13 rounded-full object-cover ring-2 ring-slate-100 dark:ring-slate-800"
-                    />
-                    <span
-                      className={`absolute bottom-0 right-0 w-3 h-3 rounded-full ring-2 ring-white dark:ring-slate-900 ${
-                        liveStatus
-                          ? CLINICAL_STATUS_META[liveStatus].dotClass
-                          : isOnline
-                          ? 'bg-emerald-500'
-                          : 'bg-slate-400'
-                      }`}
-                      title={
-                        liveStatus
-                          ? CLINICAL_STATUS_META[liveStatus].label
-                          : isOnline
-                          ? 'Online'
-                          : 'Offline'
-                      }
-                    />
-                  </div>
+                  <VerifiedAvatar
+                    src={profile.avatarUrl}
+                    alt={profile.fullName}
+                    verificationStatus={profile.verificationStatus}
+                    profile={profile.id === currentUser?.id ? currentUser : profile}
+                    size="lg"
+                    imgClassName="w-13 h-13"
+                    unverifiedClassName="rounded-full ring-2 ring-slate-100 dark:ring-slate-800"
+                    statusDot={
+                      <span
+                        className={`absolute z-20 ${
+                          profile.verificationStatus === 'verified' ? 'top-0 right-0' : 'bottom-0 right-0'
+                        } w-3 h-3 rounded-full ring-2 ring-white dark:ring-slate-900 ${
+                          liveStatus
+                            ? CLINICAL_STATUS_META[liveStatus].dotClass
+                            : isOnline
+                            ? 'bg-emerald-500'
+                            : 'bg-slate-400'
+                        }`}
+                        title={
+                          liveStatus
+                            ? CLINICAL_STATUS_META[liveStatus].label
+                            : isOnline
+                            ? 'Online'
+                            : 'Offline'
+                        }
+                      />
+                    }
+                  />
 
                   <div className="flex-1 min-w-0">
                     <div className="flex flex-wrap items-center gap-1.5">
@@ -736,8 +750,8 @@ export const DirectoryView: React.FC<DirectoryViewProps> = ({
                         {profile.fullName}
                       </h3>
                       <VerificationStatusBadge
-                        status={profile.verificationStatus || 'verified'}
-                        vouchesCount={profile.vouchesCount ?? 2}
+                        status={profile.verificationStatus || 'unverified'}
+                        vouchesCount={profile.vouchesCount ?? (profile.verificationStatus === 'verified' ? 2 : 0)}
                         size="sm"
                         showLabel={false}
                         onClick={() => onViewProfile(profile.id)}

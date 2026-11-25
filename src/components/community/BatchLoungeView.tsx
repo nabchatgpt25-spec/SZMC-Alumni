@@ -43,6 +43,7 @@ import {
   type CommunityPoll,
 } from '../../services/communitySpacesService';
 import { supabase, isSupabaseConfigured } from '../../lib/supabase';
+import { VerifiedAvatar } from '../verification/VerifiedAvatar';
 import { compressImageFileToDataUrl } from '../../utils/mediaStorage';
 import type { AlumniProfile } from '../../types';
 
@@ -338,13 +339,16 @@ export const BatchLoungeView: React.FC<BatchLoungeViewProps> = ({
           onClick={() => onViewProfile?.(post.userId)}
           className="flex items-center gap-3 text-left min-w-0 group cursor-pointer"
         >
-          <img
+          <VerifiedAvatar
             src={post.avatarUrl}
             alt={post.fullName}
+            verified={Boolean(post.verified)}
+            profileCompleted={Boolean(post.profileCompleted)}
+            size="md"
+            imgClassName="w-10 h-10"
             loading="lazy"
             decoding="async"
-            referrerPolicy="no-referrer"
-            className="w-10 h-10 rounded-xl object-cover border border-slate-200 dark:border-slate-700 shrink-0"
+            unverifiedClassName="rounded-xl border border-slate-200 dark:border-slate-700"
           />
           <div className="min-w-0">
             <div className="flex items-center gap-1.5">
@@ -769,13 +773,16 @@ export const BatchLoungeView: React.FC<BatchLoungeViewProps> = ({
                       onClick={() => onViewProfile?.(member.id)}
                       className="text-left rounded-xl p-3.5 bg-slate-50/80 dark:bg-slate-800/70 hover:bg-white dark:hover:bg-slate-800 border border-slate-200/80 dark:border-slate-700/80 hover:border-blue-400 transition-colors flex items-start gap-3 cursor-pointer"
                     >
-                      <img
+                      <VerifiedAvatar
                         src={member.avatarUrl}
                         alt={member.fullName}
+                        verificationStatus={member.verificationStatus}
+                        profile={member}
+                        size="md"
+                        imgClassName="w-11 h-11"
                         loading="lazy"
                         decoding="async"
-                        referrerPolicy="no-referrer"
-                        className="w-11 h-11 rounded-xl object-cover border border-slate-200 dark:border-slate-700 shrink-0"
+                        unverifiedClassName="rounded-xl border border-slate-200 dark:border-slate-700"
                       />
                       <div className="min-w-0 flex-1 space-y-0.5">
                         <div className="flex items-center gap-1.5">

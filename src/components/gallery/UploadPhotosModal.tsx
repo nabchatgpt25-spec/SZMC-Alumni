@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   X,
   Upload,
@@ -12,24 +12,29 @@ import {
   Layers,
   ArrowRight,
   Film,
-  Play
+  Play,
+  AlertCircle
 } from 'lucide-react';
 import { GalleryAlbum, GalleryPhoto } from '../../types';
 import { useAuth } from '../../context/AuthContext';
-import { saveMediaFile, isVideoFile, isVideoUrl, formatFileSize } from '../../utils/mediaStorage';
+import { isVideoFile, isVideoUrl, formatFileSize } from '../../utils/mediaStorage';
+import { uploadGalleryMediaFile } from '../../services/supabaseService';
 
 interface UploadPhotosModalProps {
   isOpen: boolean;
   onClose: () => void;
   albums: GalleryAlbum[];
   selectedAlbumId?: number;
-  onUploadPhotos: (albumId: number, photos: GalleryPhoto[]) => void;
+  onUploadPhotos: (albumId: number, photos: GalleryPhoto[]) => Promise<void> | void;
   onRequestCreateAlbum: () => void;
 }
 
 interface PendingUpload {
   id: string;
-  url: string;
+  previewUrl: string;
+  isObjectUrl: boolean;
+  file?: File;
+  remoteUrl?: string;
   caption: string;
   tags: string;
   isVideo: boolean;
@@ -53,6 +58,8 @@ export const UploadPhotosModal: React.FC<UploadPhotosModalProps> = ({
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadStatusText, setUploadStatusText] = useState('');
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const [contributorName, setContributorName] = useState<string>(
     currentUser?.fullName || 'SZMC Alumnus'
   );
@@ -61,42 +68,56 @@ export const UploadPhotosModal: React.FC<UploadPhotosModalProps> = ({
   );
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Keep targetAlbumId synchronized when opening for a specific album or when albums finish loading
+  useEffect(() => {
+    if (selectedAlbumId) {
+      setTargetAlbumId(selectedAlbumId);
+    } else if (albums.length > 0 && !albums.some((a) => a.id === targetAlbumId)) {
+      setTargetAlbumId(albums[0].id);
+    }
+  }, [selectedAlbumId, albums, isOpen]);
+
+  // Keep contributor defaults synced with currentUser
+  useEffect(() => {
+    if (currentUser?.fullName) setContributorName(currentUser.fullName);
+    if (currentUser?.batchYear) setContributorBatch(currentUser.batchYear);
+  }, [currentUser?.fullName, currentUser?.batchYear]);
+
+  // Revoke any object URLs on unmount to avoid memory leaks
+  useEffect(() => {
+    return () => {
+      pendingPhotos.forEach((item) => {
+        if (item.isObjectUrl && item.previewUrl.startsWith('blob:')) {
+          URL.revokeObjectURL(item.previewUrl);
+        }
+      });
+    };
+  }, []);
+
   if (!isOpen) return null;
 
-  const handleFiles = async (files: FileList | null) => {
+  const handleFiles = (files: FileList | null) => {
     if (!files || files.length === 0) return;
+    setUploadError(null);
 
-    for (const file of Array.from(files)) {
-      try {
-        const isVideo = isVideoFile(file);
-        const saved = await saveMediaFile(file);
-        setPendingPhotos((prev) => [
-          ...prev,
-          {
-            id: saved.id,
-            url: saved.url,
-            caption: file.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' '),
-            tags: isVideo ? 'Video, Memories, SZMC' : 'Alumni, Campus, Photo',
-            isVideo,
-            formattedSize: saved.formattedSize,
-          },
-        ]);
-      } catch (err) {
-        console.warn('Failed to process file, fallback to blob URL', err);
-        const isVideo = isVideoFile(file);
-        const url = URL.createObjectURL(file);
-        setPendingPhotos((prev) => [
-          ...prev,
-          {
-            id: `media-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-            url,
-            caption: file.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' '),
-            tags: isVideo ? 'Video, Campus' : 'Alumni, Photo',
-            isVideo,
-            formattedSize: formatFileSize(file.size),
-          },
-        ]);
-      }
+    const added: PendingUpload[] = Array.from(files).map((file) => {
+      const isVideo = isVideoFile(file);
+      const previewUrl = URL.createObjectURL(file);
+      return {
+        id: `media-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
+        previewUrl,
+        isObjectUrl: true,
+        file,
+        caption: file.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' '),
+        tags: isVideo ? 'Video, Memories, SZMC' : 'Alumni, Campus, Photo',
+        isVideo,
+        formattedSize: formatFileSize(file.size),
+      };
+    });
+
+    setPendingPhotos((prev) => [...prev, ...added]);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
     }
   };
 
@@ -108,14 +129,18 @@ export const UploadPhotosModal: React.FC<UploadPhotosModalProps> = ({
 
   const handleAddUrl = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!urlInput.trim()) return;
+    const trimmed = urlInput.trim();
+    if (!trimmed) return;
+    setUploadError(null);
 
-    const isVideo = isVideoUrl(urlInput.trim());
+    const isVideo = isVideoUrl(trimmed);
     setPendingPhotos((prev) => [
       ...prev,
       {
         id: `url-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-        url: urlInput.trim(),
+        previewUrl: trimmed,
+        isObjectUrl: false,
+        remoteUrl: trimmed,
         caption: isVideo ? 'Alumni Video Memory' : 'Alumni photograph contribution',
         tags: isVideo ? 'Video, Reunion' : 'Reunion, Batch',
         isVideo,
@@ -126,7 +151,23 @@ export const UploadPhotosModal: React.FC<UploadPhotosModalProps> = ({
   };
 
   const handleRemovePending = (id: string) => {
-    setPendingPhotos((prev) => prev.filter((p) => p.id !== id));
+    setPendingPhotos((prev) => {
+      const target = prev.find((p) => p.id === id);
+      if (target?.isObjectUrl && target.previewUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(target.previewUrl);
+      }
+      return prev.filter((p) => p.id !== id);
+    });
+  };
+
+  const handleClearPending = () => {
+    pendingPhotos.forEach((p) => {
+      if (p.isObjectUrl && p.previewUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(p.previewUrl);
+      }
+    });
+    setPendingPhotos([]);
+    setUploadError(null);
   };
 
   const handleUpdateCaption = (id: string, newCaption: string) => {
@@ -135,50 +176,94 @@ export const UploadPhotosModal: React.FC<UploadPhotosModalProps> = ({
     );
   };
 
-  const handleUploadSubmit = () => {
-    if (pendingPhotos.length === 0) return;
+  const handleUploadSubmit = async () => {
+    if (pendingPhotos.length === 0 || isUploading) return;
 
     setIsUploading(true);
-    setUploadProgress(15);
+    setUploadError(null);
+    setUploadProgress(5);
+    setUploadStatusText(`Uploading 1 of ${pendingPhotos.length} to Supabase Storage...`);
 
-    const interval = setInterval(() => {
-      setUploadProgress((prev) => {
-        if (prev >= 90) {
-          clearInterval(interval);
-          setTimeout(() => {
-            const formattedPhotos: GalleryPhoto[] = pendingPhotos.map((p) => ({
-              id: p.id,
-              albumId: targetAlbumId,
-              url: p.url,
-              caption: p.caption.trim() || (p.isVideo ? 'SZMC Video Memory' : 'SZMC Alumni Memory'),
-              uploaderId: currentUser?.id,
-              uploaderName: contributorName.trim() || currentUser?.fullName || 'SZMC Alumnus',
-              uploaderAvatar:
-                currentUser?.avatarUrl ||
-                'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80',
-              batchYear: contributorBatch || currentUser?.batchYear || 20,
-              uploadedAt: 'Just now',
-              likesCount: 1,
-              likedByMe: true,
-              mediaType: p.isVideo ? 'video' : 'image',
-              fileSize: p.formattedSize,
-              tags: p.tags
-                .split(',')
-                .map((t) => t.trim())
-                .filter(Boolean),
-            }));
+    const formattedPhotos: GalleryPhoto[] = [];
+    const failedNames: string[] = [];
 
-            onUploadPhotos(targetAlbumId, formattedPhotos);
-            setIsUploading(false);
-            setPendingPhotos([]);
-            setUploadProgress(0);
-            onClose();
-          }, 300);
-          return 100;
+    try {
+      for (let i = 0; i < pendingPhotos.length; i++) {
+        const item = pendingPhotos[i];
+        setUploadStatusText(
+          `Uploading ${i + 1} of ${pendingPhotos.length}: ${item.caption || 'Media'}...`
+        );
+
+        let finalUrl = item.remoteUrl || '';
+        let storagePath: string | undefined;
+
+        if (item.file) {
+          const uploaded = await uploadGalleryMediaFile(item.file, targetAlbumId);
+          if (uploaded?.url) {
+            finalUrl = uploaded.url;
+            storagePath = uploaded.storagePath;
+          } else {
+            failedNames.push(item.file.name);
+            continue;
+          }
         }
-        return prev + 25;
-      });
-    }, 120);
+
+        if (!finalUrl || finalUrl.startsWith('blob:')) {
+          failedNames.push(item.caption || `Item ${i + 1}`);
+          continue;
+        }
+
+        formattedPhotos.push({
+          id: item.id,
+          albumId: targetAlbumId,
+          url: finalUrl,
+          storagePath,
+          caption: item.caption.trim() || (item.isVideo ? 'SZMC Video Memory' : 'SZMC Alumni Memory'),
+          uploaderId: currentUser?.id,
+          uploaderName: contributorName.trim() || currentUser?.fullName || 'SZMC Alumnus',
+          uploaderAvatar:
+            currentUser?.avatarUrl ||
+            'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80',
+          batchYear: contributorBatch || currentUser?.batchYear || undefined,
+          uploadedAt: new Date().toISOString(),
+          likesCount: 0,
+          likedByMe: false,
+          mediaType: item.isVideo ? 'video' : 'image',
+          fileSize: item.formattedSize,
+          tags: item.tags
+            .split(',')
+            .map((t) => t.trim())
+            .filter(Boolean),
+        });
+
+        setUploadProgress(Math.round(((i + 1) / pendingPhotos.length) * 80));
+      }
+
+      if (formattedPhotos.length === 0) {
+        setUploadError(
+          `Could not upload ${failedNames.join(', ')} to persistent storage. Please check your connection or sign in again.`
+        );
+        setIsUploading(false);
+        setUploadProgress(0);
+        return;
+      }
+
+      setUploadStatusText('Saving to Supabase Gallery & syncing to all users...');
+      setUploadProgress(90);
+
+      await onUploadPhotos(targetAlbumId, formattedPhotos);
+
+      setUploadProgress(100);
+      handleClearPending();
+      setIsUploading(false);
+      setUploadProgress(0);
+      setUploadStatusText('');
+      onClose();
+    } catch (err: any) {
+      setUploadError(err?.message || 'Upload failed while saving to Supabase.');
+      setIsUploading(false);
+      setUploadProgress(0);
+    }
   };
 
   return (
@@ -358,7 +443,7 @@ export const UploadPhotosModal: React.FC<UploadPhotosModalProps> = ({
                 </span>
                 <button
                   type="button"
-                  onClick={() => setPendingPhotos([])}
+                  onClick={handleClearPending}
                   className="text-[11px] font-semibold text-rose-600 dark:text-rose-400 hover:underline cursor-pointer"
                 >
                   Clear All
@@ -375,7 +460,7 @@ export const UploadPhotosModal: React.FC<UploadPhotosModalProps> = ({
                       {item.isVideo ? (
                         <>
                           <video
-                            src={item.url}
+                            src={item.previewUrl}
                             className="w-full h-full object-cover"
                             muted
                             playsInline
@@ -386,7 +471,7 @@ export const UploadPhotosModal: React.FC<UploadPhotosModalProps> = ({
                         </>
                       ) : (
                         <img
-                          src={item.url}
+                          src={item.previewUrl}
                           alt="Preview"
                           className="w-full h-full object-cover"
                         />
@@ -414,7 +499,8 @@ export const UploadPhotosModal: React.FC<UploadPhotosModalProps> = ({
                     <button
                       type="button"
                       onClick={() => handleRemovePending(item.id)}
-                      className="p-1.5 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
+                      disabled={isUploading}
+                      className="p-1.5 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer disabled:opacity-40"
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>
@@ -424,12 +510,22 @@ export const UploadPhotosModal: React.FC<UploadPhotosModalProps> = ({
             </div>
           )}
 
+          {/* Error Notice */}
+          {uploadError && (
+            <div className="p-3 bg-rose-50 dark:bg-rose-950/40 rounded-2xl border border-rose-200 dark:border-rose-800 flex items-start gap-2 text-xs font-semibold text-rose-700 dark:text-rose-300">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>{uploadError}</span>
+            </div>
+          )}
+
           {/* Upload Progress Bar */}
           {isUploading && (
             <div className="p-3 bg-blue-50 dark:bg-blue-950/40 rounded-2xl border border-blue-100 dark:border-blue-900/40 space-y-1.5">
-              <div className="flex justify-between text-xs font-bold text-blue-700 dark:text-blue-300">
-                <span>Saving & Optimizing Media to Persistent Storage...</span>
-                <span>{uploadProgress}%</span>
+              <div className="flex justify-between text-xs font-bold text-blue-700 dark:text-blue-300 gap-2">
+                <span className="truncate">
+                  {uploadStatusText || 'Uploading Media to Supabase Storage...'}
+                </span>
+                <span className="shrink-0">{uploadProgress}%</span>
               </div>
               <div className="w-full h-2 bg-blue-200 dark:bg-blue-900 rounded-full overflow-hidden">
                 <div
@@ -452,7 +548,7 @@ export const UploadPhotosModal: React.FC<UploadPhotosModalProps> = ({
             </button>
             <button
               type="button"
-              onClick={handleUploadSubmit}
+              onClick={() => void handleUploadSubmit()}
               disabled={pendingPhotos.length === 0 || isUploading}
               className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-xs transition-colors flex items-center gap-1.5 disabled:opacity-40 cursor-pointer"
             >

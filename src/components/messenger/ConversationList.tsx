@@ -4,6 +4,7 @@ import type { ChatConversation, OnlinePresenceUser } from '../../types/messaging
 import { findOnlinePresenceUser } from '../../services/messagingService';
 import { CLINICAL_STATUS_META } from '../../utils/clinicalStatus';
 import { ClinicalStatusChip } from '../ClinicalStatusChip';
+import { VerifiedAvatar } from '../verification/VerifiedAvatar';
 
 interface ConversationListProps {
   conversations: ChatConversation[];
@@ -89,10 +90,10 @@ export const ConversationList: React.FC<ConversationListProps> = ({
   });
 
   return (
-    <div className="flex-1 flex flex-col min-h-0 rounded-3xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm overflow-hidden">
+    <div className="flex-1 flex flex-col min-h-0 rounded-none sm:rounded-3xl border-0 sm:border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 sm:shadow-sm overflow-hidden">
       {/* Meta Messenger Header */}
-      <div className="px-4 pt-4 pb-3 flex items-center justify-between gap-2">
-        <h2 className="text-2xl font-black text-slate-950 dark:text-white tracking-tight">
+      <div className="px-4 pt-3 sm:pt-4 pb-2.5 sm:pb-3 flex items-center justify-between gap-2">
+        <h2 className="text-xl sm:text-2xl font-black text-slate-950 dark:text-white tracking-tight">
           Chats
         </h2>
         <div className="flex items-center gap-1.5">
@@ -101,7 +102,8 @@ export const ConversationList: React.FC<ConversationListProps> = ({
               type="button"
               onClick={onOpenSettings}
               title="Message Settings"
-              className="w-9 h-9 rounded-full bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 flex items-center justify-center transition-colors cursor-pointer"
+              aria-label="Message Settings"
+              className="min-w-[44px] min-h-[44px] sm:min-w-0 sm:min-h-0 sm:w-9 sm:h-9 rounded-full bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 flex items-center justify-center transition-colors cursor-pointer active:scale-95"
             >
               <Sliders className="w-4 h-4" />
             </button>
@@ -110,7 +112,8 @@ export const ConversationList: React.FC<ConversationListProps> = ({
             type="button"
             onClick={onNewChat}
             title="New Message"
-            className="w-9 h-9 rounded-full bg-[#0084FF] hover:bg-[#0073E6] text-white flex items-center justify-center shadow-sm shadow-[#0084FF]/30 transition-transform active:scale-95 cursor-pointer"
+            aria-label="New Message"
+            className="min-w-[44px] min-h-[44px] sm:min-w-0 sm:min-h-0 sm:w-9 sm:h-9 rounded-full bg-[#0084FF] hover:bg-[#0073E6] text-white flex items-center justify-center shadow-sm shadow-[#0084FF]/30 transition-transform active:scale-95 cursor-pointer"
           >
             <SquarePen className="w-4 h-4" />
           </button>
@@ -122,21 +125,23 @@ export const ConversationList: React.FC<ConversationListProps> = ({
         <div className="relative flex items-center">
           <Search className="w-4 h-4 text-slate-400 dark:text-slate-500 absolute left-3.5 pointer-events-none" />
           <input
-            type="text"
+            type="search"
+            inputMode="search"
+            enterKeyHint="search"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             placeholder="Search Messenger"
             aria-label="Search conversations"
-            className="w-full pl-9 pr-8 py-2 rounded-full bg-[#F0F2F5] dark:bg-slate-800 text-xs sm:text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 outline-none focus:ring-2 focus:ring-[#0084FF]/30 transition-all"
+            className="w-full min-h-[42px] sm:min-h-0 pl-9 pr-9 py-2 rounded-full bg-[#F0F2F5] dark:bg-slate-800 text-sm text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 outline-none focus:ring-2 focus:ring-[#0084FF]/30 transition-all"
           />
           {searchTerm && (
             <button
               type="button"
               onClick={() => setSearchTerm('')}
               aria-label="Clear search"
-              className="absolute right-3 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-0.5 cursor-pointer"
+              className="absolute right-1.5 min-w-[36px] min-h-[36px] flex items-center justify-center text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
             >
-              <X className="w-3.5 h-3.5" />
+              <X className="w-4 h-4" />
             </button>
           )}
         </div>
@@ -146,7 +151,7 @@ export const ConversationList: React.FC<ConversationListProps> = ({
           <button
             type="button"
             onClick={() => setInboxFilter('all')}
-            className={`py-1.5 px-2 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+            className={`min-h-[38px] sm:min-h-0 py-1.5 px-2 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
               inboxFilter === 'all'
                 ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-2xs'
                 : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
@@ -157,7 +162,7 @@ export const ConversationList: React.FC<ConversationListProps> = ({
           <button
             type="button"
             onClick={() => setInboxFilter('unread')}
-            className={`py-1.5 px-2 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer flex items-center justify-center gap-1 ${
+            className={`min-h-[38px] sm:min-h-0 py-1.5 px-2 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer flex items-center justify-center gap-1 ${
               inboxFilter === 'unread'
                 ? 'bg-white dark:bg-slate-900 text-[#0084FF] shadow-2xs'
                 : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
@@ -356,14 +361,29 @@ export const ConversationList: React.FC<ConversationListProps> = ({
                       <Megaphone className="w-5 h-5" />
                     </div>
                   ) : (
-                    <img
+                    <VerifiedAvatar
                       src={conversation.person.avatarUrl}
                       alt={conversation.person.fullName}
-                      referrerPolicy="no-referrer"
-                      className="w-12 h-12 rounded-full object-cover ring-1 ring-slate-200/80 dark:ring-slate-700"
+                      verificationStatus={conversation.person.verificationStatus}
+                      profileCompleted={Boolean(conversation.person.profileCompleted)}
+                      size="lg"
+                      imgClassName="w-12 h-12"
+                      unverifiedClassName="rounded-full ring-1 ring-slate-200/80 dark:ring-slate-700"
+                      statusDot={
+                        isOnline ? (
+                          <span
+                            title={liveStatus ? CLINICAL_STATUS_META[liveStatus].label : 'Active now'}
+                            className={`absolute z-20 ${
+                              conversation.person.verificationStatus === 'verified' ? 'top-0 right-0' : 'bottom-0 right-0'
+                            } w-3 h-3 rounded-full ring-2 ring-white dark:ring-slate-900 ${
+                              liveStatus ? CLINICAL_STATUS_META[liveStatus].dotClass : 'bg-emerald-500'
+                            }`}
+                          />
+                        ) : undefined
+                      }
                     />
                   )}
-                  {isOnline && (
+                  {(conversation.type === 'group' || conversation.type === 'announcement') && isOnline && (
                     <span
                       title={liveStatus ? CLINICAL_STATUS_META[liveStatus].label : 'Active now'}
                       className={`absolute bottom-0 right-0 w-3 h-3 rounded-full ring-2 ring-white dark:ring-slate-900 ${

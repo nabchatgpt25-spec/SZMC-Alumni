@@ -186,7 +186,7 @@ export function signAdminToken(
   const payload: AdminTokenPayload = {
     email: cleanEmail,
     role: effectiveRole,
-    userId: Number(meta?.userId || 1),
+    userId: Number(meta?.userId ?? 0),
     uid: meta?.uid || `admin:${cleanEmail}`,
     fullName: meta?.fullName || 'SZMC Administrator',
     iat: Date.now(),

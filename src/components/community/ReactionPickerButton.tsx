@@ -104,7 +104,7 @@ export const ReactionPickerButton: React.FC<ReactionPickerButtonProps> = ({
                 title={item.label}
                 aria-label={item.label}
                 aria-pressed={isSelected}
-                className={`w-9 h-9 flex items-center justify-center rounded-xl text-lg transition-transform duration-150 hover:scale-125 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 cursor-pointer ${
+                className={`w-10 h-10 sm:w-9 sm:h-9 flex items-center justify-center rounded-xl text-lg transition-transform duration-150 hover:scale-125 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 cursor-pointer ${
                   isSelected
                     ? 'bg-slate-100 dark:bg-slate-800 ring-1 ring-blue-400/60 scale-110'
                     : 'hover:bg-slate-100 dark:hover:bg-slate-800'
@@ -127,7 +127,7 @@ export const ReactionPickerButton: React.FC<ReactionPickerButtonProps> = ({
         }}
         aria-label={activeMeta ? `Remove ${activeMeta.label} reaction` : 'React to post'}
         title={activeMeta ? `${activeMeta.label} (hover for more reactions)` : 'React (hover for options)'}
-        className={`w-full sm:w-auto min-h-[38px] flex items-center justify-center gap-1.5 py-2 px-2.5 sm:px-3.5 rounded-xl text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
+        className={`w-full sm:w-auto min-h-[44px] sm:min-h-[38px] flex items-center justify-center gap-1.5 py-2 px-2.5 sm:px-3.5 rounded-xl text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
           activeMeta
             ? `${activeMeta.activeClass} ring-1`
             : 'text-slate-600 dark:text-slate-400 hover:text-rose-600 hover:bg-slate-100 dark:hover:bg-slate-800/80'

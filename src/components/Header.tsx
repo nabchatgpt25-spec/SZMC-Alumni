@@ -11,9 +11,9 @@ import {
   subscribeToOnlinePresence,
   updateMyClinicalStatus,
 } from '../services/messagingService';
-import type { OnlinePresenceUser } from '../types/messaging';
 import { CLINICAL_STATUS_META, loadSavedClinicalStatus } from '../utils/clinicalStatus';
 import { ClinicalStatusChip, ClinicalStatusSelector } from './ClinicalStatusChip';
+import { VerifiedAvatar } from './verification/VerifiedAvatar';
 
 interface HeaderProps {
   onToggleSidebar: () => void;
@@ -25,7 +25,7 @@ interface HeaderProps {
   onShareMyCard?: () => void;
 }
 
-export const Header: React.FC<HeaderProps> = ({
+export const Header: React.FC<HeaderProps> = React.memo(({
   onToggleSidebar,
   onNavigate,
   searchQuery,
@@ -37,20 +37,24 @@ export const Header: React.FC<HeaderProps> = ({
   const { currentUser, logout } = useAuth();
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
-  const [onlineUsers, setOnlineUsers] = useState<OnlinePresenceUser[]>([]);
+  const [myClinicalStatus, setMyClinicalStatus] = useState(() =>
+    loadSavedClinicalStatus(currentUser.id)
+  );
   const [pendingVouchRequestsCount, setPendingVouchRequestsCount] = useState<number>(() =>
     loadVouchRequests().filter((r) => r.status === 'pending').length
   );
 
   useEffect(() => {
-    return subscribeToOnlinePresence(null, (users) => setOnlineUsers(users));
-  }, []);
+    setMyClinicalStatus(loadSavedClinicalStatus(currentUser.id));
+    return subscribeToOnlinePresence(null, (users) => {
+      const nextStatus =
+        findOnlinePresenceUser(users, currentUser.id)?.clinicalStatus ??
+        loadSavedClinicalStatus(currentUser.id);
+      setMyClinicalStatus((prev) => (prev === nextStatus ? prev : nextStatus));
+    });
+  }, [currentUser.id]);
 
-  const myPresence = findOnlinePresenceUser(onlineUsers, currentUser.id);
-  const myClinicalStatus =
-    myPresence?.clinicalStatus ?? loadSavedClinicalStatus(currentUser.id);
-
-  const isUserVerified = (currentUser.verificationStatus || 'verified') === 'verified';
+  const isUserVerified = currentUser.verificationStatus === 'verified';
   const userVouchesCount = currentUser.vouchesCount ?? (currentUser.verifiedBy?.length ?? (isUserVerified ? 2 : 0));
   const isSuperAdmin = isUserSuperAdmin(currentUser);
   const isGeneralAdmin = isUserGeneralAdmin(currentUser);
@@ -81,14 +85,14 @@ export const Header: React.FC<HeaderProps> = ({
   }, []);
 
   return (
-    <header className="sticky top-0 z-40 h-18 bg-white/75 dark:bg-slate-900/75 backdrop-blur-xl border-b border-slate-200/60 dark:border-white/10 shadow-xs transition-colors duration-200">
-      <div className="h-full px-3 sm:px-6 flex items-center justify-between gap-2.5 sm:gap-3 max-w-[1600px] mx-auto">
+    <header className="sticky top-0 z-40 h-14 sm:h-16 bg-white/85 dark:bg-slate-900/85 backdrop-blur-md border-b border-slate-200/70 dark:border-white/10 shadow-xs transition-colors duration-150">
+      <div className="h-full px-2.5 sm:px-6 flex items-center justify-between gap-2 sm:gap-3 max-w-[1600px] mx-auto">
         {/* Left: Mobile Toggle, Mobile Brand & Search */}
-        <div className="flex items-center gap-2 sm:gap-3 flex-1 min-w-0 max-w-2xl">
+        <div className="flex items-center gap-1.5 sm:gap-3 flex-1 min-w-0 max-w-2xl">
           <button
             type="button"
             onClick={onToggleSidebar}
-            className="lg:hidden p-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors shrink-0 cursor-pointer"
+            className="lg:hidden min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 active:scale-95 transition-all shrink-0 cursor-pointer"
             aria-label="Toggle menu"
           >
             <Menu className="w-5 h-5" />
@@ -125,7 +129,7 @@ export const Header: React.FC<HeaderProps> = ({
           <button
             type="button"
             onClick={() => setMobileSearchOpen(!mobileSearchOpen)}
-            className="sm:hidden p-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors shrink-0 cursor-pointer"
+            className="sm:hidden min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 active:scale-95 transition-all shrink-0 cursor-pointer"
             aria-label="Toggle mobile search"
           >
             <Search className="w-5 h-5" />
@@ -134,14 +138,17 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Mobile Search Overlay when opened */}
         {mobileSearchOpen && (
-          <div className="sm:hidden absolute inset-x-0 top-0 h-18 bg-white dark:bg-slate-900 px-4 flex items-center gap-2 z-50 border-b border-slate-200 dark:border-slate-800 animate-in fade-in duration-150">
-            <Search className="w-4 h-4 text-slate-400 shrink-0" />
+          <div className="sm:hidden absolute inset-x-0 top-0 h-14 bg-white dark:bg-slate-900 px-3 flex items-center gap-2 z-50 border-b border-slate-200 dark:border-slate-800 shadow-md">
+            <Search className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0 ml-1" />
             <input
-              type="text"
+              type="search"
+              inputMode="search"
+              enterKeyHint="search"
+              autoFocus
               placeholder="Search alumni, batches, doctors..."
               value={searchQuery}
               onChange={(e) => onSearchChange(e.target.value)}
-              className="flex-1 py-2 text-sm bg-transparent text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none"
+              className="flex-1 py-2 text-base bg-transparent text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none"
             />
             <button
               type="button"
@@ -149,7 +156,8 @@ export const Header: React.FC<HeaderProps> = ({
                 setMobileSearchOpen(false);
                 onSearchChange('');
               }}
-              className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              aria-label="Close search"
+              className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 active:scale-95 cursor-pointer"
             >
               <X className="w-5 h-5" />
             </button>
@@ -158,24 +166,15 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Right Actions: Theme Toggle, Notifications, Messages, Profile */}
         <div className="flex items-center gap-1 sm:gap-2.5 shrink-0">
-          {/* Supabase Realtime Live Sync Badge */}
-          <div
-            className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 dark:bg-emerald-400/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-[11px] font-bold select-none cursor-default"
-            title="Supabase WebSocket Realtime Synchronization Active"
-          >
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-            <span className="tracking-tight">Live Sync</span>
-          </div>
-
           {/* Quick Admin Access Button */}
           {(currentUser.role === 'admin' || isSuperAdmin || isGeneralAdmin) && (
             <button
               type="button"
               onClick={() => onNavigate('admin')}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30 text-indigo-700 dark:text-indigo-300 text-xs font-bold transition-all cursor-pointer shadow-xs active:scale-95"
+              className="min-h-[40px] sm:min-h-[36px] flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30 text-indigo-700 dark:text-indigo-300 text-xs font-bold transition-all cursor-pointer shadow-xs active:scale-95 whitespace-nowrap"
               title="Open Admin Portal"
             >
-              <ShieldAlert className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+              <ShieldAlert className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
               <span className="hidden sm:inline">Admin</span>
             </button>
           )}
@@ -213,24 +212,30 @@ export const Header: React.FC<HeaderProps> = ({
               onClick={() => {
                 setShowProfileMenu(!showProfileMenu);
               }}
-              className="flex items-center gap-2.5 p-1 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors text-left"
+              className="min-h-[44px] flex items-center gap-2.5 p-1 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 active:scale-95 transition-all text-left cursor-pointer"
             >
-              <div className="relative">
-                <img
-                  src={currentUser.avatarUrl}
-                  alt={currentUser.fullName}
-                  className="w-9 h-9 rounded-full object-cover ring-2 ring-blue-500/20 dark:ring-blue-400/30"
-                />
-                <span
-                  className={`absolute bottom-0 right-0 w-2.5 h-2.5 ring-2 ring-white dark:ring-slate-900 rounded-full ${
-                    myClinicalStatus ? CLINICAL_STATUS_META[myClinicalStatus].dotClass : 'bg-emerald-500'
-                  }`}
-                />
-              </div>
+              <VerifiedAvatar
+                src={currentUser.avatarUrl}
+                alt={currentUser.fullName}
+                verificationStatus={currentUser.verificationStatus}
+                profile={currentUser}
+                size="sm"
+                imgClassName="w-9 h-9"
+                unverifiedClassName="rounded-full ring-2 ring-blue-500/20 dark:ring-blue-400/30"
+                statusDot={
+                  <span
+                    className={`absolute z-20 ${isUserVerified ? 'top-0 right-0' : 'bottom-0 right-0'} w-2.5 h-2.5 ring-2 ring-white dark:ring-slate-900 rounded-full ${
+                      myClinicalStatus ? CLINICAL_STATUS_META[myClinicalStatus].dotClass : 'bg-emerald-500'
+                    }`}
+                  />
+                }
+              />
               <div className="hidden md:block">
                 <div className="text-xs font-bold text-slate-900 dark:text-slate-100 leading-tight flex items-center gap-1">
                   <span>{currentUser.fullName.split(' ')[0]} {currentUser.fullName.split(' ')[1] || ''}</span>
-                  <ShieldCheck className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400 inline" />
+                  {isUserVerified && (
+                    <ShieldCheck className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400 inline" />
+                  )}
                 </div>
                 <div className="text-[11px] text-slate-500 dark:text-slate-400 font-medium flex items-center gap-1.5">
                   <span>Batch {currentUser.batchYear} · {currentUser.profession}</span>
@@ -389,4 +394,4 @@ export const Header: React.FC<HeaderProps> = ({
       </div>
     </header>
   );
-};
+});

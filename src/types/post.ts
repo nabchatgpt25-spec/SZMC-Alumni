@@ -4,6 +4,7 @@ export interface PostAuthor {
   avatarUrl: string;
   batchYear?: number;
   verified?: boolean;
+  profileCompleted?: boolean;
   profession?: string;
   institution?: string;
 }
@@ -70,6 +71,7 @@ export interface PostItem {
   avatarUrl: string;
   batchYear?: number;
   verified?: boolean;
+  profileCompleted?: boolean;
   profession?: string;
   institution?: string;
   content: string;

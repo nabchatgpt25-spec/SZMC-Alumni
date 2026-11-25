@@ -39,6 +39,7 @@ import { supabase, supabaseAdmin, ALUMNI_PUBLIC_COLUMNS } from '../../lib/supaba
 import { useAuth } from '../../context/AuthContext';
 import { UserRole, VerificationStatus } from '../../types';
 import { loadSupabaseGovernanceState, saveSupabaseGovernanceState } from '../../services/adminService';
+import { fetchModerationReports, resolveModerationReport } from '../../services/communitySafetyService';
 import { loadStoredAlumniProfiles } from '../../data/mockData';
 import { useAdminVisualMode } from './adminVisualModes';
 import {
@@ -50,6 +51,7 @@ import {
   type AnalyticsDataPoint,
   type NeonActivityItem,
 } from './AdminNeonAnalyticsVisuals';
+import { ConfirmActionModal } from '../common/ConfirmActionModal';
 
 export type ExtendedVerificationStatus =
   | VerificationStatus
@@ -106,6 +108,7 @@ export interface VerificationRequestItem {
 
 export interface ReportedContentItem {
   id: string;
+  reportDbId?: number;
   post_id: number;
   content: string;
   category: string;
@@ -161,6 +164,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [inspectDoc, setInspectDoc] = useState<VerificationRequestItem | null>(null);
   const [rejectReasonModal, setRejectReasonModal] = useState<{ id: string; userId: number } | null>(null);
   const [customRejectReason, setCustomRejectReason] = useState<string>('Information does not match official college records');
+  const [pendingPurgePost, setPendingPurgePost] = useState<ReportedContentItem | null>(null);
 
   // Temporary toast helper
   const showToast = useCallback((text: string, type: 'success' | 'error' = 'success') => {
@@ -288,7 +292,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       const govState = await loadSupabaseGovernanceState();
       const { data, error } = await supabaseAdmin
         .from('admin_doc_submissions')
-        .select('*')
+        .select('id, user_id, batch_year, college_roll, doc_type, doc_type_label, storage_object_path, status, submitted_at, admin_note')
         .order('submitted_at', { ascending: false });
 
       if (error || !data || data.length === 0) {
@@ -341,14 +345,57 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   }, [getAuthHeaders]);
 
-  // 3. Load Reported Content & Posts
+  // 3. Load Reported Content & Posts (authoritative Supabase content_reports first, localStorage fallback offline)
   const loadReportedContent = useCallback(async () => {
     try {
-      const { data: postsData } = await supabaseAdmin
-        .from('posts')
-        .select('*')
-        .order('id', { ascending: false })
-        .limit(100);
+      const [{ data: postsData }, serverReports] = await Promise.all([
+        supabaseAdmin
+          .from('posts')
+          .select('id, content, category, author_id, images, videos, likes_count, comments_count, is_deleted, is_pinned, created_at')
+          .order('id', { ascending: false })
+          .limit(100),
+        fetchModerationReports('all').catch(() => []),
+      ]);
+
+      const postsList = postsData || [];
+      const postById = new Map<number, any>(postsList.map((p: any) => [Number(p.id), p]));
+
+      if (Array.isArray(serverReports) && serverReports.length > 0) {
+        const mappedServerReports: ReportedContentItem[] = serverReports.map((r) => {
+          const targetId = Number(r.target_id);
+          const post = r.target_type === 'post' ? postById.get(targetId) : undefined;
+          const mappedStatus: ReportedContentItem['report_status'] =
+            r.status === 'resolved_removed'
+              ? 'action_taken'
+              : r.status === 'resolved_dismissed'
+              ? 'resolved'
+              : 'pending_review';
+          return {
+            id: `cr-${r.id}`,
+            reportDbId: Number(r.id),
+            post_id: targetId,
+            content: post?.content || r.details || `${r.target_type} #${targetId} (${r.reason})`,
+            category: post?.category || r.target_type || 'Post Report',
+            author_id: Number(post?.author_id || r.target_author_id || 0),
+            author_name: r.target_author?.full_name || `Member #${post?.author_id || r.target_author_id || 'Unknown'}`,
+            author_batch: Number(r.target_author?.batch_year || 25),
+            author_avatar: r.target_author?.avatar_url || undefined,
+            images: post?.images || [],
+            videos: post?.videos || [],
+            likes_count: post?.likes_count || 0,
+            comments_count: post?.comments_count || 0,
+            is_deleted: Boolean(post?.is_deleted) || r.status === 'resolved_removed',
+            is_pinned: Boolean(post?.is_pinned),
+            created_at: post?.created_at || r.created_at,
+            report_count: 1,
+            report_reasons: [r.reason, ...(r.details ? [r.details] : [])],
+            report_status: mappedStatus,
+            reported_at: r.created_at,
+          };
+        });
+        setReportedPosts(mappedServerReports);
+        return;
+      }
 
       let storedReports: Record<string, { reasons: string[]; reported_at: string; status: 'pending_review' | 'resolved' | 'action_taken' }> = {};
       try {
@@ -356,12 +403,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         if (raw) storedReports = JSON.parse(raw);
       } catch {}
 
-      const postsList = postsData || [];
       const reportedItems: ReportedContentItem[] = [];
-
       Object.keys(storedReports).forEach((postIdStr) => {
         const pId = Number(postIdStr);
-        const post = postsList.find((p) => p.id === pId);
+        const post = postById.get(pId);
         const rep = storedReports[postIdStr];
         if (post) {
           reportedItems.push({
@@ -386,38 +431,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           });
         }
       });
-
-      if (reportedItems.length === 0 && postsList.length > 0) {
-        const samplePost = postsList[0];
-        const initialSampleReport: ReportedContentItem = {
-          id: `rep-${samplePost.id}`,
-          post_id: samplePost.id,
-          content: samplePost.content,
-          category: samplePost.category || 'Batch News',
-          author_id: samplePost.author_id,
-          author_name: 'Dr. Nurul Anam Bashir',
-          author_batch: 25,
-          images: samplePost.images || [],
-          videos: samplePost.videos || [],
-          likes_count: samplePost.likes_count || 0,
-          comments_count: samplePost.comments_count || 0,
-          is_deleted: Boolean(samplePost.is_deleted),
-          is_pinned: Boolean(samplePost.is_pinned),
-          created_at: samplePost.created_at,
-          report_count: 2,
-          report_reasons: ['Content Verification Check', 'Unverified Medical Claim'],
-          report_status: 'pending_review',
-          reported_at: new Date().toISOString(),
-        };
-        reportedItems.push(initialSampleReport);
-
-        storedReports[String(samplePost.id)] = {
-          reasons: initialSampleReport.report_reasons,
-          reported_at: initialSampleReport.reported_at,
-          status: 'pending_review',
-        };
-        localStorage.setItem(REPORTS_STORAGE_KEY, JSON.stringify(storedReports));
-      }
 
       setReportedPosts(reportedItems);
     } catch (err) {
@@ -461,7 +474,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           verification_status: dbStatus,
           verification_method: dbStatus === 'verified' ? 'admin_manual' : undefined,
           verified_at: dbStatus === 'verified' ? nowIso : null,
-          verified_by_profile_id: currentUser?.id || 1,
+          verified_by_profile_id: currentUser?.id && Number(currentUser.id) > 0 ? Number(currentUser.id) : null,
         })
         .eq('id', userId);
 
@@ -606,7 +619,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         .from('admin_doc_submissions')
         .update({
           status: 'approved',
-          reviewed_by: currentUser?.id || 1,
+          reviewed_by: currentUser?.id && Number(currentUser.id) > 0 ? Number(currentUser.id) : null,
           reviewed_at: nowIso,
           admin_note: 'Approved by institutional administrator',
         })
@@ -619,7 +632,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           verification_status: 'verified',
           verification_method: 'id_card_upload',
           verified_at: nowIso,
-          verified_by_profile_id: currentUser?.id || 1,
+          verified_by_profile_id: currentUser?.id && Number(currentUser.id) > 0 ? Number(currentUser.id) : null,
         })
         .eq('id', reqItem.user_id);
 
@@ -628,7 +641,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         const next = { ...prev };
         next.docOverrides[String(reqItem.id)] = {
           status: 'approved',
-          reviewedBy: currentUser?.id || 1,
+          reviewedBy: currentUser?.id || 0,
           reviewedAt: nowIso,
           adminNote: 'Approved by institutional administrator',
         };
@@ -668,7 +681,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         .from('admin_doc_submissions')
         .update({
           status: 'rejected',
-          reviewed_by: currentUser?.id || 1,
+          reviewed_by: currentUser?.id && Number(currentUser.id) > 0 ? Number(currentUser.id) : null,
           reviewed_at: nowIso,
           admin_note: customRejectReason,
         })
@@ -680,7 +693,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           ...prev.docOverrides,
           [String(id)]: {
             status: 'rejected',
-            reviewedBy: currentUser?.id || 1,
+            reviewedBy: currentUser?.id || 0,
             reviewedAt: nowIso,
             adminNote: customRejectReason,
           },
@@ -703,22 +716,37 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   // Moderation: Dismiss Report
-  const handleDismissReport = (reportedItem: ReportedContentItem) => {
+  const handleDismissReport = async (reportedItem: ReportedContentItem) => {
     try {
-      const raw = localStorage.getItem(REPORTS_STORAGE_KEY);
-      const reports = raw ? JSON.parse(raw) : {};
-      reports[String(reportedItem.post_id)] = {
-        reasons: reportedItem.report_reasons,
-        reported_at: reportedItem.reported_at,
-        status: 'resolved',
-      };
-      localStorage.setItem(REPORTS_STORAGE_KEY, JSON.stringify(reports));
+      if (reportedItem.reportDbId) {
+        const res = await resolveModerationReport({
+          reportId: reportedItem.reportDbId,
+          status: 'resolved_dismissed',
+          resolutionNote: 'Dismissed by moderator via Admin Dashboard',
+          removeContent: false,
+        });
+        if (!res.success) {
+          showToast(res.error || 'Could not dismiss report on server.', 'error');
+          return;
+        }
+      }
+
+      try {
+        const raw = localStorage.getItem(REPORTS_STORAGE_KEY);
+        const reports = raw ? JSON.parse(raw) : {};
+        reports[String(reportedItem.post_id)] = {
+          reasons: reportedItem.report_reasons,
+          reported_at: reportedItem.reported_at,
+          status: 'resolved',
+        };
+        localStorage.setItem(REPORTS_STORAGE_KEY, JSON.stringify(reports));
+      } catch {}
 
       setReportedPosts((prev) =>
-        prev.map((p) => (p.post_id === reportedItem.post_id ? { ...p, report_status: 'resolved' } : p))
+        prev.map((p) => (p.id === reportedItem.id ? { ...p, report_status: 'resolved' } : p))
       );
       showToast('Report dismissed. Post retained in active feed.');
-    } catch (err: any) {
+    } catch {
       showToast('Error dismissing report', 'error');
     }
   };
@@ -729,7 +757,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setActionLoading(`post-del-${reportedItem.post_id}`);
 
     try {
-      // 1. Update in Supabase via supabaseAdmin
+      // 1. Update in Supabase via moderation API (if backed by content_reports) or supabaseAdmin
+      if (reportedItem.reportDbId && newDeleted) {
+        await resolveModerationReport({
+          reportId: reportedItem.reportDbId,
+          status: 'resolved_removed',
+          resolutionNote: 'Content hidden via Admin Dashboard',
+          removeContent: true,
+        });
+      }
+
       await supabaseAdmin
         .from('posts')
         .update({
@@ -749,15 +786,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         },
       }));
 
-      // 3. Update report status
-      const raw = localStorage.getItem(REPORTS_STORAGE_KEY);
-      const reports = raw ? JSON.parse(raw) : {};
-      reports[String(reportedItem.post_id)] = {
-        reasons: reportedItem.report_reasons,
-        reported_at: reportedItem.reported_at,
-        status: newDeleted ? 'action_taken' : 'pending_review',
-      };
-      localStorage.setItem(REPORTS_STORAGE_KEY, JSON.stringify(reports));
+      // 3. Mirror report status in local cache
+      try {
+        const raw = localStorage.getItem(REPORTS_STORAGE_KEY);
+        const reports = raw ? JSON.parse(raw) : {};
+        reports[String(reportedItem.post_id)] = {
+          reasons: reportedItem.report_reasons,
+          reported_at: reportedItem.reported_at,
+          status: newDeleted ? 'action_taken' : 'pending_review',
+        };
+        localStorage.setItem(REPORTS_STORAGE_KEY, JSON.stringify(reports));
+      } catch {}
 
       setReportedPosts((prev) =>
         prev.map((p) =>
@@ -776,10 +815,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   };
 
   // Moderation: Permanently Delete Post
-  const handleHardDeletePost = async (reportedItem: ReportedContentItem) => {
-    if (!window.confirm(`Permanently purge Post #${reportedItem.post_id} from database? This cannot be undone.`)) {
-      return;
-    }
+  const handleHardDeletePost = (reportedItem: ReportedContentItem) => {
+    setPendingPurgePost(reportedItem);
+  };
+
+  const executeHardDeletePost = async (reportedItem: ReportedContentItem) => {
     setActionLoading(`post-purge-${reportedItem.post_id}`);
 
     try {
@@ -2054,6 +2094,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         </div>
       )}
+
+      <ConfirmActionModal
+        isOpen={Boolean(pendingPurgePost)}
+        title="Permanently Purge Post"
+        message={
+          pendingPurgePost
+            ? `Permanently purge Post #${pendingPurgePost.post_id} from database? This action cannot be undone.`
+            : ''
+        }
+        confirmLabel="Purge Post"
+        onConfirm={() => {
+          const target = pendingPurgePost;
+          setPendingPurgePost(null);
+          if (target) void executeHardDeletePost(target);
+        }}
+        onCancel={() => setPendingPurgePost(null)}
+      />
     </div>
   );
 };

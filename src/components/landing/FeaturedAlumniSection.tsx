@@ -25,6 +25,7 @@ import {
 import { useSiteConfig, type FeaturedAlumnus } from '../../services/siteConfigService';
 import { realtimeManager } from '../../services/supabaseRealtimeService';
 import campusHeroImg from '../../assets/images/szmc_campus_hero.jpg';
+import { VerifiedAvatar } from '../verification/VerifiedAvatar';
 
 interface FeaturedAlumniSectionProps {
   alumniList: AlumniProfile[];
@@ -176,7 +177,7 @@ export const FeaturedAlumniSection: React.FC<FeaturedAlumniSectionProps> = ({
               email: '',
               linkedin: '',
               isPublic: true,
-              isVerified: true,
+              verificationStatus: 'verified' as const,
               online: true,
               isMentor: true,
               bloodGroup: 'O+',
@@ -445,14 +446,22 @@ export const FeaturedAlumniSection: React.FC<FeaturedAlumniSectionProps> = ({
             <div>
               {/* Profile Picture Header & Badges */}
               <div className="flex items-start justify-between gap-3 mb-4">
-                <div className="relative">
-                  <img
-                    src={alumnus.avatarUrl}
-                    alt={alumnus.fullName}
-                    className="avatar-interactive w-18 h-18 rounded-2xl object-cover border-2 border-slate-100 dark:border-slate-800 shadow-md bg-slate-100 dark:bg-slate-800"
-                  />
-                  <span className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-emerald-500 border-2 border-white dark:border-slate-900" />
-                </div>
+                <VerifiedAvatar
+                  src={alumnus.avatarUrl}
+                  alt={alumnus.fullName}
+                  verificationStatus={alumnus.verificationStatus}
+                  profile={alumnus}
+                  size="xl"
+                  imgClassName="avatar-interactive w-18 h-18"
+                  unverifiedClassName="avatar-interactive rounded-2xl border-2 border-slate-100 dark:border-slate-800 shadow-md bg-slate-100 dark:bg-slate-800"
+                  statusDot={
+                    <span
+                      className={`absolute z-20 ${
+                        alumnus.verificationStatus === 'verified' ? 'top-0.5 right-0.5' : '-bottom-1 -right-1'
+                      } w-4 h-4 rounded-full bg-emerald-500 border-2 border-white dark:border-slate-900`}
+                    />
+                  }
+                />
 
                 <div className="flex flex-col items-end gap-1.5">
                   <span className="px-2.5 py-1 rounded-full bg-blue-50 dark:bg-blue-950/70 border border-blue-200 dark:border-blue-800/60 text-blue-700 dark:text-blue-300 text-[11px] font-black tracking-tight">
@@ -472,7 +481,9 @@ export const FeaturedAlumniSection: React.FC<FeaturedAlumniSectionProps> = ({
                   <h3 className="text-base font-black text-slate-900 dark:text-white truncate group-hover:text-blue-600 dark:group-hover:text-blue-400">
                     {alumnus.fullName}
                   </h3>
-                  <ShieldCheck className="w-4 h-4 text-blue-600 dark:text-blue-400 flex-shrink-0" />
+                  {alumnus.verificationStatus === 'verified' && (
+                    <ShieldCheck className="w-4 h-4 text-blue-600 dark:text-blue-400 flex-shrink-0" />
+                  )}
                 </div>
 
                 {/* Top Carrier Position Badge */}

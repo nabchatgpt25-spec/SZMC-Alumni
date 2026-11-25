@@ -37,6 +37,11 @@ import {
   SUPABASE_TABLES,
 } from './server/lib/supabase-server.ts';
 import { isSafeTargetUrl, safeFetchHtml } from './server/lib/safeFetch.ts';
+import { hashPasswordServer, verifyPasswordServer } from './server/lib/password.ts';
+import { rateLimitGuard } from './server/lib/rateLimit.ts';
+import { createDistDownloadRouter } from './server/routes/distDownload.ts';
+import { createTelemetryRouter } from './server/routes/telemetry.ts';
+import { createPushRouter } from './server/routes/push.ts';
 import {
   requireAuth,
   requireModerator,
@@ -74,20 +79,12 @@ import {
   setServerAutoVerifyConfig,
   bulkVerifyAllAlumniProfiles,
 } from './server/db/adminRepository.ts';
-import {
-  ingestTelemetryBatch,
-  getTelemetryOverview,
-  getUserTelemetryDossier,
-  createAdSegment,
-  deleteAdSegment,
-  clearTelemetryLogs,
-  listAdSegments,
-} from './server/db/telemetryRepository.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+app.set('trust proxy', 1);
 // AI Studio environment strictly requires the application to bind to port 3000
 const args = process.argv.slice(2);
 const portFlagIdx = args.indexOf('--port');
@@ -152,38 +149,6 @@ app.use(compression({
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// 2. Sliding-Window Anti-Scraping & Brute-Force Rate Limiter
-interface RateBucket {
-  count: number;
-  resetAt: number;
-}
-const rateLimitStore = new Map<string, RateBucket>();
-
-function rateLimitGuard(maxRequests: number, windowMs: number) {
-  return (req: Request, res: Response, next: NextFunction) => {
-    const ip =
-      (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
-      req.socket.remoteAddress ||
-      'unknown';
-    const key = `${ip}:${req.baseUrl || req.path}`;
-    const now = Date.now();
-    const bucket = rateLimitStore.get(key);
-
-    if (!bucket || now > bucket.resetAt) {
-      rateLimitStore.set(key, { count: 1, resetAt: now + windowMs });
-      return next();
-    }
-
-    bucket.count += 1;
-    if (bucket.count > maxRequests) {
-      return res.status(429).json({
-        error: 'Rate limit exceeded. Automated scraping and brute-force requests are blocked.',
-      });
-    }
-    return next();
-  };
-}
-
 function resolveActor(req: AuthRequest) {
   if (req.dbUser) {
     return {
@@ -213,19 +178,6 @@ app.get('/api/auth/verify-session', requireAuth, (req: AuthRequest, res: Respons
   });
 });
 
-// Super-Admin-only download route for the compiled production distribution package
-app.get(['/api/download-dist', '/download-dist', '/download/dist.zip', '/szmc-alumni-dist.zip'], requireSuperAdmin, (_req: AuthRequest, res: Response) => {
-  const publicZip = path.resolve(__dirname, 'public', 'szmc-alumni-dist.zip');
-  if (existsSync(publicZip)) {
-    return res.download(publicZip, 'szmc-alumni-dist.zip');
-  }
-  const distZip = path.resolve(__dirname, 'dist', 'szmc-alumni-dist.zip');
-  if (existsSync(distZip)) {
-    return res.download(distZip, 'szmc-alumni-dist.zip');
-  }
-  return res.status(404).json({ error: 'Distribution bundle not found' });
-});
-
 // Sync Firebase Auth User with Cloud SQL
 app.post('/api/auth/sync', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
@@ -248,13 +200,13 @@ function formatAlumniRowToProfile(row: any) {
       row.avatarUrl ||
       'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=200&auto=format&fit=crop&q=80',
     coverUrl: row.coverUrl || undefined,
-    batchYear: row.batchYear || 68,
+    batchYear: row.batchYear || 25,
     session: row.session || undefined,
     collegeRoll: row.collegeRoll || '',
-    academicStream: row.academicStream,
+    academicStream: row.academicStream || 'MBBS',
     academicGroup: row.academicGroup,
-    group: row.academicStream || 'Science',
-    section: row.section || 'Group 4',
+    group: row.academicStream || 'MBBS',
+    section: row.section || 'MBBS',
     verificationStatus: row.verificationStatus || 'pending_vouch',
     verificationMethod: row.verificationMethod || 'two_vouches',
     verifiedBy: row.verifiedByAdmin ? [row.verifiedByAdmin] : [],
@@ -265,8 +217,8 @@ function formatAlumniRowToProfile(row: any) {
     institution: row.institution || '',
     cadre: row.cadre || '',
     specialty: Array.isArray(row.specialty) ? row.specialty : [],
-    degree: Array.isArray(row.degree) ? row.degree : ['HSC'],
-    city: row.city || 'Dhaka',
+    degree: Array.isArray(row.degree) ? row.degree : ['MBBS'],
+    city: row.city || 'Bogura',
     country: row.country || 'Bangladesh',
     phone: row.phone || '',
     phoneOwnershipVerified: Boolean(row.phoneOwnershipVerified ?? row.phone_ownership_verified),
@@ -287,23 +239,6 @@ function formatAlumniRowToProfile(row: any) {
     postsCount: row.postsCount || 0,
     badges: Array.isArray(row.badges) ? row.badges : [],
   };
-}
-
-const PASSWORD_SALT = 'ndc_dhaka_1949_salt_v1:';
-
-function hashPasswordServer(raw: string): string {
-  if (!raw) return '';
-  if (raw.startsWith('sha256:')) return raw;
-  const hash = crypto.createHash('sha256').update(PASSWORD_SALT + raw).digest('hex');
-  return `sha256:${hash}`;
-}
-
-function verifyPasswordServer(storedHash: string | null | undefined, inputPass: string): boolean {
-  if (!storedHash) return true;
-  const hashedInput = hashPasswordServer(inputPass);
-  if (storedHash === hashedInput) return true;
-  if (storedHash === inputPass) return true;
-  return false;
 }
 
 // Global Cross-Device Registration Endpoint (stores directly in Cloud SQL)
@@ -467,9 +402,13 @@ async function handleUnifiedLoginCore(req: Request, res: Response) {
         return res.status(401).json({ error: 'Invalid credentials. Access denied.' });
       }
 
-      const resolvedId = Number(dbProfile?.id || 1);
+      const resolvedId = Number(dbProfile?.id || 0);
       const resolvedUid = authSession?.user?.id || dbProfile?.authUserId || `super-admin:${targetEmail}`;
-      const resolvedName = dbProfile?.fullName || 'Dr. Nurul Anam Bashir';
+      const resolvedName =
+        dbProfile?.fullName ||
+        (authSession?.user?.user_metadata as any)?.full_name ||
+        targetEmail.split('@')[0] ||
+        'Super Admin';
 
       const superAdminToken = signAdminToken(targetEmail, 'super_admin', {
         userId: resolvedId,
@@ -867,125 +806,10 @@ app.post('/api/admin/bulk-verify-all', rateLimitGuard(15, 60_000), requireSuperA
 });
 
 // ---------------------------------------------------------------------------
-// User Behavioral Telemetry & Super Admin Ad Intelligence Data Center Routes
+// User Behavioral Telemetry & Web Push Routes (Modular Routers)
 // ---------------------------------------------------------------------------
-
-// Ingest sanitized behavioral event batches (page views, dwell time, clicks, scroll, searches)
-app.post(
-  '/api/telemetry/batch',
-  rateLimitGuard(180, 60_000),
-  optionalAuth,
-  async (req: AuthRequest, res: Response) => {
-    try {
-      const body = req.body;
-      if (!body || typeof body !== 'object' || !body.session?.sessionId) {
-        return res.status(400).json({ error: 'Invalid telemetry payload.' });
-      }
-      const result = await ingestTelemetryBatch(body, req.dbUser || null);
-      return res.json({ ok: true, ...result });
-    } catch (err: any) {
-      return res.status(500).json({ error: err?.message || 'Failed to ingest telemetry batch.' });
-    }
-  }
-);
-
-// Super Admin ONLY: Full User Activity Overview (KPIs, Route Dwell, Click Hotspots, Users, Live Feed)
-app.get(
-  '/api/admin/telemetry/overview',
-  rateLimitGuard(120, 60_000),
-  requireSuperAdmin,
-  async (req: AuthRequest, res: Response) => {
-    try {
-      const rawRange = Number(req.query.rangeHours);
-      const rangeHours = Number.isFinite(rawRange) && rawRange >= 0 && rawRange <= 8760 ? rawRange : 168;
-      const overview = await getTelemetryOverview(rangeHours);
-      return res.json(overview);
-    } catch (err: any) {
-      return res.status(500).json({ error: err?.message || 'Failed to load telemetry overview.' });
-    }
-  }
-);
-
-// Super Admin ONLY: Deep-Dive Behavioral Dossier for a Specific User
-app.get(
-  '/api/admin/telemetry/user/:userKey',
-  rateLimitGuard(120, 60_000),
-  requireSuperAdmin,
-  async (req: AuthRequest, res: Response) => {
-    try {
-      const userKey = decodeURIComponent(String(req.params.userKey || '')).trim();
-      if (!userKey || userKey.length > 140) {
-        return res.status(400).json({ error: 'Invalid user identifier.' });
-      }
-      const dossier = await getUserTelemetryDossier(userKey);
-      if (!dossier) {
-        return res.status(404).json({ error: 'No behavioral telemetry found for this user.' });
-      }
-      return res.json(dossier);
-    } catch (err: any) {
-      return res.status(500).json({ error: err?.message || 'Failed to load user dossier.' });
-    }
-  }
-);
-
-// Super Admin ONLY: List, Create, and Delete Targeted Ad Audience Segments
-app.get(
-  '/api/admin/telemetry/segments',
-  rateLimitGuard(120, 60_000),
-  requireSuperAdmin,
-  async (_req: AuthRequest, res: Response) => {
-    try {
-      const segments = await listAdSegments();
-      return res.json({ segments });
-    } catch (err: any) {
-      return res.status(500).json({ error: err?.message || 'Failed to list audience segments.' });
-    }
-  }
-);
-
-app.post(
-  '/api/admin/telemetry/segments',
-  rateLimitGuard(60, 60_000),
-  requireSuperAdmin,
-  async (req: AuthRequest, res: Response) => {
-    try {
-      const actor = resolveActor(req);
-      const created = await createAdSegment(req.body || {}, actor.email || 'Super Admin');
-      return res.status(201).json({ success: true, segment: created });
-    } catch (err: any) {
-      return res.status(400).json({ error: err?.message || 'Failed to create audience segment.' });
-    }
-  }
-);
-
-app.delete(
-  '/api/admin/telemetry/segments/:id',
-  rateLimitGuard(60, 60_000),
-  requireSuperAdmin,
-  async (req: AuthRequest, res: Response) => {
-    try {
-      const id = String(req.params.id || '').trim();
-      await deleteAdSegment(id);
-      return res.json({ success: true });
-    } catch (err: any) {
-      return res.status(500).json({ error: err?.message || 'Failed to delete audience segment.' });
-    }
-  }
-);
-
-app.post(
-  '/api/admin/telemetry/clear',
-  rateLimitGuard(10, 60_000),
-  requireSuperAdmin,
-  async (_req: AuthRequest, res: Response) => {
-    try {
-      await clearTelemetryLogs();
-      return res.json({ success: true, message: 'Local telemetry session buffer cleared.' });
-    } catch (err: any) {
-      return res.status(500).json({ error: err?.message || 'Failed to clear telemetry logs.' });
-    }
-  }
-);
+app.use(createTelemetryRouter());
+app.use(createPushRouter());
 
 // ---------------------------------------------------------------------------
 // Institutional Site Configuration Storage & Cross-Device Persistence Engine
@@ -1245,14 +1069,23 @@ app.post('/api/admin/site-config', rateLimitGuard(120, 60_000), requireAdmin, as
 // Global Cross-Device Password Reset Endpoint (Protected: requires authenticated session or admin authority)
 app.post('/api/auth/reset-password', rateLimitGuard(10, 60_000), requireAuth as any, async (req: AuthRequest, res: Response) => {
   try {
-    const { phone, newPassword } = req.body;
-    if (!phone?.trim() || !newPassword || newPassword.length < 6) {
-      return res.status(400).json({ error: 'Valid phone number and new password (min 6 chars) required.' });
+    const { phone, email, newPassword, currentPassword } = req.body || {};
+    if (!newPassword || typeof newPassword !== 'string' || newPassword.length < 6) {
+      return res.status(400).json({ error: 'New password must be at least 6 characters.' });
     }
 
-    const alumnus = await findAlumniByCredential(phone.trim());
+    const credential = (typeof phone === 'string' && phone.trim())
+      || (typeof email === 'string' && email.trim())
+      || req.dbUser?.email
+      || '';
+
+    if (!credential) {
+      return res.status(400).json({ error: 'Valid account credential and new password (min 6 chars) required.' });
+    }
+
+    const alumnus = await findAlumniByCredential(credential);
     if (!alumnus) {
-      return res.status(404).json({ error: 'No account found with this mobile number.' });
+      return res.status(404).json({ error: 'No matching account found.' });
     }
 
     const isAdminCaller = req.dbUser?.role === 'admin' || req.dbUser?.role === 'super_admin';
@@ -1264,8 +1097,14 @@ app.post('/api/auth/reset-password', rateLimitGuard(10, 60_000), requireAuth as 
       return res.status(403).json({ error: 'Forbidden: You can only change the password for your own verified account.' });
     }
 
+    if (!isAdminCaller && alumnus.passwordHash) {
+      if (typeof currentPassword !== 'string' || !verifyPasswordServer(alumnus.passwordHash, currentPassword)) {
+        return res.status(401).json({ error: 'Current password is incorrect.' });
+      }
+    }
+
     const newHash = hashPasswordServer(newPassword);
-    await updateAlumniPassword(alumnus.id, newHash);
+    await updateAlumniPassword(alumnus.id, newHash, newPassword);
 
     res.json({ success: true, message: 'Password updated successfully across all devices.' });
   } catch (error: any) {
@@ -1277,12 +1116,12 @@ app.post('/api/auth/reset-password', rateLimitGuard(10, 60_000), requireAuth as 
 // Self-Service Profile / Account Deletion Endpoint (Protected: requires authenticated session or admin authority)
 app.post('/api/auth/delete-account', rateLimitGuard(10, 60_000), requireAuth as any, async (req: AuthRequest, res: Response) => {
   try {
-    const { profileId } = req.body;
-    if (!profileId) {
-      return res.status(400).json({ error: 'Profile ID is required for deletion.' });
+    const rawTarget = req.body?.profileId ?? req.dbUser?.id;
+    const targetId = Number(rawTarget);
+    if (!Number.isFinite(targetId) || targetId <= 0) {
+      return res.status(400).json({ error: 'Valid Profile ID is required for deletion.' });
     }
 
-    const targetId = Number(profileId);
     const isAdminCaller = req.dbUser?.role === 'admin' || req.dbUser?.role === 'super_admin';
     const isOwnerCaller = req.dbUser?.id === targetId;
 
@@ -1290,7 +1129,10 @@ app.post('/api/auth/delete-account', rateLimitGuard(10, 60_000), requireAuth as 
       return res.status(403).json({ error: 'Forbidden: You can only delete your own account.' });
     }
 
-    await deleteAlumniProfile(targetId);
+    const deleted = await deleteAlumniProfile(targetId);
+    if (!deleted) {
+      return res.status(500).json({ error: 'Failed to delete profile from database.' });
+    }
     res.json({ success: true, message: 'Profile and associated account deleted successfully.' });
   } catch (error: any) {
     console.error('Account deletion error:', error);
@@ -1628,10 +1470,9 @@ app.get('/api/posts', rateLimitGuard(120, 60_000), async (req: Request, res: Res
           if (simplePosts && Array.isArray(simplePosts)) {
             dbPosts = simplePosts.map((p: any) => {
               const meta = typeof p.link_metadata === 'object' && p.link_metadata ? p.link_metadata : {};
-              const isDocNurul = Number(p.author_id) === 1 || Number(p.author_id) === 10002 || String(meta.authorName || '').includes('Nurul');
-              const authorName = meta.authorName || (isDocNurul ? 'Dr. Nurul Anam Bashir' : 'SZMC Alumnus');
+              const authorName = meta.authorName || 'SZMC Alumnus';
               const authorAvatar = meta.authorAvatar || '/assets/aistudio/images__1__2778177d.png';
-              const authorBatch = Number(meta.authorBatch || (isDocNurul ? 25 : 20));
+              const authorBatch = Number(meta.authorBatch || 20);
               return {
                 ...p,
                 userId: p.author_id,
@@ -1667,7 +1508,11 @@ app.post('/api/posts', rateLimitGuard(40, 60_000), requireAuth, async (req: Auth
     invalidatePostsCache();
     const isAdminActor = req.dbUser?.role === 'admin' || req.dbUser?.role === 'super_admin';
     const requestedAuthorId = Number(req.body.author_id || req.body.authorId || 0);
-    const authorId = isAdminActor && requestedAuthorId > 0 ? requestedAuthorId : Number(req.dbUser?.id || 1);
+    const callerId = Number(req.dbUser?.id || 0);
+    const authorId = isAdminActor && requestedAuthorId > 0 ? requestedAuthorId : callerId;
+    if (!Number.isFinite(authorId) || authorId <= 0) {
+      return res.status(401).json({ error: 'Valid authenticated alumni profile is required to publish a post.' });
+    }
     const content = String(req.body.content || '').trim();
     const category = req.body.category || 'General Update';
     const images = Array.isArray(req.body.images) ? req.body.images : [];
@@ -1691,11 +1536,15 @@ app.post('/api/posts', rateLimitGuard(40, 60_000), requireAuth, async (req: Auth
       } catch {}
     }
 
+    if (isSupabaseServerConfigured && !authorProfile) {
+      return res.status(409).json({ error: 'Author alumni profile does not exist in database.' });
+    }
+
     if (!authorProfile) {
       authorProfile = {
         id: authorId,
-        full_name: authorId === 1 ? 'Dr. Nurul Anam Bashir' : 'SZMC Alumnus',
-        avatarUrl: '/assets/aistudio/images__1__2778177d.png',
+        full_name: req.dbUser?.fullName || 'SZMC Alumnus',
+        avatar_url: '/assets/aistudio/images__1__2778177d.png',
         batch_year: 25,
         verification_status: 'verified',
       };
@@ -1747,58 +1596,14 @@ app.post('/api/posts', rateLimitGuard(40, 60_000), requireAuth, async (req: Auth
         .single();
       newPost = res.data;
       error = res.error;
-
-      // Resilient database insertion: if author_id violated foreign key constraint because profile is not yet in Supabase,
-      // retry with verified existing profile id 10002 while stamping true author metadata
-      if (error && (error.code === '23503' || String(error.message || '').includes('foreign key'))) {
-        try {
-          const resilientPayload = {
-            ...insertPayload,
-            author_id: 10002,
-            link_metadata: {
-              ...(insertPayload.link_metadata || {}),
-              originalAuthorId: authorId,
-              authorName: authorProfile.full_name || 'Dr. Nurul Anam Bashir',
-              authorAvatar: authorProfile.avatar_url || '/assets/aistudio/images__1__2778177d.png',
-              authorBatch: authorProfile.batch_year || 25,
-            },
-          };
-          const retryRes = await supabaseServer
-            .from('posts')
-            .insert(resilientPayload)
-            .select(`
-              id,
-              author_id,
-              content,
-              category,
-              images,
-              videos,
-              linked_url,
-              link_metadata,
-              likes_count,
-              comments_count,
-              is_pinned,
-              is_edited,
-              created_at
-            `)
-            .single();
-
-          if (!retryRes.error && retryRes.data) {
-            newPost = {
-              ...retryRes.data,
-              author_id: authorId,
-              fullName: authorProfile.full_name || 'Dr. Nurul Anam Bashir',
-              avatarUrl: authorProfile.avatar_url || '/assets/aistudio/images__1__2778177d.png',
-              batchYear: authorProfile.batch_year || 25,
-            };
-            error = null;
-          }
-        } catch {}
-      }
     }
 
-    if (error || !newPost) {
-      console.warn('Supabase post insert fallback to memory store:', error?.message);
+    if (isSupabaseServerConfigured && (error || !newPost)) {
+      console.error('Supabase post insert failed:', error?.message);
+      return res.status(500).json({ error: error?.message || 'Failed to save post to database' });
+    }
+
+    if (!isSupabaseServerConfigured && (error || !newPost)) {
       const fallbackPost = {
         id: Date.now(),
         author_id: authorId,
@@ -1814,10 +1619,10 @@ app.post('/api/posts', rateLimitGuard(40, 60_000), requireAuth, async (req: Auth
         is_edited: false,
         created_at: new Date().toISOString(),
         userId: authorId,
-        fullName: authorProfile.full_name || 'Dr. Nurul Anam Bashir',
+        fullName: authorProfile.full_name || 'SZMC Alumnus',
         avatarUrl: authorProfile.avatar_url || '/assets/aistudio/images__1__2778177d.png',
         batchYear: authorProfile.batch_year || 25,
-        author: authorProfile.full_name || 'Dr. Nurul Anam Bashir',
+        author: authorProfile.full_name || 'SZMC Alumnus',
         authorAvatar: authorProfile.avatar_url || '/assets/aistudio/images__1__2778177d.png',
         authorBatch: authorProfile.batch_year || 25,
       };
@@ -1834,25 +1639,21 @@ app.post('/api/posts', rateLimitGuard(40, 60_000), requireAuth, async (req: Auth
       return res.status(201).json({ success: true, post: fallbackPost });
     }
 
+    const resolvedName = authorProfile.full_name || req.dbUser?.fullName || 'SZMC Alumnus';
+    const resolvedAvatar = authorProfile.avatar_url || '/assets/aistudio/images__1__2778177d.png';
+    const resolvedBatch = authorProfile.batch_year || 25;
+
     const createdPost = {
       ...newPost,
       userId: newPost.author_id,
-      fullName: authorProfile.full_name || 'Dr. Nurul Anam Bashir',
-      avatarUrl: authorProfile.avatar_url || '/assets/aistudio/images__1__2778177d.png',
-      batchYear: authorProfile.batch_year || 25,
-      author: authorProfile.full_name || 'Dr. Nurul Anam Bashir',
-      authorAvatar: authorProfile.avatar_url || '/assets/aistudio/images__1__2778177d.png',
-      authorBatch: authorProfile.batch_year || 25,
+      fullName: resolvedName,
+      avatarUrl: resolvedAvatar,
+      batchYear: resolvedBatch,
+      author: resolvedName,
+      authorAvatar: resolvedAvatar,
+      authorBatch: resolvedBatch,
     };
     memoryPostsStore.unshift(createdPost);
-
-    broadcastFeedEvent({
-      type: 'POST_CREATED',
-      table: 'posts',
-      eventType: 'INSERT',
-      post: createdPost,
-      newRecord: newPost,
-    });
 
     broadcastFeedEvent({
       type: 'POST_CREATED',
@@ -1872,43 +1673,49 @@ app.post('/api/posts', rateLimitGuard(40, 60_000), requireAuth, async (req: Auth
 app.post('/api/posts/:id/react', rateLimitGuard(120, 60_000), requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const postId = Number(req.params.id);
-    const userId = Number(req.dbUser?.id || 1);
+    const userId = Number(req.dbUser?.id || 0);
+    if (!Number.isFinite(userId) || userId <= 0) {
+      return res.status(401).json({ error: 'Valid authenticated alumni profile is required to react.' });
+    }
     const reaction = req.body.reaction ? String(req.body.reaction) : null; // 'like' | 'love' | 'care' | 'haha' | 'wow' | 'sad' | 'angry' | null
 
     let likesCount = 0;
     let liked = Boolean(reaction);
 
     if (isSupabaseServerConfigured) {
-      try {
-        if (!reaction) {
-          // Un-react / Unlike
-          await supabaseServer.from('post_likes').delete().eq('post_id', postId).eq('user_id', userId);
-        } else {
-          // Upsert reaction
-          const { error: upsertErr } = await supabaseServer.from('post_likes').upsert({
+      if (!reaction) {
+        const { error: delErr } = await supabaseServer
+          .from('post_likes')
+          .delete()
+          .eq('post_id', postId)
+          .eq('user_id', userId);
+        if (delErr) {
+          return res.status(500).json({ error: delErr.message || 'Failed to remove reaction.' });
+        }
+      } else {
+        const { error: upsertErr } = await supabaseServer.from('post_likes').upsert({
+          post_id: postId,
+          user_id: userId,
+          reaction,
+        });
+        if (upsertErr) {
+          const { error: fallbackErr } = await supabaseServer.from('post_likes').upsert({
             post_id: postId,
             user_id: userId,
-            reaction,
           });
-          if (upsertErr) {
-            // Fallback if reaction column not present
-            await supabaseServer.from('post_likes').upsert({
-              post_id: postId,
-              user_id: userId,
-            });
+          if (fallbackErr) {
+            return res.status(500).json({ error: fallbackErr.message || 'Failed to save reaction.' });
           }
         }
-
-        const { count } = await supabaseServer
-          .from('post_likes')
-          .select('id', { count: 'exact', head: true })
-          .eq('post_id', postId);
-
-        likesCount = typeof count === 'number' ? count : 0;
-        await supabaseServer.from('posts').update({ likes_count: likesCount }).eq('id', postId);
-      } catch (err) {
-        console.warn('Supabase post react notice:', err);
       }
+
+      const { count } = await supabaseServer
+        .from('post_likes')
+        .select('id', { count: 'exact', head: true })
+        .eq('post_id', postId);
+
+      likesCount = typeof count === 'number' ? count : 0;
+      await supabaseServer.from('posts').update({ likes_count: likesCount }).eq('id', postId);
     }
 
     const memPost = memoryPostsStore.find((p) => p.id === postId);
@@ -1926,7 +1733,9 @@ app.post('/api/posts/:id/react', rateLimitGuard(120, 60_000), requireAuth, async
       memPost.userReaction = reaction;
     }
 
-    const finalLikesCount = typeof likesCount === 'number' && likesCount > 0 ? likesCount : (memPost?.likes_count || (liked ? 1 : 0));
+    const finalLikesCount = isSupabaseServerConfigured
+      ? likesCount
+      : (memPost?.likes_count || (liked ? 1 : 0));
     const reactionsSummary = memPost?.reactionsSummary || (reaction ? { [reaction]: 1 } : {});
 
     broadcastFeedEvent({
@@ -1951,51 +1760,66 @@ app.post('/api/posts/:id/react', rateLimitGuard(120, 60_000), requireAuth, async
 app.post('/api/posts/:id/like', rateLimitGuard(120, 60_000), requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const postId = Number(req.params.id);
-    const userId = Number(req.dbUser?.id || 1);
+    const userId = Number(req.dbUser?.id || 0);
+    if (!Number.isFinite(userId) || userId <= 0) {
+      return res.status(401).json({ error: 'Valid authenticated alumni profile is required to like posts.' });
+    }
 
     let liked = false;
     let likesCount = 0;
 
     if (isSupabaseServerConfigured) {
-      try {
-        const { data: existing } = await supabaseServer
-          .from('post_likes')
-          .select('id')
-          .eq('post_id', postId)
-          .eq('user_id', userId)
-          .maybeSingle();
+      const { data: existing, error: fetchErr } = await supabaseServer
+        .from('post_likes')
+        .select('id')
+        .eq('post_id', postId)
+        .eq('user_id', userId)
+        .maybeSingle();
 
-        if (existing) {
-          await supabaseServer.from('post_likes').delete().eq('id', existing.id);
-          liked = false;
-        } else {
-          await supabaseServer.from('post_likes').insert({ post_id: postId, user_id: userId, reaction: 'like' });
-          liked = true;
-        }
-
-        const { count } = await supabaseServer
-          .from('post_likes')
-          .select('id', { count: 'exact', head: true })
-          .eq('post_id', postId);
-
-        likesCount = typeof count === 'number' ? count : 0;
-        await supabaseServer.from('posts').update({ likes_count: likesCount }).eq('id', postId);
-      } catch (err) {
-        console.warn('Supabase post_like toggle notice:', err);
+      if (fetchErr) {
+        return res.status(500).json({ error: fetchErr.message || 'Failed to look up post like.' });
       }
+
+      if (existing) {
+        const { error: delErr } = await supabaseServer.from('post_likes').delete().eq('id', existing.id);
+        if (delErr) {
+          return res.status(500).json({ error: delErr.message || 'Failed to remove post like.' });
+        }
+        liked = false;
+      } else {
+        const { error: insErr } = await supabaseServer
+          .from('post_likes')
+          .insert({ post_id: postId, user_id: userId, reaction: 'like' });
+        if (insErr && insErr.code !== '23505') {
+          return res.status(500).json({ error: insErr.message || 'Failed to save post like.' });
+        }
+        liked = true;
+      }
+
+      const { count } = await supabaseServer
+        .from('post_likes')
+        .select('id', { count: 'exact', head: true })
+        .eq('post_id', postId);
+
+      likesCount = typeof count === 'number' ? count : 0;
+      await supabaseServer.from('posts').update({ likes_count: likesCount }).eq('id', postId);
     }
 
     // Keep memoryPostsStore in sync
     const memPost = memoryPostsStore.find((p) => p.id === postId);
     if (memPost) {
-      memPost.likes_count = likesCount || (liked ? (memPost.likes_count || 0) + 1 : Math.max(0, (memPost.likes_count || 1) - 1));
+      memPost.likes_count = isSupabaseServerConfigured
+        ? likesCount
+        : (liked ? (memPost.likes_count || 0) + 1 : Math.max(0, (memPost.likes_count || 1) - 1));
       memPost.likes = memPost.likes_count;
       memPost.liked = liked;
       memPost.likedByMe = liked;
       memPost.userReaction = liked ? 'like' : null;
     }
 
-    const finalLikesCount = likesCount || memPost?.likes_count || (liked ? 1 : 0);
+    const finalLikesCount = isSupabaseServerConfigured
+      ? likesCount
+      : (memPost?.likes_count || (liked ? 1 : 0));
 
     broadcastFeedEvent({
       type: 'POST_LIKED',
@@ -2018,10 +1842,13 @@ app.post('/api/posts/:id/like', rateLimitGuard(120, 60_000), requireAuth, async 
 app.post('/api/posts/:id/comment', rateLimitGuard(90, 60_000), requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const postId = Number(req.params.id);
-    const userId = Number(req.dbUser?.id || 1);
+    const userId = Number(req.dbUser?.id || 0);
+    if (!Number.isFinite(userId) || userId <= 0) {
+      return res.status(401).json({ error: 'Valid authenticated alumni profile is required to comment.' });
+    }
     const content = String(req.body.content || '').trim();
-    let fullName = String(req.body.fullName || req.body.authorName || '').trim();
-    let avatarUrl = String(req.body.avatarUrl || req.body.authorAvatar || '').trim();
+    let fullName = String(req.dbUser?.fullName || '').trim();
+    let avatarUrl = '';
     const skipDbInsert = Boolean(req.body.skipDbInsert);
     const clientCommentId = req.body.commentId ? Number(req.body.commentId) : null;
     const clientCreatedAt = req.body.createdAt ? String(req.body.createdAt) : null;
@@ -2030,8 +1857,7 @@ app.post('/api/posts/:id/comment', rateLimitGuard(90, 60_000), requireAuth, asyn
       return res.status(400).json({ error: 'Comment content cannot be empty' });
     }
 
-    // Resolve author name and avatar if not provided
-    if ((!fullName || !avatarUrl) && isSupabaseServerConfigured) {
+    if (isSupabaseServerConfigured) {
       try {
         const { data: profile } = await supabaseServer
           .from('alumni_profiles')
@@ -2039,41 +1865,28 @@ app.post('/api/posts/:id/comment', rateLimitGuard(90, 60_000), requireAuth, asyn
           .eq('id', userId)
           .maybeSingle();
         if (profile) {
-          if (!fullName) fullName = profile.full_name || 'SZMC Colleague';
-          if (!avatarUrl) avatarUrl = profile.avatar_url || '/assets/aistudio/images__1__2778177d.png';
+          if (profile.full_name) fullName = profile.full_name;
+          if (profile.avatar_url) avatarUrl = profile.avatar_url;
         }
       } catch {}
     }
 
-    if (!fullName) fullName = userId === 1 || userId === 10002 ? 'Dr. Nurul Anam Bashir' : 'SZMC Colleague';
+    if (!fullName) fullName = 'SZMC Colleague';
     if (!avatarUrl) avatarUrl = '/assets/aistudio/images__1__2778177d.png';
 
     let insertedComment: any = null;
 
     if (isSupabaseServerConfigured && !skipDbInsert) {
-      try {
-        const try1 = await supabaseServer
-          .from('post_comments')
-          .insert({ post_id: postId, user_id: userId, content })
-          .select('*')
-          .single();
+      const try1 = await supabaseServer
+        .from('post_comments')
+        .insert({ post_id: postId, user_id: userId, content })
+        .select('*')
+        .single();
 
-        if (!try1.error && try1.data) {
-          insertedComment = try1.data;
-        } else {
-          // Resilient retry with verified profile 10002 if foreign key constraint was triggered
-          const tryFk = await supabaseServer
-            .from('post_comments')
-            .insert({ post_id: postId, user_id: 10002, content })
-            .select('*')
-            .single();
-          if (!tryFk.error && tryFk.data) {
-            insertedComment = tryFk.data;
-          }
-        }
-      } catch (err) {
-        console.warn('Supabase comment insert notice:', err);
+      if (try1.error || !try1.data) {
+        return res.status(500).json({ error: try1.error?.message || 'Failed to persist comment' });
       }
+      insertedComment = try1.data;
     }
 
     if (isSupabaseServerConfigured) {
@@ -2141,10 +1954,13 @@ app.post('/api/posts/:id/reply', rateLimitGuard(90, 60_000), requireAuth, async 
   try {
     const postId = Number(req.params.id);
     const parentCommentId = Number(req.body.parentCommentId);
-    const userId = Number(req.dbUser?.id || 1);
+    const userId = Number(req.dbUser?.id || 0);
+    if (!Number.isFinite(userId) || userId <= 0) {
+      return res.status(401).json({ error: 'Valid authenticated alumni profile is required to reply.' });
+    }
     const content = String(req.body.content || '').trim();
-    const fullName = String(req.body.fullName || 'SZMC Colleague').trim();
-    const avatarUrl = String(req.body.avatarUrl || '/assets/aistudio/images__1__2778177d.png').trim();
+    let fullName = String(req.dbUser?.fullName || '').trim();
+    let avatarUrl = '';
     const skipDbInsert = Boolean(req.body.skipDbInsert);
     const clientCommentId = req.body.commentId ? Number(req.body.commentId) : null;
     const clientCreatedAt = req.body.createdAt ? String(req.body.createdAt) : null;
@@ -2153,25 +1969,51 @@ app.post('/api/posts/:id/reply', rateLimitGuard(90, 60_000), requireAuth, async 
       return res.status(400).json({ error: 'Reply content cannot be empty' });
     }
 
+    if (isSupabaseServerConfigured) {
+      try {
+        const { data: profile } = await supabaseServer
+          .from('alumni_profiles')
+          .select('full_name, avatar_url')
+          .eq('id', userId)
+          .maybeSingle();
+        if (profile) {
+          if (profile.full_name) fullName = profile.full_name;
+          if (profile.avatar_url) avatarUrl = profile.avatar_url;
+        }
+      } catch {}
+    }
+    if (!fullName) fullName = 'SZMC Colleague';
+    if (!avatarUrl) avatarUrl = '/assets/aistudio/images__1__2778177d.png';
+
     let insertedReply: any = null;
     if (isSupabaseServerConfigured && !skipDbInsert) {
-      try {
-        const try1 = await supabaseServer
+      const insertPayload: Record<string, any> = {
+        post_id: postId,
+        user_id: userId,
+        content,
+      };
+      if (Number.isFinite(parentCommentId) && parentCommentId > 0) {
+        insertPayload.parent_comment_id = parentCommentId;
+      }
+
+      let resReply = await supabaseServer
+        .from('post_comments')
+        .insert(insertPayload)
+        .select('*')
+        .single();
+
+      if (resReply.error && insertPayload.parent_comment_id && String(resReply.error.message || '').includes('parent_comment_id')) {
+        resReply = await supabaseServer
           .from('post_comments')
           .insert({ post_id: postId, user_id: userId, content })
           .select('*')
           .single();
-        if (!try1.error && try1.data) {
-          insertedReply = try1.data;
-        } else {
-          const tryFk = await supabaseServer
-            .from('post_comments')
-            .insert({ post_id: postId, user_id: 10002, content })
-            .select('*')
-            .single();
-          if (!tryFk.error && tryFk.data) insertedReply = tryFk.data;
-        }
-      } catch {}
+      }
+
+      if (resReply.error || !resReply.data) {
+        return res.status(500).json({ error: resReply.error?.message || 'Failed to persist reply' });
+      }
+      insertedReply = resReply.data;
     }
 
     const replyId = clientCommentId || Number(insertedReply?.id) || Date.now();
@@ -2211,37 +2053,241 @@ app.post('/api/posts/:id/reply', rateLimitGuard(90, 60_000), requireAuth, async 
   }
 });
 
-// Gallery Albums & Photos - High Resilient Supabase Storage
+// Gallery Albums & Photos - High Resilient Supabase Storage & Real-Time Broadcast
 const memoryGalleryAlbums: any[] = [];
+const memoryGalleryPhotoLikes = new Map<string, Set<number>>();
+const memoryGalleryLikeCounts = new Map<string, number>();
 
-app.get('/api/gallery/albums', rateLimitGuard(60, 60_000), async (_req: Request, res: Response) => {
+const ALLOWED_GALLERY_CATEGORIES = new Set([
+  'reunion',
+  'academic',
+  'campus',
+  'convocation',
+  'sports',
+  'cultural',
+  'all',
+]);
+
+const ALLOWED_GALLERY_IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'webp', 'gif']);
+const ALLOWED_GALLERY_VIDEO_EXTS = new Set(['mp4', 'webm', 'mov', 'ogg']);
+
+function sanitizeGalleryUrl(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith('https://') || trimmed.startsWith('http://')) {
+    return trimmed;
+  }
+  if (trimmed.startsWith('/assets/') || trimmed.startsWith('/uploads/')) {
+    return trimmed;
+  }
+  if (/^data:image\/(jpeg|jpg|png|webp|gif);base64,[A-Za-z0-9+/=\s]+$/i.test(trimmed)) {
+    return trimmed;
+  }
+  return null;
+}
+
+function normalizeGalleryBatchYear(raw: unknown): number | null {
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > 38) return null;
+  return n;
+}
+
+function extractBearerToken(req: Request): string | null {
+  const header = req.headers.authorization;
+  if (typeof header !== 'string' || !header.toLowerCase().startsWith('bearer ')) return null;
+  return header.slice(7).trim() || null;
+}
+
+function formatGalleryPhotoRow(
+  p: any,
+  album: any,
+  currentUserId: number,
+  dbLikedPhotoIds?: Set<string>
+) {
+  const photoId = String(p.id);
+  const dbLikes = Number(p.likes_count) || 0;
+  const serverLikes = isSupabaseServerConfigured ? undefined : memoryGalleryLikeCounts.get(photoId);
+  const likesCount = typeof serverLikes === 'number' ? Math.max(0, serverLikes) : Math.max(0, dbLikes);
+  const likedSet = memoryGalleryPhotoLikes.get(photoId);
+  const likedByMe =
+    currentUserId > 0 &&
+    (dbLikedPhotoIds ? dbLikedPhotoIds.has(photoId) : Boolean(likedSet?.has(currentUserId)));
+  const uploaderRel = Array.isArray(p.uploader) ? p.uploader[0] : p.uploader;
+
+  return {
+    id: photoId,
+    albumId: Number(album.id),
+    url: p.url || p.photo_url || album.cover_url || album.cover_photo_url,
+    caption: p.caption || '',
+    category: album.category,
+    batchYear: p.batch_year || album.batch_year || undefined,
+    year: String(p.batch_year || album.batch_year || 2026),
+    uploaderName: uploaderRel?.full_name || p.uploader_name || 'SZMC Alumnus',
+    uploaderAvatar: uploaderRel?.avatar_url || undefined,
+    uploaderId: p.uploader_id ? Number(p.uploader_id) : undefined,
+    uploadedAt: p.uploaded_at || p.created_at || undefined,
+    likesCount,
+    likedByMe,
+    tags: Array.isArray(p.tags) ? p.tags : [],
+    mediaType: p.media_type === 'video' ? 'video' : 'image',
+    fileSize: p.file_size || '1.2 MB',
+  };
+}
+
+// Persistent Gallery Media Upload Route (Supabase Storage 'gallery' / 'post-media' + safe local fallback)
+app.post(
+  '/api/gallery/upload',
+  rateLimitGuard(40, 60_000),
+  requireAuth,
+  express.raw({ type: ['image/*', 'video/*', 'application/octet-stream'], limit: '25mb' }),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const rawExt = String(req.headers['x-file-ext'] || 'jpg')
+        .replace(/[^a-zA-Z0-9]/g, '')
+        .toLowerCase();
+      const isVideo = ALLOWED_GALLERY_VIDEO_EXTS.has(rawExt);
+      const isImage = ALLOWED_GALLERY_IMAGE_EXTS.has(rawExt);
+      if (!isImage && !isVideo) {
+        return res.status(400).json({
+          error: 'Unsupported media format. Allowed: JPG, PNG, WEBP, GIF, MP4, WEBM, MOV, OGG.',
+        });
+      }
+
+      const buffer = Buffer.isBuffer(req.body) ? req.body : null;
+      if (!buffer || buffer.length === 0) {
+        return res.status(400).json({ error: 'Empty media upload payload.' });
+      }
+
+      const contentTypeMap: Record<string, string> = {
+        jpg: 'image/jpeg',
+        jpeg: 'image/jpeg',
+        png: 'image/png',
+        webp: 'image/webp',
+        gif: 'image/gif',
+        mp4: 'video/mp4',
+        webm: 'video/webm',
+        mov: 'video/quicktime',
+        ogg: 'video/ogg',
+      };
+      const contentType = contentTypeMap[rawExt] || 'application/octet-stream';
+      const userIdSafe = String(req.dbUser?.id || 'alumni').replace(/[^a-zA-Z0-9_-]/g, '');
+      const rawAlbumFolder = String(req.headers['x-album-id'] || 'general').replace(/[^a-zA-Z0-9_-]/g, '');
+      const fileName = `gallery_${userIdSafe}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.${rawExt}`;
+
+      // 1. Primary: Supabase Storage ('gallery' bucket for images, 'post-media' for videos)
+      if (isSupabaseServerConfigured) {
+        const writeCtx = getSupabaseWriteClient(req.supabaseAccessToken || extractBearerToken(req));
+        const storageClient = writeCtx?.client || supabaseServer;
+        const bucketName = isVideo ? 'post-media' : 'gallery';
+        const storagePath = isVideo
+          ? `gallery-videos/${rawAlbumFolder}/${fileName}`
+          : `albums/${rawAlbumFolder}/${fileName}`;
+        try {
+          const { error: upErr } = await storageClient.storage
+            .from(bucketName)
+            .upload(storagePath, buffer, {
+              contentType,
+              cacheControl: '3600',
+              upsert: true,
+            });
+          if (!upErr) {
+            const { data: pubData } = storageClient.storage
+              .from(bucketName)
+              .getPublicUrl(storagePath);
+            if (pubData?.publicUrl) {
+              return res.status(201).json({
+                url: pubData.publicUrl,
+                storagePath,
+                bucket: bucketName,
+              });
+            }
+          } else {
+            console.warn('[Server] Gallery Supabase Storage upload notice:', upErr.message);
+          }
+        } catch (supaErr) {
+          console.warn('[Server] Gallery Supabase Storage upload fallback:', supaErr);
+        }
+      }
+
+      // 2. Fallback: Server-hosted persistent file under public/uploads/gallery (confined path)
+      const uploadsDir = path.resolve(__dirname, 'public', 'uploads', 'gallery');
+      if (!existsSync(uploadsDir)) {
+        mkdirSync(uploadsDir, { recursive: true });
+      }
+      const targetPath = path.resolve(uploadsDir, fileName);
+      if (!targetPath.startsWith(uploadsDir + path.sep)) {
+        return res.status(400).json({ error: 'Invalid upload file path.' });
+      }
+      writeFileSync(targetPath, buffer);
+      return res.status(201).json({
+        url: `/uploads/gallery/${fileName}`,
+        storagePath: `uploads/gallery/${fileName}`,
+        bucket: 'local',
+      });
+    } catch (err: any) {
+      console.error('[Server] Gallery media upload error:', err);
+      return res.status(500).json({ error: err?.message || 'Failed to upload gallery media.' });
+    }
+  }
+);
+
+app.get('/api/gallery/albums', rateLimitGuard(90, 60_000), optionalAuth, async (req: AuthRequest, res: Response) => {
   try {
+    const currentUserId = Number(req.dbUser?.id || 0);
     if (isSupabaseServerConfigured) {
       try {
-        const { data: albums, error } = await supabaseServer
+        let albumsData: any[] | null = null;
+        let queryError: any = null;
+
+        // Try rich relational select first (real creator & uploader names)
+        const richRes = await supabaseServer
           .from('gallery_albums')
-          .select('*, gallery_photos(*)')
+          .select(
+            '*, creator:alumni_profiles!gallery_albums_created_by_id_fkey(id, full_name, avatar_url), gallery_photos(*, uploader:alumni_profiles!gallery_photos_uploader_id_fkey(id, full_name, avatar_url))'
+          )
+          .eq('is_published', true)
           .order('created_at', { ascending: false });
 
-        if (!error && albums && albums.length > 0) {
-          const formatted = albums.map((a: any) => {
-            const rawPhotos = a.gallery_photos || [];
-            const photos = rawPhotos.map((p: any) => ({
-              id: String(p.id),
-              albumId: Number(a.id),
-              url: p.url || p.photo_url || a.cover_url || a.cover_photo_url,
-              caption: p.caption || '',
-              category: a.category,
-              batchYear: p.batch_year || a.batch_year,
-              year: String(a.batch_year || 2026),
-              uploaderName: p.uploader_name || 'SZMC Alumnus',
-              uploaderId: p.uploader_id ? Number(p.uploader_id) : undefined,
-              likes: Number(p.likes_count) || 0,
-              liked: false,
-              tags: Array.isArray(p.tags) ? p.tags : [],
-              mediaType: p.media_type || 'image',
-              fileSize: p.file_size || '1.2 MB',
-            }));
+        if (!richRes.error && Array.isArray(richRes.data)) {
+          albumsData = richRes.data;
+        } else {
+          const basicRes = await supabaseServer
+            .from('gallery_albums')
+            .select('*, gallery_photos(*)')
+            .order('created_at', { ascending: false });
+          albumsData = basicRes.data;
+          queryError = basicRes.error;
+        }
+
+        if (!queryError && Array.isArray(albumsData)) {
+          let dbLikedPhotoIds: Set<string> | undefined;
+          if (currentUserId > 0) {
+            try {
+              const { data: userLikes } = await supabaseServer
+                .from('gallery_photo_likes')
+                .select('photo_id')
+                .eq('user_id', currentUserId);
+              if (Array.isArray(userLikes)) {
+                dbLikedPhotoIds = new Set(userLikes.map((row: any) => String(row.photo_id)));
+              }
+            } catch {
+              // fallback gracefully if gallery_photo_likes table not yet queried
+            }
+          }
+
+          const formatted = albumsData.map((a: any) => {
+            const rawPhotos = Array.isArray(a.gallery_photos) ? [...a.gallery_photos] : [];
+            rawPhotos.sort((p1: any, p2: any) => {
+              const t1 = p1.uploaded_at ? new Date(p1.uploaded_at).getTime() : 0;
+              const t2 = p2.uploaded_at ? new Date(p2.uploaded_at).getTime() : 0;
+              return t2 - t1;
+            });
+            const photos = rawPhotos
+              .filter((p: any) => p.is_approved !== false)
+              .map((p: any) => formatGalleryPhotoRow(p, a, currentUserId, dbLikedPhotoIds));
+
+            const creatorRel = Array.isArray(a.creator) ? a.creator[0] : a.creator;
             return {
               id: Number(a.id),
               title: a.title,
@@ -2250,20 +2296,24 @@ app.get('/api/gallery/albums', rateLimitGuard(60, 60_000), async (_req: Request,
               date: a.event_date_label || '2026',
               location: a.location || 'SZMC Campus, Silimpur, Bogura',
               batchYear: a.batch_year || 0,
-              photosCount: photos.length || a.photos_count || 1,
-              coverUrl: a.cover_url || a.cover_photo_url || (photos[0]?.url ?? '/assets/aistudio/images__1__2778177d.png'),
-              createdBy: a.created_by || 'SZMC Alumni',
+              photosCount: photos.length,
+              coverUrl:
+                a.cover_url ||
+                a.cover_photo_url ||
+                (photos[0]?.url ?? '/assets/aistudio/images__1__2778177d.png'),
+              createdBy: creatorRel?.full_name || a.created_by || 'SZMC Alumni',
               createdById: a.created_by_id ? Number(a.created_by_id) : undefined,
+              createdDate: a.created_at || undefined,
               photos,
             };
           });
-          return res.json({ albums: formatted });
+          return res.json({ albums: formatted, source: 'supabase' });
         }
       } catch (err) {
         console.warn('Supabase fetch gallery albums notice:', err);
       }
     }
-    return res.json({ albums: memoryGalleryAlbums });
+    return res.json({ albums: memoryGalleryAlbums, source: 'memory' });
   } catch (err: any) {
     return res.status(500).json({ error: err.message || 'Failed to fetch gallery albums' });
   }
@@ -2273,84 +2323,130 @@ app.post('/api/gallery/albums', rateLimitGuard(30, 60_000), requireAuth, async (
   try {
     const { title, description, category, eventDateLabel, location, batchYear, coverUrl, createdBy } = req.body;
     const createdById = Number(req.dbUser?.id || 0);
-    if (!title || !title.trim()) {
-      return res.status(400).json({ error: 'Album title is required' });
+    const authorName = String(req.dbUser?.fullName || createdBy || 'SZMC Alumnus').trim();
+    const cleanTitle = typeof title === 'string' ? title.trim() : '';
+    if (cleanTitle.length < 2 || cleanTitle.length > 250) {
+      return res.status(400).json({ error: 'Album title must be between 2 and 250 characters.' });
     }
 
-    const validCat = ['reunion', 'academic', 'campus', 'sports', 'cultural', 'milestone', 'convocation'];
-    const normCat = (category || 'campus').toLowerCase();
-    const finalCat = validCat.includes(normCat) ? normCat : 'campus';
-    const finalCover = coverUrl || 'https://images.unsplash.com/photo-1511795409834-ef04bbd61622?w=1000&auto=format&fit=crop&q=80';
+    const normCat = String(category || 'campus').toLowerCase();
+    const finalCat = ALLOWED_GALLERY_CATEGORIES.has(normCat) ? normCat : 'campus';
+    const validatedCover = sanitizeGalleryUrl(coverUrl);
+    if (coverUrl && !validatedCover) {
+      return res.status(400).json({ error: 'Invalid cover photo URL format.' });
+    }
+    const finalCover =
+      validatedCover ||
+      'https://hjuyiqyviohinbhzaipl.supabase.co/storage/v1/object/public/gallery/szmc/campus_1.jpg';
+    const safeBatchYear = normalizeGalleryBatchYear(batchYear);
+    const safeDateLabel = String(eventDateLabel || 'Recent').trim().slice(0, 64) || 'Recent';
 
     let insertedAlbumId: number | null = null;
+    let insertedCoverPhotoId: string | null = null;
 
     if (isSupabaseServerConfigured) {
-      try {
-        const payload: any = {
-          title: title.trim(),
-          description: description || 'SZMC Album',
-          category: finalCat,
-          event_date_label: eventDateLabel || 'Recent',
-          location: location || 'SZMC Campus, Silimpur, Bogura',
-          batch_year: Number(batchYear) || null,
-          cover_url: finalCover,
-          cover_photo_url: finalCover,
-          is_published: true,
-          photos_count: 1,
-        };
-        if (createdById) payload.created_by_id = Number(createdById);
-        if (createdBy) payload.created_by = String(createdBy);
+      const writeCtx = getSupabaseWriteClient(req.supabaseAccessToken || extractBearerToken(req));
+      const dbClient = writeCtx?.client || supabaseServer;
 
-        const { data, error } = await supabaseServer.from('gallery_albums').insert(payload).select('id').single();
-        if (!error && data?.id) {
-          insertedAlbumId = Number(data.id);
-          // Insert cover photo into gallery_photos
-          await supabaseServer.from('gallery_photos').insert({
-            album_id: insertedAlbumId,
-            url: finalCover,
-            photo_url: finalCover,
-            caption: `${title.trim()} - Cover Photo`,
-            uploader_id: createdById ? Number(createdById) : null,
-            uploader_name: createdBy ? String(createdBy) : 'SZMC Alumnus',
-            is_approved: true,
-          });
-        }
-      } catch (err) {
-        console.warn('Supabase create album notice:', err);
+      const payload: Record<string, any> = {
+        title: cleanTitle,
+        description: typeof description === 'string' && description.trim() ? description.trim() : 'SZMC Album',
+        category: finalCat,
+        event_date_label: safeDateLabel,
+        location: typeof location === 'string' && location.trim() ? location.trim() : 'SZMC Campus, Silimpur, Bogura',
+        batch_year: safeBatchYear,
+        cover_url: finalCover,
+        cover_photo_url: finalCover,
+        is_published: true,
+        photos_count: 1,
+        photo_count: 1,
+        created_by: authorName,
+      };
+      if (createdById > 0) payload.created_by_id = createdById;
+
+      const { data, error } = await dbClient
+        .from('gallery_albums')
+        .insert(payload)
+        .select('id')
+        .single();
+
+      if (error || !data?.id) {
+        console.error('[Server] Supabase create album error:', error?.message || error);
+        return res.status(500).json({
+          error: error?.message || 'Could not save album to Supabase database.',
+        });
+      }
+
+      insertedAlbumId = Number(data.id);
+
+      // Insert initial cover photo into gallery_photos
+      const coverPhotoPayload: Record<string, any> = {
+        album_id: insertedAlbumId,
+        url: finalCover,
+        photo_url: finalCover,
+        caption: `${cleanTitle} - Cover Photo`,
+        batch_year: safeBatchYear,
+        tags: ['Cover', finalCat],
+        media_type: 'image',
+        uploader_name: authorName,
+        is_approved: true,
+      };
+      if (createdById > 0) coverPhotoPayload.uploader_id = createdById;
+
+      const { data: photoData, error: photoErr } = await dbClient
+        .from('gallery_photos')
+        .insert(coverPhotoPayload)
+        .select('id')
+        .single();
+
+      if (!photoErr && photoData?.id) {
+        insertedCoverPhotoId = String(photoData.id);
+      } else if (photoErr) {
+        console.warn('[Server] Cover photo insert notice:', photoErr.message);
       }
     }
 
     const finalId = insertedAlbumId || Date.now();
+    const coverPhotoId = insertedCoverPhotoId || `p-${Date.now()}`;
     const albumObj = {
       id: finalId,
-      title: title.trim(),
+      title: cleanTitle,
       description: description || 'A collection of SZMC memories.',
       category: finalCat,
-      date: eventDateLabel || 'Recent',
+      date: safeDateLabel,
       location: location || 'SZMC Campus, Silimpur, Bogura',
-      batchYear: Number(batchYear) || 0,
+      batchYear: safeBatchYear || 0,
       photosCount: 1,
       coverUrl: finalCover,
-      createdById: createdById ? Number(createdById) : undefined,
-      createdBy: createdBy || 'SZMC Alumnus',
+      createdById: createdById > 0 ? createdById : undefined,
+      createdBy: authorName,
       photos: [
         {
-          id: `p-${Date.now()}`,
+          id: coverPhotoId,
+          albumId: finalId,
           url: finalCover,
-          caption: `${title.trim()} - Cover Photo`,
-          uploaderId: createdById ? Number(createdById) : undefined,
-          uploaderName: createdBy || 'SZMC Alumnus',
-          batchYear: Number(batchYear) || 0,
-          uploadedAt: 'Today',
-          likesCount: 1,
-          likedByMe: true,
+          caption: `${cleanTitle} - Cover Photo`,
+          uploaderId: createdById > 0 ? createdById : undefined,
+          uploaderName: authorName,
+          batchYear: safeBatchYear || undefined,
+          uploadedAt: new Date().toISOString(),
+          likesCount: 0,
+          likedByMe: false,
           tags: ['Cover', finalCat],
+          mediaType: 'image',
         },
       ],
     };
 
     memoryGalleryAlbums.unshift(albumObj);
-    return res.status(201).json({ success: true, album: albumObj });
+    broadcastFeedEvent({
+      type: 'GALLERY_UPDATED',
+      action: 'ALBUM_CREATED',
+      albumId: finalId,
+      timestamp: Date.now(),
+    });
+
+    return res.status(201).json({ success: true, album: albumObj, coverPhotoId });
   } catch (err: any) {
     return res.status(500).json({ error: err.message || 'Failed to create album' });
   }
@@ -2358,65 +2454,135 @@ app.post('/api/gallery/albums', rateLimitGuard(30, 60_000), requireAuth, async (
 
 app.post('/api/gallery/photos', rateLimitGuard(60, 60_000), requireAuth, async (req: AuthRequest, res: Response) => {
   try {
-    const { albumId, url, photoUrl, caption, batchYear, tags, mediaType, fileSize, uploaderName } = req.body;
+    const {
+      albumId,
+      album_id,
+      url,
+      photoUrl,
+      photo_url,
+      storagePath,
+      storage_object_path,
+      caption,
+      batchYear,
+      batch_year,
+      tags,
+      mediaType,
+      media_type,
+      fileSize,
+      file_size,
+      uploaderName,
+      uploader_name,
+    } = req.body;
+
+    const targetAlbumId = Number(albumId ?? album_id);
     const uploaderId = Number(req.dbUser?.id || 0);
-    const finalUrl = url || photoUrl;
-    if (!albumId || !finalUrl) {
-      return res.status(400).json({ error: 'albumId and url are required' });
+    const authorName = String(req.dbUser?.fullName || uploaderName || uploader_name || 'SZMC Alumnus').trim();
+    const rawUrl = url || photoUrl || photo_url;
+    const finalUrl = sanitizeGalleryUrl(rawUrl);
+
+    if (!Number.isInteger(targetAlbumId) || targetAlbumId <= 0 || !finalUrl) {
+      return res.status(400).json({ error: 'Valid albumId and safe media url are required.' });
     }
+
+    const safeBatchYear = normalizeGalleryBatchYear(batchYear ?? batch_year);
+    const safeMediaType = (mediaType || media_type) === 'video' ? 'video' : 'image';
+    const safeTags = Array.isArray(tags)
+      ? tags.map((t) => String(t).trim()).filter(Boolean).slice(0, 12)
+      : [];
+    const safeCaption =
+      typeof caption === 'string' && caption.trim() ? caption.trim().slice(0, 1000) : null;
+    const safeFileSize =
+      typeof (fileSize || file_size) === 'string'
+        ? String(fileSize || file_size).slice(0, 32)
+        : null;
+    const safeStoragePath =
+      typeof (storagePath || storage_object_path) === 'string'
+        ? String(storagePath || storage_object_path).slice(0, 500)
+        : null;
 
     let insertedPhotoId: string | null = null;
 
     if (isSupabaseServerConfigured) {
-      try {
-        const payload: any = {
-          album_id: Number(albumId),
-          url: finalUrl,
-          photo_url: finalUrl,
-          caption: caption || null,
-          batch_year: Number(batchYear) || null,
-          tags: Array.isArray(tags) ? tags : [],
-          media_type: mediaType || 'image',
-          file_size: fileSize || null,
-          is_approved: true,
-        };
-        if (uploaderId) payload.uploader_id = Number(uploaderId);
-        if (uploaderName) payload.uploader_name = String(uploaderName);
+      const writeCtx = getSupabaseWriteClient(req.supabaseAccessToken || extractBearerToken(req));
+      const dbClient = writeCtx?.client || supabaseServer;
 
-        const { data, error } = await supabaseServer.from('gallery_photos').insert(payload).select('id').single();
-        if (!error && data?.id) {
-          insertedPhotoId = String(data.id);
-          // Increment album photos_count
-          const { count } = await supabaseServer.from('gallery_photos').select('id', { count: 'exact', head: true }).eq('album_id', Number(albumId));
-          if (typeof count === 'number') {
-            await supabaseServer.from('gallery_albums').update({ photos_count: count, photo_count: count }).eq('id', Number(albumId));
-          }
+      const payload: Record<string, any> = {
+        album_id: targetAlbumId,
+        url: finalUrl,
+        photo_url: finalUrl,
+        storage_object_path: safeStoragePath,
+        caption: safeCaption,
+        batch_year: safeBatchYear,
+        tags: safeTags,
+        media_type: safeMediaType,
+        file_size: safeFileSize,
+        uploader_name: authorName,
+        is_approved: true,
+      };
+      if (uploaderId > 0) payload.uploader_id = uploaderId;
+
+      const { data, error } = await dbClient
+        .from('gallery_photos')
+        .insert(payload)
+        .select('id')
+        .single();
+
+      if (error || !data?.id) {
+        console.error('[Server] Supabase add gallery photo error:', error?.message || error);
+        return res.status(500).json({
+          error: error?.message || 'Could not save photo to Supabase database.',
+        });
+      }
+
+      insertedPhotoId = String(data.id);
+
+      // Keep album photos_count synchronized (DB trigger handles photos_count; sync photo_count too)
+      try {
+        const { count } = await dbClient
+          .from('gallery_photos')
+          .select('id', { count: 'exact', head: true })
+          .eq('album_id', targetAlbumId);
+        if (typeof count === 'number') {
+          await dbClient
+            .from('gallery_albums')
+            .update({ photos_count: count, photo_count: count })
+            .eq('id', targetAlbumId);
         }
-      } catch (err) {
-        console.warn('Supabase add gallery photo notice:', err);
+      } catch {
+        // Trigger already maintains photos_count
       }
     }
 
     const photoObj = {
       id: insertedPhotoId || `p-${Date.now()}`,
-      albumId: Number(albumId),
+      albumId: targetAlbumId,
       url: finalUrl,
-      caption: caption || '',
-      uploaderId: uploaderId ? Number(uploaderId) : undefined,
-      uploaderName: uploaderName || 'SZMC Alumnus',
-      batchYear: Number(batchYear) || 0,
-      tags: Array.isArray(tags) ? tags : [],
-      mediaType: mediaType || 'image',
-      fileSize: fileSize || '1.2 MB',
+      caption: safeCaption || '',
+      uploaderId: uploaderId > 0 ? uploaderId : undefined,
+      uploaderName: authorName,
+      batchYear: safeBatchYear || undefined,
+      uploadedAt: new Date().toISOString(),
+      likesCount: 0,
+      likedByMe: false,
+      tags: safeTags,
+      mediaType: safeMediaType,
+      fileSize: safeFileSize || '1.2 MB',
     };
 
-    // Update in memoryGalleryAlbums if present
-    const memAlbum = memoryGalleryAlbums.find((a) => a.id === Number(albumId));
+    const memAlbum = memoryGalleryAlbums.find((a) => Number(a.id) === targetAlbumId);
     if (memAlbum) {
       if (!Array.isArray(memAlbum.photos)) memAlbum.photos = [];
       memAlbum.photos.unshift(photoObj);
       memAlbum.photosCount = memAlbum.photos.length;
     }
+
+    broadcastFeedEvent({
+      type: 'GALLERY_UPDATED',
+      action: 'PHOTO_ADDED',
+      albumId: targetAlbumId,
+      photoId: photoObj.id,
+      timestamp: Date.now(),
+    });
 
     return res.status(201).json({ success: true, photo: photoObj });
   } catch (err: any) {
@@ -2424,45 +2590,322 @@ app.post('/api/gallery/photos', rateLimitGuard(60, 60_000), requireAuth, async (
   }
 });
 
+// Persistent Photo Like Toggle Endpoint (persists in Supabase gallery_photo_likes + triggers likes_count)
+app.post('/api/gallery/photos/:id/like', rateLimitGuard(120, 60_000), requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const photoId = String(req.params.id || '').trim();
+    if (!photoId) {
+      return res.status(400).json({ error: 'Photo ID is required.' });
+    }
+    const actorId = Number(req.dbUser?.id || 0);
+    if (actorId <= 0) {
+      return res.status(401).json({ error: 'Authentication required to like photos.' });
+    }
+
+    let albumId: number | null = req.body?.albumId ? Number(req.body.albumId) : null;
+
+    if (isSupabaseServerConfigured) {
+      const { data: existingPhoto, error: photoErr } = await supabaseServer
+        .from('gallery_photos')
+        .select('id, album_id, likes_count')
+        .eq('id', photoId)
+        .maybeSingle();
+
+      if (photoErr) {
+        return res.status(500).json({ error: photoErr.message || 'Failed to look up photo.' });
+      }
+      if (!existingPhoto) {
+        return res.status(404).json({ error: 'Photo not found.' });
+      }
+
+      albumId = Number(existingPhoto.album_id) || albumId;
+
+      const { data: existingLike } = await supabaseServer
+        .from('gallery_photo_likes')
+        .select('id')
+        .eq('photo_id', photoId)
+        .eq('user_id', actorId)
+        .maybeSingle();
+
+      const desiredLiked =
+        typeof req.body?.liked === 'boolean' ? Boolean(req.body.liked) : !Boolean(existingLike);
+
+      if (desiredLiked && !existingLike) {
+        const { error: insErr } = await supabaseServer
+          .from('gallery_photo_likes')
+          .insert({ photo_id: photoId, user_id: actorId });
+        if (insErr && insErr.code !== '23505') {
+          return res.status(500).json({ error: insErr.message || 'Could not save photo like.' });
+        }
+      } else if (!desiredLiked && existingLike) {
+        const { error: delErr } = await supabaseServer
+          .from('gallery_photo_likes')
+          .delete()
+          .eq('photo_id', photoId)
+          .eq('user_id', actorId);
+        if (delErr) {
+          return res.status(500).json({ error: delErr.message || 'Could not remove photo like.' });
+        }
+      }
+
+      const { count } = await supabaseServer
+        .from('gallery_photo_likes')
+        .select('id', { count: 'exact', head: true })
+        .eq('photo_id', photoId);
+
+      const nextLikesCount = typeof count === 'number' ? Math.max(0, count) : Math.max(0, Number(existingPhoto.likes_count) || 0);
+
+      // Update RAM mirror if cached
+      for (const alb of memoryGalleryAlbums) {
+        const target = Array.isArray(alb.photos)
+          ? alb.photos.find((p: any) => String(p.id) === photoId)
+          : null;
+        if (target) {
+          target.likesCount = nextLikesCount;
+          break;
+        }
+      }
+
+      broadcastFeedEvent({
+        type: 'GALLERY_UPDATED',
+        action: 'PHOTO_LIKED',
+        albumId,
+        photoId,
+        likesCount: nextLikesCount,
+        timestamp: Date.now(),
+      });
+
+      return res.json({
+        success: true,
+        photoId,
+        albumId,
+        likedByMe: desiredLiked,
+        likesCount: nextLikesCount,
+        persistedToSupabase: true,
+      });
+    }
+
+    // Strictly in-memory fallback when Supabase is disabled
+    let likedSet = memoryGalleryPhotoLikes.get(photoId);
+    if (!likedSet) {
+      likedSet = new Set<number>();
+      memoryGalleryPhotoLikes.set(photoId, likedSet);
+    }
+
+    const desiredLiked =
+      typeof req.body?.liked === 'boolean' ? Boolean(req.body.liked) : !likedSet.has(actorId);
+
+    if (desiredLiked) likedSet.add(actorId);
+    else likedSet.delete(actorId);
+
+    const nextLikesCount = likedSet.size;
+    memoryGalleryLikeCounts.set(photoId, nextLikesCount);
+
+    for (const alb of memoryGalleryAlbums) {
+      const target = Array.isArray(alb.photos)
+        ? alb.photos.find((p: any) => String(p.id) === photoId)
+        : null;
+      if (target) {
+        target.likesCount = nextLikesCount;
+        break;
+      }
+    }
+
+    broadcastFeedEvent({
+      type: 'GALLERY_UPDATED',
+      action: 'PHOTO_LIKED',
+      albumId,
+      photoId,
+      likesCount: nextLikesCount,
+      timestamp: Date.now(),
+    });
+
+    return res.json({
+      success: true,
+      photoId,
+      albumId,
+      likedByMe: desiredLiked,
+      likesCount: nextLikesCount,
+      persistedToSupabase: false,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message || 'Failed to update photo like.' });
+  }
+});
+
+// Update Album Endpoint: Creator can edit own album, Admin/Mod can edit any album
+app.patch('/api/gallery/albums/:id', rateLimitGuard(40, 60_000), requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const albumId = Number(req.params.id);
+    if (!Number.isInteger(albumId) || albumId <= 0) {
+      return res.status(400).json({ error: 'Valid Album ID is required.' });
+    }
+
+    const requesterUserId = Number(req.dbUser?.id || 0);
+    const requesterIsAdmin =
+      req.dbUser?.role === 'admin' ||
+      req.dbUser?.role === 'super_admin' ||
+      req.dbUser?.role === 'moderator';
+
+    const { title, description, category, eventDateLabel, location, batchYear, coverUrl } = req.body;
+    const updates: Record<string, any> = {};
+
+    if (typeof title === 'string') {
+      const cleanTitle = title.trim();
+      if (cleanTitle.length < 2 || cleanTitle.length > 250) {
+        return res.status(400).json({ error: 'Album title must be between 2 and 250 characters.' });
+      }
+      updates.title = cleanTitle;
+    }
+    if (typeof description === 'string') {
+      updates.description = description.trim() || null;
+    }
+    if (typeof category === 'string') {
+      const normCat = category.toLowerCase();
+      if (ALLOWED_GALLERY_CATEGORIES.has(normCat)) {
+        updates.category = normCat;
+      }
+    }
+    if (typeof eventDateLabel === 'string' && eventDateLabel.trim()) {
+      updates.event_date_label = eventDateLabel.trim().slice(0, 64);
+    }
+    if (typeof location === 'string') {
+      updates.location = location.trim() || null;
+    }
+    if (batchYear !== undefined) {
+      updates.batch_year = normalizeGalleryBatchYear(batchYear);
+    }
+    if (typeof coverUrl === 'string' && coverUrl.trim()) {
+      const validCover = sanitizeGalleryUrl(coverUrl);
+      if (!validCover) {
+        return res.status(400).json({ error: 'Invalid cover photo URL format.' });
+      }
+      updates.cover_url = validCover;
+      updates.cover_photo_url = validCover;
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ error: 'No valid album fields provided to update.' });
+    }
+
+    if (isSupabaseServerConfigured) {
+      const { data: existingAlbum } = await supabaseServer
+        .from('gallery_albums')
+        .select('id, created_by_id')
+        .eq('id', albumId)
+        .maybeSingle();
+
+      if (existingAlbum) {
+        const isOwner = requesterUserId > 0 && Number(existingAlbum.created_by_id) === requesterUserId;
+        if (!requesterIsAdmin && !isOwner) {
+          return res.status(403).json({
+            error: 'Access denied: You can only edit your own albums, or an administrator can edit any album.',
+          });
+        }
+
+        const writeCtx = getSupabaseWriteClient(req.supabaseAccessToken || extractBearerToken(req));
+        const dbClient = writeCtx?.client || supabaseServer;
+
+        const { error: upErr } = await dbClient
+          .from('gallery_albums')
+          .update(updates)
+          .eq('id', albumId);
+
+        if (upErr) {
+          return res.status(500).json({
+            error: upErr.message || 'Failed to update album in Supabase.',
+          });
+        }
+      }
+    }
+
+    const memAlbum = memoryGalleryAlbums.find((a) => Number(a.id) === albumId);
+    if (memAlbum) {
+      if (updates.title) memAlbum.title = updates.title;
+      if (updates.description !== undefined) memAlbum.description = updates.description || '';
+      if (updates.category) memAlbum.category = updates.category;
+      if (updates.event_date_label) memAlbum.date = updates.event_date_label;
+      if (updates.location !== undefined) memAlbum.location = updates.location || '';
+      if (updates.batch_year !== undefined) memAlbum.batchYear = updates.batch_year || 0;
+      if (updates.cover_url) memAlbum.coverUrl = updates.cover_url;
+    }
+
+    broadcastFeedEvent({
+      type: 'GALLERY_UPDATED',
+      action: 'ALBUM_UPDATED',
+      albumId,
+      timestamp: Date.now(),
+    });
+
+    return res.json({ success: true, albumId, updates });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message || 'Failed to update album.' });
+  }
+});
+
 // Delete Album Endpoint: Creator can delete own album, Admin can delete any album
 const handleGalleryAlbumDelete = async (req: AuthRequest, res: Response) => {
   try {
     const albumId = Number(req.params.id);
-    if (!albumId) {
-      return res.status(400).json({ error: 'Album ID is required' });
+    if (!Number.isInteger(albumId) || albumId <= 0) {
+      return res.status(400).json({ error: 'Valid Album ID is required.' });
     }
 
     const requesterUserId = Number(req.dbUser?.id || 0);
-    const requesterIsAdmin = req.dbUser?.role === 'admin' || req.dbUser?.role === 'super_admin' || req.dbUser?.role === 'moderator';
+    const requesterIsAdmin =
+      req.dbUser?.role === 'admin' ||
+      req.dbUser?.role === 'super_admin' ||
+      req.dbUser?.role === 'moderator';
 
     if (isSupabaseServerConfigured) {
-      try {
-        const { data: album } = await supabaseServer
-          .from('gallery_albums')
-          .select('id, created_by_id')
-          .eq('id', albumId)
-          .maybeSingle();
+      const writeCtx = getSupabaseWriteClient(req.supabaseAccessToken || extractBearerToken(req));
+      const dbClient = writeCtx?.client || supabaseServer;
 
-        if (album) {
-          const isOwner = requesterUserId > 0 && Number(album.created_by_id) === requesterUserId;
-          if (!requesterIsAdmin && !isOwner) {
-            return res.status(403).json({ error: 'Access denied: You can only delete your own albums, or an administrator can delete any album.' });
-          }
+      const { data: album } = await supabaseServer
+        .from('gallery_albums')
+        .select('id, created_by_id')
+        .eq('id', albumId)
+        .maybeSingle();
 
-          // Delete all associated photos first, then delete album
-          await supabaseServer.from('gallery_photos').delete().eq('album_id', albumId);
-          await supabaseServer.from('gallery_albums').delete().eq('id', albumId);
+      if (album) {
+        const isOwner = requesterUserId > 0 && Number(album.created_by_id) === requesterUserId;
+        if (!requesterIsAdmin && !isOwner) {
+          return res.status(403).json({
+            error: 'Access denied: You can only delete your own albums, or an administrator can delete any album.',
+          });
         }
-      } catch (err) {
-        console.warn('Supabase delete gallery album notice:', err);
+
+        const { error: photosDelErr } = await dbClient
+          .from('gallery_photos')
+          .delete()
+          .eq('album_id', albumId);
+        if (photosDelErr) {
+          console.warn('[Server] Delete album photos error:', photosDelErr.message);
+        }
+
+        const { error: albumDelErr } = await dbClient
+          .from('gallery_albums')
+          .delete()
+          .eq('id', albumId);
+        if (albumDelErr) {
+          return res.status(500).json({
+            error: albumDelErr.message || 'Failed to delete album from Supabase.',
+          });
+        }
       }
     }
 
-    // Delete from memoryGalleryAlbums
-    const memIdx = memoryGalleryAlbums.findIndex((a) => a.id === albumId);
+    const memIdx = memoryGalleryAlbums.findIndex((a) => Number(a.id) === albumId);
     if (memIdx >= 0) {
       memoryGalleryAlbums.splice(memIdx, 1);
     }
+
+    broadcastFeedEvent({
+      type: 'GALLERY_UPDATED',
+      action: 'ALBUM_DELETED',
+      albumId,
+      timestamp: Date.now(),
+    });
 
     return res.json({ success: true, message: 'Album deleted successfully' });
   } catch (err: any) {
@@ -2477,55 +2920,80 @@ app.post('/api/gallery/albums/:id/delete', rateLimitGuard(40, 60_000), requireAu
 // Delete Photo Endpoint: Uploader or Album Creator can delete own photo, Admin can delete any photo
 const handleGalleryPhotoDelete = async (req: AuthRequest, res: Response) => {
   try {
-    const photoId = String(req.params.id);
-    const albumId = req.body.albumId || req.query.albumId ? Number(req.body.albumId || req.query.albumId) : null;
+    const photoId = String(req.params.id || '').trim();
+    if (!photoId) {
+      return res.status(400).json({ error: 'Photo ID is required.' });
+    }
+    const bodyAlbumId = req.body?.albumId || req.query?.albumId;
+    let targetAlbumId = bodyAlbumId ? Number(bodyAlbumId) : null;
     const requesterUserId = Number(req.dbUser?.id || 0);
-    const requesterIsAdmin = req.dbUser?.role === 'admin' || req.dbUser?.role === 'super_admin' || req.dbUser?.role === 'moderator';
+    const requesterIsAdmin =
+      req.dbUser?.role === 'admin' ||
+      req.dbUser?.role === 'super_admin' ||
+      req.dbUser?.role === 'moderator';
 
     if (isSupabaseServerConfigured) {
-      try {
-        const { data: photo } = await supabaseServer
+      const writeCtx = getSupabaseWriteClient(extractBearerToken(req));
+      const dbClient = writeCtx?.client || supabaseServer;
+
+      const { data: photo } = await supabaseServer
+        .from('gallery_photos')
+        .select('id, album_id, uploader_id')
+        .eq('id', photoId)
+        .maybeSingle();
+
+      if (photo) {
+        let isOwner = requesterUserId > 0 && Number(photo.uploader_id) === requesterUserId;
+        if (!isOwner && photo.album_id) {
+          const { data: parentAlbum } = await supabaseServer
+            .from('gallery_albums')
+            .select('id, created_by_id')
+            .eq('id', photo.album_id)
+            .maybeSingle();
+          if (parentAlbum && Number(parentAlbum.created_by_id) === requesterUserId) {
+            isOwner = true;
+          }
+        }
+
+        if (!requesterIsAdmin && !isOwner) {
+          return res.status(403).json({
+            error: 'Access denied: You can only delete your own photos, or an administrator can delete any photo.',
+          });
+        }
+
+        const { error: delErr } = await dbClient
           .from('gallery_photos')
-          .select('id, album_id, uploader_id')
-          .eq('id', photoId)
-          .maybeSingle();
+          .delete()
+          .eq('id', photoId);
 
-        if (photo) {
-          let isOwner = requesterUserId > 0 && Number(photo.uploader_id) === requesterUserId;
-          if (!isOwner && photo.album_id) {
-            // Check if requester owns the album
-            const { data: parentAlbum } = await supabaseServer
-              .from('gallery_albums')
-              .select('id, created_by_id')
-              .eq('id', photo.album_id)
-              .maybeSingle();
-            if (parentAlbum && Number(parentAlbum.created_by_id) === requesterUserId) {
-              isOwner = true;
-            }
-          }
+        if (delErr) {
+          return res.status(500).json({
+            error: delErr.message || 'Failed to delete photo from Supabase.',
+          });
+        }
 
-          if (!requesterIsAdmin && !isOwner) {
-            return res.status(403).json({ error: 'Access denied: You can only delete your own photos, or an administrator can delete any photo.' });
-          }
-
-          await supabaseServer.from('gallery_photos').delete().eq('id', photoId);
-
-          const targetAlbumId = photo.album_id || albumId;
-          if (targetAlbumId) {
-            const { count } = await supabaseServer
+        targetAlbumId = Number(photo.album_id) || targetAlbumId;
+        if (targetAlbumId) {
+          try {
+            const { count } = await dbClient
               .from('gallery_photos')
               .select('id', { count: 'exact', head: true })
               .eq('album_id', targetAlbumId);
             const remainingCount = typeof count === 'number' ? count : 0;
-            await supabaseServer.from('gallery_albums').update({ photos_count: remainingCount, photo_count: remainingCount }).eq('id', targetAlbumId);
+            await dbClient
+              .from('gallery_albums')
+              .update({ photos_count: remainingCount, photo_count: remainingCount })
+              .eq('id', targetAlbumId);
+          } catch {
+            // Trigger already maintains photos_count
           }
         }
-      } catch (err) {
-        console.warn('Supabase delete photo notice:', err);
       }
     }
 
-    // Also update in memoryGalleryAlbums
+    memoryGalleryPhotoLikes.delete(photoId);
+    memoryGalleryLikeCounts.delete(photoId);
+
     for (const alb of memoryGalleryAlbums) {
       if (Array.isArray(alb.photos)) {
         const pIdx = alb.photos.findIndex((p: any) => String(p.id) === photoId);
@@ -2537,6 +3005,14 @@ const handleGalleryPhotoDelete = async (req: AuthRequest, res: Response) => {
       }
     }
 
+    broadcastFeedEvent({
+      type: 'GALLERY_UPDATED',
+      action: 'PHOTO_DELETED',
+      albumId: targetAlbumId,
+      photoId,
+      timestamp: Date.now(),
+    });
+
     return res.json({ success: true, message: 'Photo deleted successfully' });
   } catch (err: any) {
     console.error('Failed to delete photo:', err);
@@ -2546,6 +3022,7 @@ const handleGalleryPhotoDelete = async (req: AuthRequest, res: Response) => {
 
 app.delete('/api/gallery/photos/:id', rateLimitGuard(60, 60_000), requireAuth, handleGalleryPhotoDelete);
 app.post('/api/gallery/photos/:id/delete', rateLimitGuard(60, 60_000), requireAuth, handleGalleryPhotoDelete);
+
 
 // Blood Network - High Resilient Supabase Storage
 const memoryBloodRequests: any[] = [];
@@ -2627,44 +3104,44 @@ app.post('/api/blood/requests', rateLimitGuard(30, 60_000), requireAuth, async (
       description,
       patientRelation,
     } = req.body;
-    const requesterId = Number(req.dbUser?.id || 1);
+    const actorProfile = await resolveAuthenticatedAlumniSummary(req);
+    if (!actorProfile) {
+      return res.status(403).json({ error: 'Valid alumnus profile required before posting a blood request.' });
+    }
 
     let insertedId: string | null = null;
 
     if (isSupabaseServerConfigured) {
-      try {
-        const payload: any = {
-          requester_id: requesterId,
-          blood_group: bloodGroup,
-          units_required: Number(unitsRequired) || 1,
-          units_needed: Number(unitsRequired) || 1,
-          hospital_name: hospitalName || 'SZMC Hospital',
-          hospital: hospitalName || 'SZMC Hospital',
-          hospital_area: hospitalArea || 'Silimpur',
-          hospital_address: hospitalArea || 'Silimpur',
-          city: city || 'Bogura',
-          district: city || 'Bogura',
-          required_datetime: requiredDateTime ? new Date(requiredDateTime).toISOString() : new Date().toISOString(),
-          required_date: requiredDateTime ? new Date(requiredDateTime).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
-          emergency_level: (emergencyLevel || 'urgent').toLowerCase(),
-          urgency: (emergencyLevel || 'urgent').toLowerCase(),
-          contact_method: contactMethod || 'Portal Secure Coordination',
-          contact_number: contactPhone || 'Through Portal',
-          coordination_ref: contactPhone || 'Through Portal',
-          description: description || 'Urgent blood requirement for clinical patient care.',
-          medical_reason: description || 'Urgent blood requirement.',
-          patient_name: patientRelation || 'Patient',
-          patient_relation: patientRelation || 'Relative',
-          status: 'Active',
-        };
+      const payload: any = {
+        requester_id: actorProfile.id,
+        blood_group: bloodGroup,
+        units_required: Number(unitsRequired) || 1,
+        units_needed: Number(unitsRequired) || 1,
+        hospital_name: hospitalName || 'SZMC Hospital',
+        hospital: hospitalName || 'SZMC Hospital',
+        hospital_area: hospitalArea || 'Silimpur',
+        hospital_address: hospitalArea || 'Silimpur',
+        city: city || 'Bogura',
+        district: city || 'Bogura',
+        required_datetime: requiredDateTime ? new Date(requiredDateTime).toISOString() : new Date().toISOString(),
+        required_date: requiredDateTime ? new Date(requiredDateTime).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
+        emergency_level: (emergencyLevel || 'urgent').toLowerCase(),
+        urgency: (emergencyLevel || 'urgent').toLowerCase(),
+        contact_method: contactMethod || 'Portal Secure Coordination',
+        contact_number: contactPhone || 'Through Portal',
+        coordination_ref: contactPhone || 'Through Portal',
+        description: description || 'Urgent blood requirement for clinical patient care.',
+        medical_reason: description || 'Urgent blood requirement.',
+        patient_name: patientRelation || 'Patient',
+        patient_relation: patientRelation || 'Relative',
+        status: 'Active',
+      };
 
-        const { data, error } = await supabaseServer.from('blood_requests').insert(payload).select('id').single();
-        if (!error && data?.id) {
-          insertedId = String(data.id);
-        }
-      } catch (err) {
-        console.warn('Supabase insert blood request notice:', err);
+      const { data, error } = await supabaseServer.from('blood_requests').insert(payload).select('id').single();
+      if (error || !data?.id) {
+        return res.status(500).json({ error: error?.message || 'Failed to persist blood request' });
       }
+      insertedId = String(data.id);
     }
 
     const finalId = insertedId || `req_${Date.now()}`;
@@ -2682,10 +3159,10 @@ app.post('/api/blood/requests', rateLimitGuard(30, 60_000), requireAuth, async (
       contactPhone: contactPhone || '',
       description: description || '',
       patientRelation: patientRelation || 'Relative',
-      requesterId: Number(requesterId) || 1,
-      requesterName: req.body.requesterName || 'SZMC Doctor',
-      requesterAvatar: req.body.requesterAvatar || '/assets/aistudio/images__1__2778177d.png',
-      requesterBatch: Number(req.body.requesterBatch) || 20,
+      requesterId: actorProfile.id,
+      requesterName: actorProfile.fullName,
+      requesterAvatar: actorProfile.avatarUrl,
+      requesterBatch: actorProfile.batchYear || 20,
       status: 'Active',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -2709,31 +3186,33 @@ app.post('/api/blood/requests', rateLimitGuard(30, 60_000), requireAuth, async (
 app.post('/api/blood/donors', rateLimitGuard(30, 60_000), requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const { bloodGroup, isRegisteredDonor, availability, preferredArea, city, lastDonationDate, emergencyAlertPreference } = req.body;
-    const donorUserId = Number(req.dbUser?.id || 1);
+    const donorUserId = Number(req.dbUser?.id || 0);
+    if (!donorUserId) {
+      return res.status(403).json({ error: 'Valid alumnus profile required before updating donor registration.' });
+    }
 
     if (isSupabaseServerConfigured) {
-      try {
-        const payload: any = {
-          user_id: donorUserId,
-          profile_id: donorUserId,
-          blood_group: bloodGroup,
-          is_registered_donor: Boolean(isRegisteredDonor),
-          availability: availability || 'available',
-          preferred_area: preferredArea || 'Bogura',
-          city: city || 'Bogura',
-          last_donation_date: lastDonationDate || null,
-          emergency_alert_preference: emergencyAlertPreference || 'all_urgent',
-          updated_at: new Date().toISOString(),
-        };
+      const payload: any = {
+        user_id: donorUserId,
+        profile_id: donorUserId,
+        blood_group: bloodGroup,
+        is_registered_donor: Boolean(isRegisteredDonor),
+        availability: availability || 'available',
+        preferred_area: preferredArea || 'Bogura',
+        city: city || 'Bogura',
+        last_donation_date: lastDonationDate || null,
+        emergency_alert_preference: emergencyAlertPreference || 'all_urgent',
+        updated_at: new Date().toISOString(),
+      };
 
-        await supabaseServer.from('blood_donors').upsert(payload);
-        await supabaseServer.from('alumni_profiles').update({
-          blood_group: bloodGroup,
-          is_registered_donor: Boolean(isRegisteredDonor),
-        }).eq('id', donorUserId);
-      } catch (err) {
-        console.warn('Supabase upsert blood donor notice:', err);
+      const { error: upsertErr } = await supabaseServer.from('blood_donors').upsert(payload);
+      if (upsertErr) {
+        return res.status(500).json({ error: upsertErr.message || 'Failed to persist donor profile.' });
       }
+      await supabaseServer.from('alumni_profiles').update({
+        blood_group: bloodGroup,
+        is_registered_donor: Boolean(isRegisteredDonor),
+      }).eq('id', donorUserId);
     }
 
     const donorObj = {
@@ -2761,6 +3240,41 @@ app.post('/api/blood/donors', rateLimitGuard(30, 60_000), requireAuth, async (re
 // Mentorship System - High Resilient Supabase Storage
 const memoryMentorshipRequests: any[] = [];
 const memoryMentorOffers: any[] = [];
+
+async function resolveAuthenticatedAlumniSummary(req: AuthRequest) {
+  const profileId = Number(req.dbUser?.id || 0);
+  if (!profileId) return null;
+
+  if (isSupabaseServerConfigured) {
+    const { data } = await supabaseServer
+      .from('alumni_profiles')
+      .select('id, full_name, batch_year, avatar_url, profession, position, institution, email')
+      .eq('id', profileId)
+      .maybeSingle();
+
+    if (data) {
+      return {
+        id: Number(data.id),
+        fullName: data.full_name || req.dbUser?.fullName || 'SZMC Doctor',
+        batchYear: data.batch_year ? Number(data.batch_year) : null,
+        avatarUrl: data.avatar_url || '/assets/aistudio/images__1__2778177d.png',
+        profession: data.profession || data.position || 'Physician',
+        institution: data.institution || 'SZMC Hospital',
+        email: data.email || req.dbUser?.email || null,
+      };
+    }
+  }
+
+  return {
+    id: profileId,
+    fullName: req.dbUser?.fullName || 'SZMC Doctor',
+    batchYear: null as number | null,
+    avatarUrl: '/assets/aistudio/images__1__2778177d.png',
+    profession: 'Physician',
+    institution: 'SZMC Hospital',
+    email: req.dbUser?.email || null,
+  };
+}
 
 app.get('/api/mentorship/requests', rateLimitGuard(60, 60_000), async (_req: Request, res: Response) => {
   try {
@@ -2801,21 +3315,24 @@ app.get('/api/mentorship/requests', rateLimitGuard(60, 60_000), async (_req: Req
 
 app.post('/api/mentorship/requests', rateLimitGuard(30, 60_000), requireAuth, async (req: AuthRequest, res: Response) => {
   try {
-    const { id, userName, userBatch, userAvatar, topic, question, contactInfo, targetMentorId, targetMentorName } = req.body;
-    const userId = Number(req.dbUser?.id || 0);
-    if (!question || !question.trim()) {
+    const { topic, question, contactInfo, targetMentorId, targetMentorName } = req.body;
+    const actorProfile = await resolveAuthenticatedAlumniSummary(req);
+    if (!actorProfile) {
+      return res.status(403).json({ error: 'Valid alumnus profile required to post a mentorship request.' });
+    }
+    if (!question || !String(question).trim()) {
       return res.status(400).json({ error: 'Question text is required' });
     }
 
-    const reqId = id || `req-${Date.now()}`;
+    const reqId = `req-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const newReq = {
       id: reqId,
-      user_id: Number(userId) || null,
-      user_name: userName || 'SZMC Doctor',
-      user_batch: Number(userBatch) || null,
-      user_avatar: userAvatar || '/assets/aistudio/images__1__2778177d.png',
+      user_id: actorProfile.id,
+      user_name: actorProfile.fullName,
+      user_batch: actorProfile.batchYear,
+      user_avatar: actorProfile.avatarUrl,
       topic: topic || 'Medical',
-      question: question.trim(),
+      question: String(question).trim(),
       contact_info: contactInfo || null,
       target_mentor_id: targetMentorId ? Number(targetMentorId) : null,
       target_mentor_name: targetMentorName || null,
@@ -2826,10 +3343,9 @@ app.post('/api/mentorship/requests', rateLimitGuard(30, 60_000), requireAuth, as
     };
 
     if (isSupabaseServerConfigured) {
-      try {
-        await supabaseServer.from('mentorship_requests').insert(newReq);
-      } catch (err) {
-        console.warn('Supabase insert mentorship request notice:', err);
+      const { error: insertErr } = await supabaseServer.from('mentorship_requests').insert(newReq);
+      if (insertErr) {
+        return res.status(500).json({ error: insertErr.message || 'Failed to save mentorship request' });
       }
     }
 
@@ -2853,36 +3369,62 @@ app.post('/api/mentorship/requests', rateLimitGuard(30, 60_000), requireAuth, as
 app.post('/api/mentorship/requests/:id/answers', rateLimitGuard(30, 60_000), requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const reqId = req.params.id;
-    const { mentorName, mentorBatch, mentorAvatar, mentorProfession, answerText } = req.body;
-    const mentorId = Number(req.dbUser?.id || 1);
+    const { mentorProfession, answerText } = req.body;
+    const actorProfile = await resolveAuthenticatedAlumniSummary(req);
+    if (!actorProfile) {
+      return res.status(403).json({ error: 'Valid alumnus profile required to post an answer.' });
+    }
 
-    if (!answerText || !answerText.trim()) {
+    if (!answerText || !String(answerText).trim()) {
       return res.status(400).json({ error: 'Answer text is required' });
     }
 
     const newAns = {
-      id: `ans-${Date.now()}`,
-      mentorId: Number(mentorId) || 1,
-      mentorName: mentorName || 'SZMC Mentor',
-      mentorBatch: Number(mentorBatch) || null,
-      mentorAvatar: mentorAvatar || '/assets/aistudio/images__1__2778177d.png',
-      mentorProfession: mentorProfession || 'Consultant Physician',
-      answerText: answerText.trim(),
+      id: `ans-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      mentorId: actorProfile.id,
+      mentorName: actorProfile.fullName,
+      mentorBatch: actorProfile.batchYear,
+      mentorAvatar: actorProfile.avatarUrl,
+      mentorProfession: (typeof mentorProfession === 'string' && mentorProfession.trim()) || actorProfile.profession || 'Consultant Physician',
+      answerText: String(answerText).trim(),
       createdAt: 'Just now',
     };
 
     if (isSupabaseServerConfigured) {
-      try {
-        const { data: current } = await supabaseServer.from('mentorship_requests').select('answers').eq('id', reqId).maybeSingle();
-        const currentAnswers = Array.isArray(current?.answers) ? current.answers : [];
+      const { error: rpcErr } = await supabaseServer.rpc('append_mentorship_answer', {
+        p_request_id: reqId,
+        p_answer: newAns,
+      });
+
+      if (rpcErr) {
+        if (/not found/i.test(rpcErr.message || '')) {
+          return res.status(404).json({ error: 'Mentorship request not found' });
+        }
+        // Fallback when atomic RPC migration 031 has not yet been applied
+        const { data: current, error: fetchErr } = await supabaseServer
+          .from('mentorship_requests')
+          .select('id, answers')
+          .eq('id', reqId)
+          .maybeSingle();
+
+        if (fetchErr) {
+          return res.status(500).json({ error: fetchErr.message || 'Failed to load mentorship request' });
+        }
+        if (!current) {
+          return res.status(404).json({ error: 'Mentorship request not found' });
+        }
+
+        const currentAnswers = Array.isArray(current.answers) ? current.answers : [];
         const updatedAnswers = [...currentAnswers, newAns];
 
-        await supabaseServer
+        const { error: updateErr } = await supabaseServer
           .from('mentorship_requests')
           .update({ answers: updatedAnswers, status: 'answered', updated_at: new Date().toISOString() })
           .eq('id', reqId);
-      } catch (err) {
-        console.warn('Supabase add mentorship answer notice:', err);
+
+        if (updateErr) {
+          return res.status(500).json({ error: updateErr.message || 'Failed to save mentorship answer' });
+        }
       }
     }
 
@@ -2937,34 +3479,36 @@ app.get('/api/mentorship/mentors', rateLimitGuard(60, 60_000), async (_req: Requ
 
 app.post('/api/mentorship/mentors', rateLimitGuard(30, 60_000), requireAuth, async (req: AuthRequest, res: Response) => {
   try {
-    const { id, fullName, batchYear, avatarUrl, category, expertise, shortDescription, institution, position, contactPreference } = req.body;
-    const userId = Number(req.dbUser?.id || 0);
-    if (!fullName || !expertise) {
-      return res.status(400).json({ error: 'Full name and expertise are required' });
+    const { category, expertise, shortDescription, institution, position, contactPreference } = req.body;
+    const actorProfile = await resolveAuthenticatedAlumniSummary(req);
+    if (!actorProfile) {
+      return res.status(403).json({ error: 'Valid alumnus profile required to register as a mentor.' });
+    }
+    if (!expertise || !String(expertise).trim()) {
+      return res.status(400).json({ error: 'Expertise is required' });
     }
 
-    const mentorId = id || `mentor-${Date.now()}`;
+    const mentorId = `mentor-${actorProfile.id}`;
     const payload = {
       id: mentorId,
-      user_id: Number(userId) || null,
-      full_name: fullName.trim(),
-      batch_year: Number(batchYear) || null,
-      avatar_url: avatarUrl || '/assets/aistudio/images__1__2778177d.png',
+      user_id: actorProfile.id,
+      full_name: actorProfile.fullName,
+      batch_year: actorProfile.batchYear,
+      avatar_url: actorProfile.avatarUrl,
       category: category || 'Medical',
-      expertise: expertise.trim(),
+      expertise: String(expertise).trim(),
       short_description: shortDescription || '',
-      institution: institution || 'SZMC Hospital',
-      position: position || 'Doctor',
+      institution: institution || actorProfile.institution || 'SZMC Hospital',
+      position: position || actorProfile.profession || 'Doctor',
       contact_preference: contactPreference || 'WhatsApp',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
 
     if (isSupabaseServerConfigured) {
-      try {
-        await supabaseServer.from('mentor_offers').upsert(payload);
-      } catch (err) {
-        console.warn('Supabase register mentor notice:', err);
+      const { error: upsertErr } = await supabaseServer.from('mentor_offers').upsert(payload);
+      if (upsertErr) {
+        return res.status(500).json({ error: upsertErr.message || 'Failed to persist mentor offer' });
       }
     }
 
@@ -2983,7 +3527,7 @@ app.post('/api/mentorship/mentors', rateLimitGuard(30, 60_000), requireAuth, asy
       createdAt: payload.created_at,
     };
 
-    const exIdx = memoryMentorOffers.findIndex((m) => m.fullName.toLowerCase() === mentorObj.fullName.toLowerCase());
+    const exIdx = memoryMentorOffers.findIndex((m) => m.userId === mentorObj.userId);
     if (exIdx >= 0) memoryMentorOffers[exIdx] = mentorObj;
     else memoryMentorOffers.unshift(mentorObj);
 
@@ -3036,25 +3580,28 @@ app.get('/api/careers', rateLimitGuard(60, 60_000), async (_req: Request, res: R
 
 app.post('/api/careers', rateLimitGuard(30, 60_000), requireAuth, async (req: AuthRequest, res: Response) => {
   try {
-    const { id, title, company, location, type, description, posterName, posterBatch, posterAvatar, posterEmail } = req.body;
-    const posterId = Number(req.dbUser?.id || 0);
+    const { title, company, location, type, description } = req.body;
+    const actorProfile = await resolveAuthenticatedAlumniSummary(req);
+    if (!actorProfile) {
+      return res.status(403).json({ error: 'Valid alumnus profile required to post a career opportunity.' });
+    }
     if (!title || !company) {
       return res.status(400).json({ error: 'Title and company/institution are required' });
     }
 
-    const oppId = id || `opp-${Date.now()}`;
+    const oppId = `opp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const payload = {
       id: oppId,
-      title: title.trim(),
-      company: company.trim(),
+      title: String(title).trim(),
+      company: String(company).trim(),
       location: location || 'Bogura / Hybrid',
       type: type || 'job',
       description: description || '',
-      poster_id: Number(posterId) || null,
-      poster_name: posterName || 'SZMC Doctor',
-      poster_batch: posterBatch || 'Alumnus',
-      poster_avatar: posterAvatar || '/assets/aistudio/images__1__2778177d.png',
-      poster_email: posterEmail || null,
+      poster_id: actorProfile.id,
+      poster_name: actorProfile.fullName,
+      poster_batch: actorProfile.batchYear ? String(actorProfile.batchYear) : 'Alumnus',
+      poster_avatar: actorProfile.avatarUrl,
+      poster_email: actorProfile.email,
       status: 'active',
       applicants: [],
       created_at: new Date().toISOString(),
@@ -3062,10 +3609,9 @@ app.post('/api/careers', rateLimitGuard(30, 60_000), requireAuth, async (req: Au
     };
 
     if (isSupabaseServerConfigured) {
-      try {
-        await supabaseServer.from('career_opportunities').insert(payload);
-      } catch (err) {
-        console.warn('Supabase insert career notice:', err);
+      const { error: insertErr } = await supabaseServer.from('career_opportunities').insert(payload);
+      if (insertErr) {
+        return res.status(500).json({ error: insertErr.message || 'Failed to persist career opportunity' });
       }
     }
 
@@ -3096,34 +3642,57 @@ app.post('/api/careers', rateLimitGuard(30, 60_000), requireAuth, async (req: Au
 app.post('/api/careers/:id/apply', rateLimitGuard(30, 60_000), requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const oppId = req.params.id;
-    const { applicantName, applicantBatch, applicantAvatar, applicantEmail, applicantPhone } = req.body;
-    const applicantId = Number(req.dbUser?.id || 1);
+    const { applicantPhone } = req.body;
+    const actorProfile = await resolveAuthenticatedAlumniSummary(req);
+    if (!actorProfile) {
+      return res.status(403).json({ error: 'Valid alumnus profile required to apply.' });
+    }
 
     const newApp = {
-      id: `app-${Date.now()}`,
-      applicantId,
-      applicantName: applicantName || req.dbUser?.fullName || 'SZMC Applicant',
-      applicantBatch: applicantBatch || '',
-      applicantAvatar: applicantAvatar || '/assets/aistudio/images__1__2778177d.png',
-      applicantEmail: applicantEmail || req.dbUser?.email || '',
-      applicantPhone: applicantPhone || '',
+      id: `app-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      applicantId: actorProfile.id,
+      applicantName: actorProfile.fullName,
+      applicantBatch: actorProfile.batchYear ? String(actorProfile.batchYear) : '',
+      applicantAvatar: actorProfile.avatarUrl,
+      applicantEmail: actorProfile.email || '',
+      applicantPhone: typeof applicantPhone === 'string' ? applicantPhone.trim() : '',
       appliedAt: new Date().toISOString(),
     };
 
-    let updatedApplicants: any[] = [newApp];
-
     if (isSupabaseServerConfigured) {
-      try {
-        const { data: current } = await supabaseServer.from('career_opportunities').select('applicants').eq('id', oppId).maybeSingle();
-        const existing = Array.isArray(current?.applicants) ? current.applicants : [];
-        updatedApplicants = [newApp, ...existing];
+      const { error: rpcErr } = await supabaseServer.rpc('append_career_applicant', {
+        p_opportunity_id: oppId,
+        p_applicant: newApp,
+      });
 
-        await supabaseServer
+      if (rpcErr) {
+        if (/not found/i.test(rpcErr.message || '')) {
+          return res.status(404).json({ error: 'Career opportunity not found' });
+        }
+        const { data: current, error: fetchErr } = await supabaseServer
+          .from('career_opportunities')
+          .select('id, applicants')
+          .eq('id', oppId)
+          .maybeSingle();
+
+        if (fetchErr) {
+          return res.status(500).json({ error: fetchErr.message || 'Failed to load career opportunity' });
+        }
+        if (!current) {
+          return res.status(404).json({ error: 'Career opportunity not found' });
+        }
+
+        const existing = Array.isArray(current.applicants) ? current.applicants : [];
+        const updatedApplicants = [newApp, ...existing];
+
+        const { error: updateErr } = await supabaseServer
           .from('career_opportunities')
           .update({ applicants: updatedApplicants, updated_at: new Date().toISOString() })
           .eq('id', oppId);
-      } catch (err) {
-        console.warn('Supabase apply career notice:', err);
+
+        if (updateErr) {
+          return res.status(500).json({ error: updateErr.message || 'Failed to save career application' });
+        }
       }
     }
 
@@ -4182,17 +4751,17 @@ app.post(
         userUid: isAdminCaller ? (req.body.userUid || user?.uid || user?.id) : (user?.uid || user?.id),
         fullName: req.body.fullName,
         avatarUrl: req.body.avatarUrl,
-        batchYear: Number(req.body.batchYear) || 68,
+        batchYear: Number(req.body.batchYear) || 25,
         session: req.body.session,
         collegeRoll: req.body.collegeRoll,
-        academicStream: req.body.academicStream || req.body.group || 'Science',
+        academicStream: req.body.academicStream || req.body.group || 'MBBS',
         academicGroup: req.body.academicGroup || null,
-        section: req.body.section,
+        section: req.body.section || 'MBBS',
         profession: req.body.profession,
         position: req.body.position,
         institution: req.body.institution,
         specialty: Array.isArray(req.body.specialty) ? req.body.specialty : [],
-        degree: Array.isArray(req.body.degree) ? req.body.degree : ['HSC'],
+        degree: Array.isArray(req.body.degree) ? req.body.degree : ['MBBS'],
         city: req.body.city,
         country: req.body.country,
         phone: req.body.phone,
@@ -4259,6 +4828,12 @@ app.post(
       if (req.body.specialtyOther) updates.specialtyOther = req.body.specialtyOther;
       if (req.body.bloodGroup) updates.bloodGroup = req.body.bloodGroup;
       if (req.body.isPublic !== undefined) updates.isPublic = req.body.isPublic;
+      if (req.body.showContactToVerified !== undefined) {
+        updates.showContactToVerified = Boolean(req.body.showContactToVerified);
+      }
+      if (req.body.userPreferences && typeof req.body.userPreferences === 'object') {
+        updates.userPreferences = req.body.userPreferences;
+      }
 
       // Note: role, verificationStatus, badges are strictly ignored to prevent client privilege escalation
       const updated = await updateAlumniProfileRecord(targetProfileId, updates);
@@ -4324,7 +4899,9 @@ app.patch(
       res.json({ profile: updated });
     } catch (error: any) {
       console.error('Failed to update profile governance:', error);
-      res.status(400).json({ error: error.message || 'Failed to update profile governance' });
+      const msg = String(error?.message || 'Failed to update profile governance');
+      const status = msg.startsWith('Forbidden:') ? 403 : msg.includes('not found') ? 404 : 400;
+      res.status(status).json({ error: msg });
     }
   }
 );
@@ -4535,43 +5112,7 @@ app.get(
   }
 );
 
-// Super Admin ONLY download route for the production deployment dist archive
-app.get([
-  '/download/szmc-alumni-dist.zip',
-  '/szmc-alumni-dist.zip',
-  '/download/dist.zip',
-  '/dist.zip',
-  '/api/download-dist',
-  '/download-dist',
-], requireSuperAdmin, (_req: AuthRequest, res: Response) => {
-  const candidates = [
-    path.resolve(__dirname, 'public', 'szmc-alumni-dist.zip'),
-    path.resolve(__dirname, 'szmc-alumni-dist.zip'),
-    path.resolve(__dirname, 'public', 'dist.zip'),
-    path.resolve(__dirname, 'dist.zip'),
-    path.resolve(__dirname, 'public', 'szmc-alumni-dist.tar.gz'),
-    path.resolve(__dirname, 'szmc-alumni-dist.tar.gz'),
-  ];
-  for (const c of candidates) {
-    if (existsSync(c)) {
-      return res.download(c, 'szmc-alumni-portal-dist.zip');
-    }
-  }
-  return res.status(404).send('Production dist archive not found. Please build first.');
-});
-
-app.get(['/download/szmc-alumni-dist.tar.gz', '/szmc-alumni-dist.tar.gz'], requireSuperAdmin, (_req: AuthRequest, res: Response) => {
-  const candidates = [
-    path.resolve(__dirname, 'public', 'szmc-alumni-dist.tar.gz'),
-    path.resolve(__dirname, 'szmc-alumni-dist.tar.gz'),
-  ];
-  for (const c of candidates) {
-    if (existsSync(c)) {
-      return res.download(c, 'szmc-alumni-dist.tar.gz');
-    }
-  }
-  return res.status(404).send('Production dist tar.gz archive not found.');
-});
+app.use(createDistDownloadRouter(__dirname));
 
 // Persistent Video Upload Route (authenticated + strict video extension allowlist + 50MB limit)
 const ALLOWED_VIDEO_EXTENSIONS = new Set(['mp4', 'webm', 'mov', 'ogg']);

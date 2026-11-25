@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { Suspense, lazy, useEffect, useRef, useState, useCallback } from 'react';
 import {
   MessageCircle,
   Send,
@@ -48,6 +48,7 @@ import {
 } from '../../services/messagingService';
 import type { ChatMessage, MessageReaction } from '../../types/messaging';
 import type { ActiveDmAnnotationSession, AnnotationTarget } from '../../types/annotation';
+import { setActiveChatView } from '../../utils/mobileToastBus';
 import type { AlumniProfile } from '../../types';
 import { playSound } from '../../utils/audio';
 import {
@@ -58,8 +59,11 @@ import {
 import { parseStructuredChatMessage } from '../../utils/structuredChat';
 import { ClinicalStatusChip } from '../ClinicalStatusChip';
 import { HuddleModal, extractHuddleRoomFromText } from './HuddleModal';
-import { SharedImageAnnotatorModal } from './SharedImageAnnotatorModal';
 import { RichMessageText, StructuredChatCard } from './StructuredChatCard';
+
+const SharedImageAnnotatorModal = lazy(() =>
+  import('./SharedImageAnnotatorModal').then((m) => ({ default: m.SharedImageAnnotatorModal }))
+);
 
 interface FacebookMessengerDockProps {
   peer: AlumniProfile;
@@ -380,8 +384,9 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
     return () => unsub();
   }, [conversationId, isBlocked, myId]);
 
-  // Auto focus input when restored
+  // Auto focus input when restored & sync active chat view with mobile notification toast host
   useEffect(() => {
+    setActiveChatView('dock', !isMinimized && conversationId ? conversationId : null);
     if (!isMinimized && !loading) {
       inputRef.current?.focus();
       setUnreadCount(0);
@@ -389,6 +394,9 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
         void markConversationRead(conversationId, myId);
       }
     }
+    return () => {
+      setActiveChatView('dock', null);
+    };
   }, [isMinimized, loading, conversationId, myId]);
 
   const handleSend = async (textToSend?: string) => {
@@ -1151,26 +1159,28 @@ export const FacebookMessengerDock: React.FC<FacebookMessengerDockProps> = ({
 
       {/* Shared Clinical Image Annotation Canvas */}
       {annotationTarget && conversationId && !isBlocked && (
-        <SharedImageAnnotatorModal
-          isOpen={true}
-          conversationId={conversationId}
-          myId={myId}
-          myDisplayName={currentUser.fullName || 'SZMC Doctor'}
-          myAvatarUrl={currentUser.avatarUrl || '/szmc-logo.png'}
-          peerName={peer.fullName}
-          target={annotationTarget}
-          onClose={() => setAnnotationTarget(null)}
-          onSaveToThread={async ({ mediaUrl, caption: annotatedCaption, replyToMessageId }) => {
-            const sent = await sendMessage(conversationId, myId, annotatedCaption, {
-              type: 'image',
-              mediaUrl,
-              replyToMessageId: replyToMessageId ?? null,
-            });
-            setMessages((prev) => (prev.some((m) => m.id === sent.id) ? prev : [...prev, sent]));
-            setTimeout(() => scrollToBottom(true), 60);
-            return true;
-          }}
-        />
+        <Suspense fallback={null}>
+          <SharedImageAnnotatorModal
+            isOpen={true}
+            conversationId={conversationId}
+            myId={myId}
+            myDisplayName={currentUser.fullName || 'SZMC Doctor'}
+            myAvatarUrl={currentUser.avatarUrl || '/szmc-logo.png'}
+            peerName={peer.fullName}
+            target={annotationTarget}
+            onClose={() => setAnnotationTarget(null)}
+            onSaveToThread={async ({ mediaUrl, caption: annotatedCaption, replyToMessageId }) => {
+              const sent = await sendMessage(conversationId, myId, annotatedCaption, {
+                type: 'image',
+                mediaUrl,
+                replyToMessageId: replyToMessageId ?? null,
+              });
+              setMessages((prev) => (prev.some((m) => m.id === sent.id) ? prev : [...prev, sent]));
+              setTimeout(() => scrollToBottom(true), 60);
+              return true;
+            }}
+          />
+        </Suspense>
       )}
 
       {/* In-App Audio / Video Huddle Modal */}

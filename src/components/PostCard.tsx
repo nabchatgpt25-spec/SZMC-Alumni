@@ -33,6 +33,7 @@ import { InlinePostPollCard } from './community/InlinePostPollCard';
 import { RepostModal } from './community/RepostModal';
 import { ReportContentModal } from './community/SafetyActionModal';
 import { blockUser } from '../services/communitySafetyService';
+import { VerifiedAvatar } from './verification/VerifiedAvatar';
 
 interface PostCardProps {
   post: PostItem;
@@ -46,7 +47,7 @@ interface PostCardProps {
   onViewProfile?: (userId: number) => void;
 }
 
-export const PostCard: React.FC<PostCardProps> = ({
+export const PostCard: React.FC<PostCardProps> = React.memo(({
   post,
   currentUserId,
   currentUserName = 'SZMC Alumnus',
@@ -86,6 +87,7 @@ export const PostCard: React.FC<PostCardProps> = ({
   usePostCommentsChannel({
     postId: post.id,
     currentUserId,
+    enabled: showComments,
     onCommentInserted: (incomingComment) => {
       setComments((prev) => {
         if (prev.some((c: any) => Number(c.id) === Number(incomingComment.id))) {
@@ -195,6 +197,7 @@ export const PostCard: React.FC<PostCardProps> = ({
       createdAt: new Date().toISOString(),
     };
 
+    const previousComments = comments;
     const updatedList = [...comments, newComment];
     setComments(updatedList);
     if (parentId) {
@@ -211,8 +214,25 @@ export const PostCard: React.FC<PostCardProps> = ({
     });
 
     setSubmittingComment(true);
-    await addComment(post.id, currentUserId, cleanText, currentUserName, currentUserAvatar, parentId);
+    const saved = await addComment(post.id, currentUserId, cleanText, currentUserName, currentUserAvatar, parentId);
     setSubmittingComment(false);
+
+    if (!saved) {
+      setComments(previousComments);
+      onPostUpdated?.({
+        ...post,
+        commentsCount: previousComments.length,
+        comments: previousComments,
+        commentsList: previousComments,
+      });
+      if (parentId) {
+        setReplyText(cleanText);
+        setReplyingToId(parentId);
+      } else {
+        setCommentText(cleanText);
+      }
+      setSafetyFeedback('Could not save your comment right now. Please try again.');
+    }
   };
 
   const images = Array.isArray(post.images) ? post.images.filter(Boolean) : [];
@@ -293,10 +313,14 @@ export const PostCard: React.FC<PostCardProps> = ({
               onClick={() => onViewProfile?.(post.userId)}
               className="shrink-0 cursor-pointer"
             >
-              <img
+              <VerifiedAvatar
                 src={post.avatarUrl || post.authorAvatar || '/assets/aistudio/images__1__2778177d.png'}
                 alt={post.fullName || post.author || 'Alumnus'}
-                className="w-9 h-9 sm:w-10 sm:h-10 rounded-full object-cover border border-slate-200 dark:border-slate-700 shadow-xs"
+                verified={Boolean(post.verified)}
+                profileCompleted={Boolean(post.profileCompleted)}
+                size="md"
+                imgClassName="w-9 h-9 sm:w-10 sm:h-10"
+                unverifiedClassName="rounded-full border border-slate-200 dark:border-slate-700 shadow-xs"
               />
             </button>
             <div className="min-w-0">
@@ -750,4 +774,4 @@ export const PostCard: React.FC<PostCardProps> = ({
       )}
     </>
   );
-};
+});

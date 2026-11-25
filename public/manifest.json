@@ -1,0 +1,32 @@
+{
+  "name": "SZMC Alumni Network",
+  "short_name": "SZMC Alumni",
+  "description": "Shaheed Ziaur Rahman Medical College (SZMC Bogura) Alumni Network with The Quad community feed, Messenger, Doctor Directory, and Blood Lifeline.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "theme_color": "#0369a1",
+  "background_color": "#0f172a",
+  "categories": ["social", "medical", "communication"],
+  "icons": [
+    {
+      "src": "/pwa-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-maskable-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

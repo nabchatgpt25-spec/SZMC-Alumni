@@ -4,6 +4,14 @@ import {
   findAuthUserByEmailOrPhone,
   SUPABASE_TABLES,
 } from '../lib/supabase-server.ts';
+import { validateGovernanceTransition } from '../lib/governance.ts';
+
+const ADMIN_OVERVIEW_CACHE_TTL_MS = 15_000;
+let adminOverviewCache: { data: any; expiresAt: number } | null = null;
+
+export function invalidateAdminOverviewCache(): void {
+  adminOverviewCache = null;
+}
 
 export interface ProfileFilterParams {
   page?: number;
@@ -150,7 +158,7 @@ export async function validateAcademicStreamAndGroup(
     try {
       const { data, error } = await supabaseServer
         .from(SUPABASE_TABLES.ACADEMIC_STREAM_GROUPS)
-        .select('*')
+        .select('id, stream, group_code, expected_group_count, is_active')
         .eq('stream', cleanStream)
         .eq('is_active', true);
 
@@ -203,7 +211,7 @@ export async function getAcademicStreamGroupsConfig() {
     try {
       const { data, error } = await supabaseServer
         .from(SUPABASE_TABLES.ACADEMIC_STREAM_GROUPS)
-        .select('*')
+        .select('id, stream, group_code, expected_group_count, is_active, created_at, updated_at')
         .order('stream')
         .order('group_code');
       if (!error && data && data.length > 0) {
@@ -243,6 +251,7 @@ export async function toggleAcademicStreamGroupActive(params: {
         .select()
         .single();
       if (!error && data) {
+        invalidateAdminOverviewCache();
         return {
           id: data.id,
           stream: data.stream,
@@ -264,6 +273,9 @@ export async function toggleAcademicStreamGroupActive(params: {
 }
 
 export async function getAdminOverviewMetrics() {
+  if (adminOverviewCache && adminOverviewCache.expiresAt > Date.now()) {
+    return adminOverviewCache.data;
+  }
   let totalProfiles = 0;
   let verifiedProfiles = 0;
   let pendingProfiles = 0;
@@ -351,7 +363,7 @@ export async function getAdminOverviewMetrics() {
     }
   }
 
-  return {
+  const result = {
     totalProfiles,
     verifiedProfiles,
     pendingProfiles,
@@ -368,6 +380,11 @@ export async function getAdminOverviewMetrics() {
     streamGroupsConfig,
     recentAuditLogs,
   };
+  adminOverviewCache = {
+    data: result,
+    expiresAt: Date.now() + ADMIN_OVERVIEW_CACHE_TTL_MS,
+  };
+  return result;
 }
 
 export async function queryPaginatedAlumniProfiles(params: ProfileFilterParams) {
@@ -636,6 +653,7 @@ export async function createOrRegisterAlumniProfile(input: {
           .single();
 
         if (!error && data) {
+          invalidateAdminOverviewCache();
           const profileResult = {
             id: Number(data.id),
             fullName: data.full_name,
@@ -730,12 +748,21 @@ export async function findAlumniByCredential(credential: string) {
   const clean = credential.trim().toLowerCase();
   if (isSupabaseServerConfigured && clean) {
     try {
-      let query = supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).select('*');
+      let query = supabaseServer
+        .from(SUPABASE_TABLES.ALUMNI_PROFILES)
+        .select('id, full_name, avatar_url, batch_year, session, college_roll, academic_stream, academic_group, section, profession, position, institution, city, country, phone, phone_ownership_verified, phone_verified_at, phone_verified_by_profile_id, phone_verification_notes, email, blood_group, role, verification_status, is_public, auth_user_id, created_at');
       if (clean.includes('@')) {
         query = query.eq('email', clean);
       } else {
         const cleanDigits = clean.replace(/[^0-9]/g, '');
-        query = query.or(`phone.eq.${clean},phone.eq.+88${clean},phone.eq.+880${cleanDigits}`);
+        if (!cleanDigits) return null;
+        const normalizedE164 = cleanDigits.startsWith('880')
+          ? `+${cleanDigits}`
+          : `+880${cleanDigits.replace(/^0+/, '')}`;
+        const localFormat = `0${cleanDigits.replace(/^(?:880|0)+/, '')}`;
+        query = query.or(
+          `phone.eq.${normalizedE164},phone.eq.${localFormat},phone.eq.+88${localFormat}`
+        );
       }
 
       const { data, error } = await query.maybeSingle();
@@ -804,16 +831,50 @@ export async function findAlumniByCredential(credential: string) {
   return found || null;
 }
 
-export async function updateAlumniPassword(profileId: number, passwordHash: string) {
+export async function updateAlumniPassword(
+  profileId: number,
+  passwordHash: string,
+  rawNewPassword?: string
+) {
   if (isSupabaseServerConfigured && profileId) {
     try {
-      await supabaseServer
+      const { data: targetProfile, error: fetchErr } = await supabaseServer
+        .from(SUPABASE_TABLES.ALUMNI_PROFILES)
+        .select('id, auth_user_id')
+        .eq('id', profileId)
+        .maybeSingle();
+
+      if (fetchErr) {
+        console.warn('Supabase updateAlumniPassword lookup error:', fetchErr);
+      }
+
+      if (targetProfile?.auth_user_id && rawNewPassword) {
+        const { error: authUpdateErr } = await supabaseServer.auth.admin.updateUserById(
+          targetProfile.auth_user_id,
+          { password: rawNewPassword }
+        );
+        if (authUpdateErr) {
+          throw new Error(authUpdateErr.message || 'Could not update Supabase Auth password.');
+        }
+      }
+
+      const { error: updateErr } = await supabaseServer
         .from(SUPABASE_TABLES.ALUMNI_PROFILES)
         .update({ updated_at: new Date().toISOString() })
         .eq('id', profileId);
+
+      if (updateErr) {
+        throw new Error(updateErr.message || 'Could not update profile timestamp.');
+      }
+
+      const foundInMem = inMemoryAlumniProfiles.find((p) => p.id === profileId);
+      if (foundInMem) {
+        foundInMem.passwordHash = passwordHash;
+      }
       return true;
-    } catch (err) {
+    } catch (err: any) {
       console.warn('Supabase updateAlumniPassword error:', err);
+      throw err;
     }
   }
 
@@ -827,13 +888,34 @@ export async function updateAlumniPassword(profileId: number, passwordHash: stri
 export async function deleteAlumniProfile(profileId: number) {
   if (isSupabaseServerConfigured && profileId) {
     try {
+      const { data: existing } = await supabaseServer
+        .from(SUPABASE_TABLES.ALUMNI_PROFILES)
+        .select('id, auth_user_id')
+        .eq('id', profileId)
+        .maybeSingle();
+
       const { error } = await supabaseServer
         .from(SUPABASE_TABLES.ALUMNI_PROFILES)
         .delete()
         .eq('id', profileId);
-      return !error;
+
+      if (error) {
+        console.warn('Supabase deleteAlumniProfile error:', error.message);
+        return false;
+      }
+
+      if (existing?.auth_user_id) {
+        await supabaseServer.auth.admin
+          .deleteUser(existing.auth_user_id)
+          .catch((authErr: any) =>
+            console.warn('Supabase auth user delete notice:', authErr?.message || authErr)
+          );
+      }
+
+      invalidateAdminOverviewCache();
     } catch (err) {
       console.warn('Supabase deleteAlumniProfile error:', err);
+      return false;
     }
   }
 
@@ -873,14 +955,28 @@ export async function updateAlumniProfileRecord(
   if (updates.specialtyOther !== undefined) dbUpdates.specialty_other = updates.specialtyOther;
   if (updates.bloodGroup !== undefined) dbUpdates.blood_group = updates.bloodGroup;
   if (updates.isPublic !== undefined) dbUpdates.is_public = updates.isPublic;
+  if (updates.showContactToVerified !== undefined) {
+    dbUpdates.show_contact_to_verified = Boolean(updates.showContactToVerified);
+  }
+  if (updates.userPreferences !== undefined && typeof updates.userPreferences === 'object') {
+    dbUpdates.user_preferences = updates.userPreferences;
+  }
 
   // 1. Update in Supabase
   if (isSupabaseServerConfigured && profileId) {
     try {
-      await supabaseServer
+      const { error } = await supabaseServer
         .from(SUPABASE_TABLES.ALUMNI_PROFILES)
         .update(dbUpdates)
         .eq('id', profileId);
+      if (error && dbUpdates.user_preferences !== undefined) {
+        // Fallback cleanly if migration 030 (user_preferences column) has not been applied yet
+        const { user_preferences: _ignored, ...compatUpdates } = dbUpdates;
+        await supabaseServer
+          .from(SUPABASE_TABLES.ALUMNI_PROFILES)
+          .update(compatUpdates)
+          .eq('id', profileId);
+      }
     } catch (err) {
       console.warn('Supabase updateAlumniProfileRecord error:', err);
     }
@@ -910,75 +1006,78 @@ export async function adminUpdateAlumniGovernance(params: {
   actorEmail: string;
   actorRole: string;
 }) {
-  if (params.role !== undefined) {
-    const supportedRoles = ['member', 'moderator', 'admin'];
-    if (params.actorRole !== 'admin' || !supportedRoles.includes(params.role)) {
-      throw new Error('Only administrators may assign supported database roles.');
-    }
+  if (!isSupabaseServerConfigured || !params.profileId) {
+    throw new Error('Supabase is required to update profile governance.');
   }
 
-  if (params.verificationStatus !== undefined && isSupabaseServerConfigured) {
-    const { data: target, error: targetError } = await supabaseServer
+  const { data: target, error: targetError } = await supabaseServer
+    .from(SUPABASE_TABLES.ALUMNI_PROFILES)
+    .select('auth_user_id, role')
+    .eq('id', params.profileId)
+    .maybeSingle();
+
+  if (targetError || !target) {
+    throw new Error('Alumni profile not found.');
+  }
+
+  const targetRole = String(target.role || 'member');
+  validateGovernanceTransition({
+    actorUid: params.actorUid,
+    actorRole: params.actorRole,
+    targetAuthUid: target.auth_user_id,
+    targetCurrentRole: targetRole,
+    requestedRole: params.role,
+    requestedVerificationStatus: params.verificationStatus,
+  });
+
+  try {
+    const updates: Record<string, any> = {
+      updated_at: new Date().toISOString(),
+    };
+    if (params.verificationStatus) updates.verification_status = params.verificationStatus;
+    if (params.role) updates.role = params.role;
+    if (params.academicStream) updates.academic_stream = params.academicStream;
+    if (params.academicGroup !== undefined) updates.academic_group = params.academicGroup;
+    if (params.accountStatus !== undefined) updates.is_public = params.accountStatus !== 'suspended';
+
+    const { data, error } = await supabaseServer
       .from(SUPABASE_TABLES.ALUMNI_PROFILES)
-      .select('auth_user_id, role')
+      .update(updates)
       .eq('id', params.profileId)
-      .maybeSingle();
-    if (targetError || !target) throw new Error('Alumni profile not found.');
-    if (target.auth_user_id === params.actorUid) {
-      throw new Error('Administrators cannot change their own verification status.');
+      .select()
+      .single();
+
+    if (error || !data) {
+      throw new Error(error?.message || 'Failed to update profile governance in Supabase.');
     }
-    if (target.role === 'admin' && params.actorRole !== 'admin') {
-      throw new Error('Only administrators may change an administrator profile.');
-    }
+
+    await recordSecurityAuditLog({
+      actorUid: params.actorUid,
+      actorEmail: params.actorEmail,
+      actorRole: params.actorRole,
+      action: 'UPDATE_PROFILE_GOVERNANCE',
+      targetType: 'alumni_profile',
+      targetId: String(params.profileId),
+      severity: 'info',
+      summary: `Updated profile governance for ${data.full_name} (ID ${data.id}).`,
+    });
+
+    invalidateAdminOverviewCache();
+
+    return {
+      id: Number(data.id),
+      fullName: data.full_name,
+      verificationStatus: data.verification_status,
+      role: data.role,
+      accountStatus: data.is_public ? 'active' : 'suspended',
+      academicStream: data.academic_stream,
+      academicGroup: data.academic_group,
+      updatedAt: data.updated_at,
+    };
+  } catch (err) {
+    console.warn('Supabase adminUpdateAlumniGovernance error:', err);
+    throw err;
   }
-
-  if (isSupabaseServerConfigured && params.profileId) {
-    try {
-      const updates: Record<string, any> = {
-        updated_at: new Date().toISOString(),
-      };
-      if (params.verificationStatus) updates.verification_status = params.verificationStatus;
-      if (params.role) updates.role = params.role;
-      if (params.academicStream) updates.academic_stream = params.academicStream;
-      if (params.academicGroup !== undefined) updates.academic_group = params.academicGroup;
-      if (params.accountStatus !== undefined) updates.is_public = params.accountStatus !== 'suspended';
-
-      const { data, error } = await supabaseServer
-        .from(SUPABASE_TABLES.ALUMNI_PROFILES)
-        .update(updates)
-        .eq('id', params.profileId)
-        .select()
-        .single();
-
-      if (!error && data) {
-        await recordSecurityAuditLog({
-          actorUid: params.actorUid,
-          actorEmail: params.actorEmail,
-          actorRole: params.actorRole,
-          action: 'UPDATE_PROFILE_GOVERNANCE',
-          targetType: 'alumni_profile',
-          targetId: String(params.profileId),
-          severity: 'info',
-          summary: `Updated profile governance for ${data.full_name} (ID ${data.id}).`,
-        });
-        return {
-          id: Number(data.id),
-          fullName: data.full_name,
-          verificationStatus: data.verification_status,
-          role: data.role,
-          accountStatus: data.is_public ? 'active' : 'suspended',
-          academicStream: data.academic_stream,
-          academicGroup: data.academic_group,
-          updatedAt: data.updated_at,
-        };
-      }
-    } catch (err) {
-      console.warn('Supabase adminUpdateAlumniGovernance error:', err);
-      throw err;
-    }
-  }
-
-  throw new Error('Supabase is required to update profile governance.');
 }
 
 export async function adminVerifyAlumniPhoneOwnership(params: {
@@ -996,7 +1095,7 @@ export async function adminVerifyAlumniPhoneOwnership(params: {
       // 1. Fetch target profile
       const { data: profile, error: fetchErr } = await supabaseServer
         .from(SUPABASE_TABLES.ALUMNI_PROFILES)
-        .select('*')
+        .select('id, auth_user_id, phone, full_name, email')
         .eq('id', profileId)
         .single();
 
@@ -1252,6 +1351,7 @@ export async function reviewVerificationSubmission(params: {
           summary: `${params.decision.toUpperCase()} document verification for submission ID ${params.submissionId}.`,
         });
 
+        invalidateAdminOverviewCache();
         return data;
       }
     } catch (err) {
@@ -1333,6 +1433,7 @@ export async function moderateBloodEmergency(params: {
           severity: 'info',
           summary: `Moderated blood request ${params.id} to "${params.status}".`,
         });
+        invalidateAdminOverviewCache();
         return data;
       }
     } catch (err) {
@@ -1408,7 +1509,10 @@ export async function createOrUpdateOfficialNotice(params: {
           .eq('id', params.id)
           .select()
           .single();
-        if (!error && data) return data;
+        if (!error && data) {
+          invalidateAdminOverviewCache();
+          return data;
+        }
       } else {
         const { data, error } = await supabaseServer
           .from(SUPABASE_TABLES.OFFICIAL_NOTICES)
@@ -1427,7 +1531,10 @@ export async function createOrUpdateOfficialNotice(params: {
           })
           .select()
           .single();
-        if (!error && data) return data;
+        if (!error && data) {
+          invalidateAdminOverviewCache();
+          return data;
+        }
       }
     } catch (err) {
       console.warn('Supabase createOrUpdateOfficialNotice error:', err);

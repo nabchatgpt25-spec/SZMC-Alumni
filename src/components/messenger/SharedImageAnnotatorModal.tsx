@@ -1020,14 +1020,14 @@ export const SharedImageAnnotatorModal: React.FC<SharedImageAnnotatorModalProps>
         liveLayer.batchDraw();
       }
       const pixelRatio = Math.min(2, Math.max(1, 1400 / Math.max(1, stage.width())));
-      const dataUrl = stage.toDataURL({ pixelRatio, mimeType: 'image/png' });
+      const dataUrl = stage.toDataURL({ pixelRatio, mimeType: 'image/jpeg', quality: 0.96 });
       if (liveLayer) {
         liveLayer.visible(true);
         liveLayer.batchDraw();
       }
 
       const blob = dataUrlToBlob(dataUrl);
-      const file = new File([blob], `szmc-annotated-${Date.now()}.png`, { type: 'image/png' });
+      const file = new File([blob], `szmc-annotated-${Date.now()}.jpg`, { type: 'image/jpeg' });
       const uploadedUrl = await uploadChatImage(file, conversationId);
 
       const ok = await onSaveToThread({

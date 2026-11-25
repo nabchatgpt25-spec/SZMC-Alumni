@@ -43,6 +43,73 @@ export interface SocialGraphSnapshot {
 const LOCAL_FOLLOWS_KEY = 'szmc_quad_local_follows_v1';
 const LOCAL_CONNECTIONS_KEY = 'szmc_quad_local_connections_v1';
 
+export const SOCIAL_GRAPH_CHANGED_EVENT = 'szmc_social_graph_changed';
+
+export interface SocialGraphChangeDetail {
+  type: 'follow' | 'connection';
+  actorUserId: number;
+  targetUserId: number;
+  isFollowing?: boolean;
+  followersDelta?: number;
+}
+
+const snapshotCache = new Map<string, SocialGraphSnapshot>();
+
+function getSnapshotCacheKey(myUserId: number | undefined, targetUserId: number): string {
+  return `${myUserId ?? 0}:${targetUserId}`;
+}
+
+export function getCachedSocialGraphSnapshot(
+  myUserId: number | undefined,
+  targetUserId: number
+): SocialGraphSnapshot | null {
+  if (!targetUserId) return null;
+  return snapshotCache.get(getSnapshotCacheKey(myUserId, targetUserId)) ?? null;
+}
+
+export function emitSocialGraphChange(detail: SocialGraphChangeDetail): void {
+  // Synchronize any cached snapshots affected by this mutation
+  if (detail.type === 'follow' && typeof detail.isFollowing === 'boolean') {
+    const delta = detail.followersDelta ?? (detail.isFollowing ? 1 : -1);
+    for (const [key, cached] of snapshotCache.entries()) {
+      const [viewerStr, targetStr] = key.split(':');
+      const viewerId = Number(viewerStr);
+      const targetId = Number(targetStr);
+      if (targetId === detail.targetUserId) {
+        snapshotCache.set(key, {
+          ...cached,
+          isFollowing: viewerId === detail.actorUserId ? detail.isFollowing : cached.isFollowing,
+          followersCount: Math.max(
+            detail.isFollowing && viewerId === detail.actorUserId ? 1 : 0,
+            cached.followersCount + delta
+          ),
+        });
+      } else if (targetId === detail.actorUserId) {
+        snapshotCache.set(key, {
+          ...cached,
+          followingCount: Math.max(0, cached.followingCount + delta),
+        });
+      }
+    }
+  }
+
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent<SocialGraphChangeDetail>(SOCIAL_GRAPH_CHANGED_EVENT, { detail }));
+  }
+}
+
+export function subscribeSocialGraphChanges(
+  handler: (detail: SocialGraphChangeDetail) => void
+): () => void {
+  if (typeof window === 'undefined') return () => {};
+  const listener = (event: Event) => {
+    const custom = event as CustomEvent<SocialGraphChangeDetail>;
+    if (custom?.detail) handler(custom.detail);
+  };
+  window.addEventListener(SOCIAL_GRAPH_CHANGED_EVENT, listener);
+  return () => window.removeEventListener(SOCIAL_GRAPH_CHANGED_EVENT, listener);
+}
+
 function readLocalSet(key: string): string[] {
   if (typeof window === 'undefined') return [];
   try {
@@ -59,6 +126,21 @@ function writeLocalSet(key: string, items: string[]): void {
   try {
     localStorage.setItem(key, JSON.stringify(Array.from(new Set(items))));
   } catch {}
+}
+
+function countLocalFollowMetrics(targetUserId: number, localFollows: string[]): {
+  followersCount: number;
+  followingCount: number;
+} {
+  const followerSuffix = `:${targetUserId}`;
+  const followingPrefix = `${targetUserId}:`;
+  let followersCount = 0;
+  let followingCount = 0;
+  for (const entry of localFollows) {
+    if (entry.endsWith(followerSuffix)) followersCount += 1;
+    if (entry.startsWith(followingPrefix)) followingCount += 1;
+  }
+  return { followersCount, followingCount };
 }
 
 /**
@@ -112,13 +194,18 @@ export async function fetchSocialGraphSnapshot(
   const localFollowKey = myUserId ? `${myUserId}:${targetUserId}` : '';
   const localFollows = readLocalSet(LOCAL_FOLLOWS_KEY);
   const localIsFollowing = Boolean(localFollowKey && localFollows.includes(localFollowKey));
+  const localCounts = countLocalFollowMetrics(targetUserId, localFollows);
+  const cacheKey = getSnapshotCacheKey(myUserId, targetUserId);
 
   if (!isSupabaseConfigured) {
-    return {
+    const localSnap: SocialGraphSnapshot = {
       ...defaultSnap,
       isFollowing: localIsFollowing,
-      followersCount: localIsFollowing ? 1 : 0,
+      followersCount: localCounts.followersCount,
+      followingCount: localCounts.followingCount,
     };
+    snapshotCache.set(cacheKey, localSnap);
+    return localSnap;
   }
 
   try {
@@ -171,21 +258,44 @@ export async function fetchSocialGraphSnapshot(
     }
 
     const followRow = (myFollowRes as any)?.data;
-    const isFollowing = Boolean(followRow?.id) || localIsFollowing;
+    const hasDbFollowRow = Boolean(followRow?.id);
+    const isFollowing = hasDbFollowRow || localIsFollowing;
 
-    return {
+    const rawDbFollowers =
+      typeof (followersRes as any)?.count === 'number' ? (followersRes as any).count : null;
+    const rawDbFollowing =
+      typeof (followingRes as any)?.count === 'number' ? (followingRes as any).count : null;
+
+    // Reconcile DB counts with local fallback follows so counts never show 0 when following
+    const baseFollowers =
+      rawDbFollowers !== null
+        ? rawDbFollowers + (localIsFollowing && !hasDbFollowRow ? 1 : 0)
+        : localCounts.followersCount;
+    const followersCount = Math.max(isFollowing ? 1 : 0, baseFollowers, localCounts.followersCount);
+    const followingCount =
+      rawDbFollowing !== null
+        ? Math.max(rawDbFollowing, localCounts.followingCount)
+        : localCounts.followingCount;
+
+    const resolvedSnap: SocialGraphSnapshot = {
       connectionStatus,
       connectionId,
       isFollowing,
-      followersCount: typeof (followersRes as any)?.count === 'number' ? (followersRes as any).count : (isFollowing ? 1 : 0),
-      followingCount: typeof (followingRes as any)?.count === 'number' ? (followingRes as any).count : 0,
+      followersCount,
+      followingCount,
       connectionsCount: typeof (connCountRes as any)?.count === 'number' ? (connCountRes as any).count : 0,
     };
+    snapshotCache.set(cacheKey, resolvedSnap);
+    return resolvedSnap;
   } catch {
-    return {
+    const fallbackSnap: SocialGraphSnapshot = {
       ...defaultSnap,
       isFollowing: localIsFollowing,
+      followersCount: localCounts.followersCount,
+      followingCount: localCounts.followingCount,
     };
+    snapshotCache.set(cacheKey, fallbackSnap);
+    return fallbackSnap;
   }
 }
 
@@ -354,6 +464,13 @@ export async function toggleFollowUser(
           .eq('following_id', targetUserId);
       } catch {}
     }
+    emitSocialGraphChange({
+      type: 'follow',
+      actorUserId: myUserId,
+      targetUserId,
+      isFollowing: false,
+      followersDelta: -1,
+    });
     return { success: true, isFollowing: false };
   } else {
     writeLocalSet(LOCAL_FOLLOWS_KEY, [...currentLocal, pairKey]);
@@ -377,6 +494,13 @@ export async function toggleFollowUser(
         }
       } catch {}
     }
+    emitSocialGraphChange({
+      type: 'follow',
+      actorUserId: myUserId,
+      targetUserId,
+      isFollowing: true,
+      followersDelta: 1,
+    });
     return { success: true, isFollowing: true };
   }
 }

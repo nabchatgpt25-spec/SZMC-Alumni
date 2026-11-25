@@ -517,6 +517,7 @@ function ensureRealtimeSiteConfigStream() {
       mergedPatch.featuredAlumni = localCurrent.featuredAlumni;
     }
     const merged: SiteConfig = { ...localCurrent, ...mergedPatch };
+    memorySiteConfig = merged;
     try {
       localStorage.setItem(SITE_CONFIG_STORAGE_KEY, JSON.stringify(merged));
     } catch {}
@@ -544,7 +545,10 @@ function ensureRealtimeSiteConfigStream() {
     .catch(() => {});
 }
 
+let memorySiteConfig: SiteConfig | null = null;
+
 export function getSiteConfig(): SiteConfig {
+  if (memorySiteConfig) return memorySiteConfig;
   try {
     if (typeof window !== 'undefined') {
       const stored = localStorage.getItem(SITE_CONFIG_STORAGE_KEY);
@@ -564,19 +568,22 @@ export function getSiteConfig(): SiteConfig {
         ) {
           parsed.faviconUrl = '/szmc-logo.png';
         }
-        return { ...FACTORY_DEFAULT_SITE_CONFIG, ...parsed };
+        memorySiteConfig = { ...FACTORY_DEFAULT_SITE_CONFIG, ...parsed };
+        return memorySiteConfig;
       }
     }
   } catch (e) {
     console.warn('Failed to load site config from localStorage', e);
   }
-  return FACTORY_DEFAULT_SITE_CONFIG;
+  memorySiteConfig = FACTORY_DEFAULT_SITE_CONFIG;
+  return memorySiteConfig;
 }
 
 export function saveSiteConfig(newConfig: Partial<SiteConfig>): SiteConfig {
   try {
     const current = getSiteConfig();
     const merged: SiteConfig = { ...current, ...newConfig };
+    memorySiteConfig = merged;
     if (typeof window !== 'undefined') {
       localStorage.setItem(SITE_CONFIG_STORAGE_KEY, JSON.stringify(merged));
       applyPortalTypographyToDom(merged);
@@ -595,6 +602,7 @@ export function saveSiteConfig(newConfig: Partial<SiteConfig>): SiteConfig {
 
 export function resetSiteConfigToFactory(): SiteConfig {
   try {
+    memorySiteConfig = FACTORY_DEFAULT_SITE_CONFIG;
     if (typeof window !== 'undefined') {
       localStorage.setItem(SITE_CONFIG_STORAGE_KEY, JSON.stringify(FACTORY_DEFAULT_SITE_CONFIG));
       applyPortalTypographyToDom(FACTORY_DEFAULT_SITE_CONFIG);
@@ -858,6 +866,55 @@ export async function saveSiteConfigToServer(configPatch: Partial<SiteConfig>): 
   }
 }
 
+let remoteSiteConfigPromise: Promise<SiteConfig | null> | null = null;
+
+function fetchRemoteSiteConfigOnce(): Promise<SiteConfig | null> {
+  if (remoteSiteConfigPromise) return remoteSiteConfigPromise;
+
+  remoteSiteConfigPromise = (async () => {
+    // 1. Fetch from Supabase site_settings first
+    try {
+      const { supabase, isSupabaseConfigured } = await import('../lib/supabase');
+      if (isSupabaseConfigured && supabase) {
+        const { data, error } = await supabase
+          .from('site_settings')
+          .select('key, value')
+          .in('key', ['master_site_config', 'hall_of_fame']);
+
+        if (!error && Array.isArray(data) && data.length > 0) {
+          const masterRow = data.find((r) => r.key === 'master_site_config');
+          const hofRow = data.find((r) => r.key === 'hall_of_fame');
+          const patch: Partial<SiteConfig> = (masterRow?.value as any) || {};
+          const hofMembers = hofRow?.value?.members || hofRow?.value;
+          if (Array.isArray(hofMembers)) {
+            patch.featuredAlumni = hofMembers;
+          }
+          if (Object.keys(patch).length > 0) {
+            return saveSiteConfig(patch);
+          }
+        }
+      }
+    } catch (supaErr) {
+      console.warn('Supabase site_settings load notice:', supaErr);
+    }
+
+    // 2. Secondary fallback: Express server cache
+    try {
+      const r = await fetch('/api/site-config');
+      if (r.ok) {
+        const data = await r.json();
+        if (data?.config && typeof data.config === 'object') {
+          return saveSiteConfig(data.config);
+        }
+      }
+    } catch {}
+
+    return null;
+  })();
+
+  return remoteSiteConfigPromise;
+}
+
 export function useSiteConfig() {
   const [config, setConfig] = useState<SiteConfig>(getSiteConfig);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
@@ -868,51 +925,11 @@ export function useSiteConfig() {
     let isMounted = true;
     ensureRealtimeSiteConfigStream();
 
-    // Primary Source of Truth: Supabase public.site_settings
-    const loadRemoteConfig = async () => {
-      // 1. Fetch from Supabase site_settings first
-      try {
-        const { supabase, isSupabaseConfigured } = await import('../lib/supabase');
-        if (isSupabaseConfigured && supabase) {
-          const { data, error } = await supabase
-            .from('site_settings')
-            .select('key, value')
-            .in('key', ['master_site_config', 'hall_of_fame']);
-
-          if (!error && Array.isArray(data) && data.length > 0 && isMounted) {
-            const masterRow = data.find((r) => r.key === 'master_site_config');
-            const hofRow = data.find((r) => r.key === 'hall_of_fame');
-            const patch: Partial<SiteConfig> = (masterRow?.value as any) || {};
-            const hofMembers = hofRow?.value?.members || hofRow?.value;
-            if (Array.isArray(hofMembers)) {
-              patch.featuredAlumni = hofMembers;
-            }
-            if (Object.keys(patch).length > 0) {
-              const merged = saveSiteConfig(patch); // Mirror to localStorage
-              setConfig(merged);
-              return;
-            }
-          }
-        }
-      } catch (supaErr) {
-        console.warn('Supabase site_settings load notice:', supaErr);
+    fetchRemoteSiteConfigOnce().then((merged) => {
+      if (merged && isMounted) {
+        setConfig(merged);
       }
-
-      // 2. Secondary fallback: Express server cache
-      try {
-        const r = await fetch('/api/site-config');
-        if (r.ok) {
-          const data = await r.json();
-          if (data?.config && typeof data.config === 'object' && isMounted) {
-            const merged = saveSiteConfig(data.config);
-            setConfig(merged);
-            return;
-          }
-        }
-      } catch {}
-    };
-
-    loadRemoteConfig();
+    });
 
     const handleUpdate = (e: Event) => {
       const detail = (e as CustomEvent<SiteConfig>).detail;
@@ -1106,46 +1123,12 @@ export function resetAutoVerification7Days(): SiteConfig {
   return updated;
 }
 
-// Automatically apply cached typography & global theme & sync latest site_settings from Supabase on client initialization
+// Apply cached typography & global theme immediately for zero FOUC.
+// Live Supabase site_settings hydration & Realtime sync are handled centrally by AdminSettingsProvider.
 if (typeof window !== 'undefined') {
   const initialCfg = getSiteConfig();
   applyPortalTypographyToDom(initialCfg);
   applyGlobalThemeToDom(initialCfg.globalTheme);
-  ensureRealtimeSiteConfigStream();
-  import('../lib/supabase').then(({ supabase, isSupabaseConfigured }) => {
-    if (isSupabaseConfigured) {
-      supabase
-        .from('site_settings')
-        .select('key, value')
-        .in('key', ['auto_verification', 'master_site_config', 'global_theme_config'])
-        .then(
-          ({ data }) => {
-            if (!Array.isArray(data)) return;
-            const masterRow = data.find((r) => r.key === 'master_site_config');
-            const themeRow = data.find((r) => r.key === 'global_theme_config');
-            if (masterRow?.value && typeof masterRow.value === 'object') {
-              const patch: Partial<SiteConfig> = { ...(masterRow.value as Partial<SiteConfig>) };
-              if (themeRow?.value && typeof themeRow.value === 'object') {
-                patch.globalTheme = themeRow.value as GlobalThemeConfig;
-              }
-              saveSiteConfig(patch);
-            } else if (themeRow?.value && typeof themeRow.value === 'object') {
-              saveSiteConfig({ globalTheme: themeRow.value as GlobalThemeConfig });
-            }
-            const autoRow = data.find((r) => r.key === 'auto_verification');
-            if (autoRow?.value) {
-              const v = autoRow.value;
-              saveSiteConfig({
-                autoVerificationEnabled: v.enabled !== false,
-                autoVerificationPaused: Boolean(v.paused),
-                autoVerificationUntil: v.until || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
-              });
-            }
-          },
-          () => {}
-        );
-    }
-  });
 }
 
 

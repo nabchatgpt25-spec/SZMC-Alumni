@@ -10,6 +10,7 @@ import {
   UserPlus
 } from 'lucide-react';
 import { AlumniProfile, BatchSummary } from '../../types';
+import { VerifiedAvatar } from '../verification/VerifiedAvatar';
 
 interface BatchMembersModalProps {
   batch: BatchSummary | null;
@@ -72,17 +73,23 @@ export const BatchMembersModal: React.FC<BatchMembersModalProps> = ({
                   }}
                   className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/80 hover:border-blue-500 dark:hover:border-blue-500 hover:shadow-md transition-all cursor-pointer flex items-center gap-3.5 group"
                 >
-                  <img
+                  <VerifiedAvatar
                     src={alumnus.avatarUrl}
                     alt={alumnus.fullName}
-                    className="w-13 h-13 rounded-xl object-cover border border-slate-200 dark:border-slate-700 group-hover:scale-105 transition-transform"
+                    verificationStatus={alumnus.verificationStatus}
+                    profile={alumnus}
+                    size="lg"
+                    imgClassName="w-13 h-13"
+                    unverifiedClassName="rounded-xl border border-slate-200 dark:border-slate-700 group-hover:scale-105 transition-transform"
                   />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5">
                       <h4 className="text-xs font-bold text-slate-900 dark:text-white truncate group-hover:text-blue-600 dark:group-hover:text-blue-400">
                         {alumnus.fullName}
                       </h4>
-                      <ShieldCheck className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400 flex-shrink-0" />
+                      {alumnus.verificationStatus === 'verified' && (
+                        <ShieldCheck className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400 flex-shrink-0" />
+                      )}
                     </div>
                     <p className="text-[11px] text-blue-600 dark:text-blue-400 font-medium truncate">
                       {alumnus.position || 'Professional'}

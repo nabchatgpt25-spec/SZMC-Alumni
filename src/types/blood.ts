@@ -43,6 +43,7 @@ export interface BloodDonorProfile {
   whatsapp?: string;
   email?: string;
   verificationStatus?: 'verified' | 'pending_vouch' | 'unverified';
+  profileCompleted?: boolean;
   bloodGroup: BloodGroup;
   isRegisteredDonor: boolean;
   availability: BloodDonorAvailability;

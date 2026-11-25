@@ -13,11 +13,12 @@ import {
 } from 'lucide-react';
 import { GalleryAlbum } from '../../types';
 import { useAuth } from '../../context/AuthContext';
+import { uploadGalleryMediaFile } from '../../services/supabaseService';
 
 interface CreateAlbumModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onCreateAlbum: (album: GalleryAlbum) => void;
+  onCreateAlbum: (album: GalleryAlbum) => Promise<void> | void;
 }
 
 interface PresetCoverItem {
@@ -89,73 +90,99 @@ export const CreateAlbumModal: React.FC<CreateAlbumModalProps> = ({
   const [batchYear, setBatchYear] = useState<number>(0);
   const [selectedCover, setSelectedCover] = useState<string>(PRESET_COVERS[0].url);
   const [customCoverUrl, setCustomCoverUrl] = useState('');
+  const [coverFile, setCoverFile] = useState<File | null>(null);
   const [coverSourceMode, setCoverSourceMode] = useState<'preset' | 'custom' | 'file'>('preset');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onload = (uploadEvent) => {
-        const result = uploadEvent.target?.result as string;
-        if (result) {
-          setSelectedCover(result);
-          setCoverSourceMode('file');
-        }
-      };
-      reader.readAsDataURL(file);
+      setCoverFile(file);
+      setSubmitError(null);
+      const previewUrl = URL.createObjectURL(file);
+      setSelectedCover(previewUrl);
+      setCoverSourceMode('file');
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!title.trim()) return;
+    if (!title.trim() || isSubmitting) return;
 
-    const finalCover =
-      coverSourceMode === 'custom' && customCoverUrl.trim()
-        ? customCoverUrl.trim()
-        : selectedCover;
+    setIsSubmitting(true);
+    setSubmitError(null);
 
-    const authorName = currentUser?.fullName || 'SZMC Alumnus';
-    const authorId = currentUser?.id;
-    const authorAvatar =
-      currentUser?.avatarUrl ||
-      'https://images.unsplash.com/photo-1622253692010-333f2da6031d?w=200&auto=format&fit=crop&q=80';
-    const authorBatch = currentUser?.batchYear || batchYear || 20;
+    try {
+      let finalCover =
+        coverSourceMode === 'custom' && customCoverUrl.trim()
+          ? customCoverUrl.trim()
+          : selectedCover;
 
-    const newAlbum: GalleryAlbum = {
-      id: Date.now(),
-      title: title.trim(),
-      description: description.trim() || 'A cherished collection of SZMC doctor and campus memories.',
-      category,
-      date: date.trim() || 'Recent Collection',
-      location: location.trim() || 'SZMC Campus, Silimpur, Bogura',
-      batchYear,
-      photosCount: 1,
-      coverUrl: finalCover,
-      createdById: authorId,
-      createdBy: authorName,
-      createdDate: 'Just now',
-      photos: [
-        {
-          id: `p-${Date.now()}`,
-          url: finalCover,
-          caption: `${title.trim()} - Album Cover Photo`,
-          uploaderId: authorId,
-          uploaderName: authorName,
-          uploaderAvatar: authorAvatar,
-          batchYear: authorBatch,
-          uploadedAt: 'Today',
-          likesCount: 1,
-          likedByMe: true,
-          tags: ['Cover', category],
-        },
-      ],
-    };
+      if (coverSourceMode === 'file' && coverFile) {
+        const uploaded = await uploadGalleryMediaFile(coverFile);
+        if (!uploaded?.url || uploaded.url.startsWith('blob:')) {
+          setSubmitError('Could not upload cover photograph to storage. Please try again.');
+          setIsSubmitting(false);
+          return;
+        }
+        finalCover = uploaded.url;
+      }
 
-    onCreateAlbum(newAlbum);
-    onClose();
+      const authorName = currentUser?.fullName || 'SZMC Alumnus';
+      const authorId = currentUser?.id;
+      const authorAvatar =
+        currentUser?.avatarUrl ||
+        'https://images.unsplash.com/photo-1622253692010-333f2da6031d?w=200&auto=format&fit=crop&q=80';
+      const authorBatch = batchYear || currentUser?.batchYear || undefined;
+
+      const newAlbum: GalleryAlbum = {
+        id: Date.now(),
+        title: title.trim(),
+        description: description.trim() || 'A cherished collection of SZMC doctor and campus memories.',
+        category,
+        date: date.trim() || 'Recent Collection',
+        location: location.trim() || 'SZMC Campus, Silimpur, Bogura',
+        batchYear,
+        photosCount: 1,
+        coverUrl: finalCover,
+        createdById: authorId,
+        createdBy: authorName,
+        createdDate: new Date().toISOString(),
+        photos: [
+          {
+            id: `p-${Date.now()}`,
+            url: finalCover,
+            caption: `${title.trim()} - Album Cover Photo`,
+            uploaderId: authorId,
+            uploaderName: authorName,
+            uploaderAvatar: authorAvatar,
+            batchYear: authorBatch,
+            uploadedAt: new Date().toISOString(),
+            likesCount: 0,
+            likedByMe: false,
+            tags: ['Cover', category],
+            mediaType: 'image',
+          },
+        ],
+      };
+
+      await onCreateAlbum(newAlbum);
+      setTitle('');
+      setDescription('');
+      setDate('');
+      setCoverFile(null);
+      setCustomCoverUrl('');
+      setSelectedCover(PRESET_COVERS[0].url);
+      setCoverSourceMode('preset');
+      setIsSubmitting(false);
+      onClose();
+    } catch (err: any) {
+      setSubmitError(err?.message || 'Failed to create album.');
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -393,31 +420,47 @@ export const CreateAlbumModal: React.FC<CreateAlbumModalProps> = ({
             {/* File Upload Zone */}
             {coverSourceMode === 'file' && (
               <label className="flex flex-col items-center justify-center p-4 border-2 border-dashed border-slate-200 dark:border-slate-700 hover:border-blue-500 rounded-2xl cursor-pointer bg-slate-50 dark:bg-slate-800/50 transition-colors">
-                <UploadCloud className="w-6 h-6 text-blue-600 mb-1" />
+                {coverFile && selectedCover ? (
+                  <img
+                    src={selectedCover}
+                    alt="Selected cover preview"
+                    className="w-24 h-16 object-cover rounded-xl mb-2 border border-slate-200 dark:border-slate-700"
+                  />
+                ) : (
+                  <UploadCloud className="w-6 h-6 text-blue-600 mb-1" />
+                )}
                 <span className="text-xs font-bold text-slate-700 dark:text-slate-200">
-                  Click to choose cover photograph from device
+                  {coverFile ? coverFile.name : 'Click to choose cover photograph from device'}
                 </span>
-                <span className="text-[10px] text-slate-400">PNG, JPG, or WEBP up to 10MB</span>
+                <span className="text-[10px] text-slate-400">PNG, JPG, or WEBP up to 20MB (uploaded to Supabase Storage)</span>
                 <input type="file" accept="image/*" onChange={handleFileChange} className="hidden" />
               </label>
             )}
           </div>
+
+          {submitError && (
+            <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-xs font-semibold text-rose-700 dark:text-rose-300">
+              {submitError}
+            </div>
+          )}
 
           {/* Footer Actions */}
           <div className="pt-4 border-t border-slate-100 dark:border-slate-800 flex items-center justify-end gap-3">
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors cursor-pointer"
+              disabled={isSubmitting}
+              className="px-4 py-2 text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors cursor-pointer disabled:opacity-50"
             >
               Cancel
             </button>
             <button
               type="submit"
-              className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
+              disabled={isSubmitting || !title.trim()}
+              className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
             >
               <Plus className="w-4 h-4" />
-              <span>Create Album</span>
+              <span>{isSubmitting ? 'Saving to Supabase...' : 'Create Album'}</span>
             </button>
           </div>
         </form>

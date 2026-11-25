@@ -39,14 +39,22 @@ import {
 import { AlumniProfile, PostItem, PostComment, SPECIALTIES_LIST, DEGREES_LIST } from '../types';
 import { ALUMNI_PROFILES, loadStoredAlumniProfiles } from '../data/mockData';
 import { UNIVERSAL_DIRECTORY_PROFILES } from './DirectoryView';
-import { fetchAlumniProfileByIdFromDb } from '../services/supabaseService';
+import {
+  fetchAlumniProfileByIdFromDb,
+  fetchFeedPostsFromDb,
+  editFeedPostInDb,
+  deleteFeedPostInDb,
+  addPostCommentInDb,
+} from '../services/supabaseService';
+import { createPost, togglePostLike } from '../services/postService';
 import { useAuth } from '../context/AuthContext';
 import { AchievementBadgeChip, BADGE_CONFIGS } from './AchievementBadge';
 import { PhotoChangeModal, PhotoType } from './PhotoChangeModal';
 import { WhatsAppIcon, FacebookIcon } from './SocialIcons';
-import { calculateProfileCompletion } from '../utils/profileCompletion';
+import { calculateProfileCompletion, isProfileFullyCompleted } from '../utils/profileCompletion';
 import { INITIAL_OFFLINE_SAVED_POSTS, INITIAL_OFFLINE_DIRECTORY } from '../utils/offlineStorage';
 import { PostLightboxModal } from './PostLightboxModal';
+import { VerifiedAvatar } from './verification/VerifiedAvatar';
 import {
   extractUrlsFromText,
   renderTextWithClickableLinks,
@@ -77,8 +85,7 @@ import {
   subscribeToOnlinePresence,
   updateMyClinicalStatus,
 } from '../services/messagingService';
-import type { OnlinePresenceUser } from '../types/messaging';
-import { CLINICAL_STATUS_META, loadSavedClinicalStatus } from '../utils/clinicalStatus';
+import { CLINICAL_STATUS_META, loadSavedClinicalStatus, type ClinicalStatusKey } from '../utils/clinicalStatus';
 
 interface ProfileViewProps {
   profileId: number;
@@ -103,7 +110,6 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
 }) => {
   const { isLoggedIn, currentUser, updateProfile, deleteAccount } = useAuth();
 
-  // All feed posts loaded from localStorage so we can display and manage this user's posts in the "Posts" tab
   const [allPosts, setAllPosts] = useState<PostItem[]>(() => {
     if (typeof window === 'undefined') return INITIAL_OFFLINE_SAVED_POSTS;
     try {
@@ -117,6 +123,23 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     }
     return INITIAL_OFFLINE_SAVED_POSTS;
   });
+  const [postActionNotice, setPostActionNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    fetchFeedPostsFromDb(80, currentUser.id)
+      .then((dbPosts) => {
+        if (!active || !Array.isArray(dbPosts) || dbPosts.length === 0) return;
+        setAllPosts(dbPosts);
+        try {
+          localStorage.setItem('szmc_alumni_posts', JSON.stringify(dbPosts));
+        } catch {}
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [profileId, currentUser.id]);
 
   const resolveProfileById = (targetId: number): AlumniProfile => {
     if (targetId === currentUser.id || targetId === currentUser.userId) {
@@ -172,20 +195,29 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const [blockActionPending, setBlockActionPending] = useState(false);
   const [reportProfileOpen, setReportProfileOpen] = useState(false);
   const [safetyBanner, setSafetyBanner] = useState<string | null>(null);
-  const [onlineUsers, setOnlineUsers] = useState<OnlinePresenceUser[]>([]);
+  const [viewedPresence, setViewedPresence] = useState<{
+    isOnline: boolean;
+    clinicalStatus: ClinicalStatusKey | null;
+  }>({ isOnline: false, clinicalStatus: null });
 
   useEffect(() => {
     return subscribeToOnlinePresence(null, (users) => {
-      setOnlineUsers(users);
+      const match =
+        findOnlinePresenceUser(users, profile.id) ??
+        (profile.userId ? findOnlinePresenceUser(users, profile.userId) : undefined);
+      const nextOnline = Boolean(match);
+      const nextStatus = match?.clinicalStatus ?? null;
+      setViewedPresence((prev) =>
+        prev.isOnline === nextOnline && prev.clinicalStatus === nextStatus
+          ? prev
+          : { isOnline: nextOnline, clinicalStatus: nextStatus }
+      );
     });
-  }, []);
+  }, [profile.id, profile.userId]);
 
-  const livePresence =
-    findOnlinePresenceUser(onlineUsers, profile.id) ??
-    (profile.userId ? findOnlinePresenceUser(onlineUsers, profile.userId) : undefined);
-  const isLiveOnline = Boolean(livePresence) || isMine;
+  const isLiveOnline = viewedPresence.isOnline || isMine;
   const liveClinicalStatus =
-    livePresence?.clinicalStatus ??
+    viewedPresence.clinicalStatus ??
     (isMine ? loadSavedClinicalStatus(profile.id) ?? loadSavedClinicalStatus(currentUser.id) : null);
 
   useEffect(() => {
@@ -288,6 +320,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
       avatarUrl: string;
       batchYear?: number;
       createdAt?: string;
+      verified?: boolean;
+      profileCompleted?: boolean;
     };
     postCaption?: string;
   }>({
@@ -343,36 +377,38 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     e.target.value = '';
   };
 
-  const handleCreateProfilePost = (e: React.FormEvent) => {
+  const handleCreateProfilePost = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!isMine) return;
     if (!newPostText.trim() && newPostImages.length === 0 && newPostVideos.length === 0) return;
-    const created: PostItem = {
-      id: Date.now(),
-      userId: currentUser.userId,
-      fullName: currentUser.fullName,
-      avatarUrl: currentUser.avatarUrl,
-      batchYear: currentUser.batchYear,
+    setPostActionNotice(null);
+
+    const res = await createPost({
+      authorId: currentUser.id,
       content: newPostText.trim(),
+      category: 'General Discussion',
+      communityCategory: 'General Discussion',
+      audience: 'public',
       images: [...newPostImages],
       videos: [...newPostVideos],
-      category: 'General Update',
-      likesCount: 0,
-      commentsCount: 0,
-      createdAt: 'Just now',
-      likedByMe: false,
-      comments: [],
-    };
-    syncAllPosts([created, ...allPosts]);
-    setNewPostText('');
-    setNewPostImages([]);
-    setNewPostVideos([]);
+    });
+
+    if (res.success && res.post) {
+      syncAllPosts([res.post, ...allPosts]);
+      setNewPostText('');
+      setNewPostImages([]);
+      setNewPostVideos([]);
+    } else {
+      setPostActionNotice(res.error || 'Could not publish your post. Please try again.');
+    }
   };
 
-  const handleSaveEditProfilePost = (postId: number) => {
+  const handleSaveEditProfilePost = async (postId: number) => {
     if (!isMine) return;
     const trimmed = editingProfilePostText.trim();
     if (!trimmed) return;
+    setPostActionNotice(null);
+    const previous = allPosts;
     const updated = allPosts.map((p) =>
       p.id === postId && (p.userId === currentUser.userId || p.userId === currentUser.id)
         ? { ...p, content: trimmed, isEdited: true }
@@ -381,9 +417,17 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     syncAllPosts(updated);
     setEditingProfilePostId(null);
     setEditingProfilePostText('');
+
+    const ok = await editFeedPostInDb({ postId, content: trimmed }).catch(() => false);
+    if (!ok) {
+      syncAllPosts(previous);
+      setPostActionNotice('Could not save post changes. Please try again.');
+    }
   };
 
-  const handleToggleLikeProfilePost = (postId: number) => {
+  const handleToggleLikeProfilePost = async (postId: number) => {
+    if (!currentUser.id) return;
+    const previous = allPosts;
     const updated = allPosts.map((p) => {
       if (p.id === postId) {
         const nextLiked = !p.likedByMe;
@@ -396,24 +440,39 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
       return p;
     });
     syncAllPosts(updated);
+
+    const ok = await togglePostLike(postId, currentUser.id).catch(() => false);
+    if (!ok) {
+      syncAllPosts(previous);
+    }
   };
 
-  const handleDeleteProfilePost = (postId: number) => {
+  const handleDeleteProfilePost = async (postId: number) => {
     if (!isMine) return;
+    setPostActionNotice(null);
+    const previous = allPosts;
     syncAllPosts(
       allPosts.filter(
         (p) => !(p.id === postId && (p.userId === currentUser.userId || p.userId === currentUser.id))
       )
     );
+    const ok = await deleteFeedPostInDb(postId).catch(() => false);
+    if (!ok) {
+      syncAllPosts(previous);
+      setPostActionNotice('Could not delete post. Please check your connection and try again.');
+    }
   };
 
-  const handleAddProfilePostComment = (postId: number) => {
+  const handleAddProfilePostComment = async (postId: number) => {
     const text = (postCommentInputs[postId] || '').trim();
-    if (!text) return;
+    if (!text || !currentUser.id) return;
+    setPostActionNotice(null);
+    const previous = allPosts;
+    const tempCommentId = Date.now();
     const newComment: PostComment = {
-      id: Date.now(),
+      id: tempCommentId,
       postId,
-      userId: currentUser.userId,
+      userId: currentUser.userId || currentUser.id,
       fullName: currentUser.fullName,
       avatarUrl: currentUser.avatarUrl,
       content: text,
@@ -433,6 +492,33 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     );
     syncAllPosts(updated);
     setPostCommentInputs((prev) => ({ ...prev, [postId]: '' }));
+
+    const res = await addPostCommentInDb({
+      postId,
+      userId: currentUser.id,
+      content: text,
+      fullName: currentUser.fullName,
+      avatarUrl: currentUser.avatarUrl,
+    }).catch(() => ({ success: false as const }));
+
+    if (res.success && res.comment) {
+      syncAllPosts(
+        updated.map((p) =>
+          p.id !== postId
+            ? p
+            : {
+                ...p,
+                comments: (p.comments || []).map((c) =>
+                  c.id === tempCommentId ? { ...c, id: res.comment!.id, createdAt: res.comment!.createdAt } : c
+                ),
+              }
+        )
+      );
+    } else {
+      syncAllPosts(previous);
+      setPostCommentInputs((prev) => ({ ...prev, [postId]: prev[postId] || text }));
+      setPostActionNotice('Could not save your comment right now. Please try again.');
+    }
   };
 
   const [copiedProfilePostId, setCopiedProfilePostId] = useState<number | null>(null);
@@ -956,7 +1042,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         </div>
 
         {/* Head Bar */}
-        <div className="px-6 pb-6 pt-0 relative">
+        <div className="px-4 sm:px-6 pb-5 sm:pb-6 pt-0 relative">
           <div className="flex flex-col md:flex-row md:items-start justify-between gap-4 mb-4">
             {/* Avatar on Left + Details on Right of Avatar */}
             <div className="flex flex-col sm:flex-row items-center sm:items-start gap-5 min-w-0">
@@ -969,30 +1055,36 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                   onChange={(e) => handleDirectFileInput(e, 'avatar')}
                   className="hidden"
                 />
-                <img
+                <VerifiedAvatar
                   src={profile.avatarUrl}
                   alt={profile.fullName}
-                  className="w-28 h-28 sm:w-36 sm:h-36 rounded-full object-cover ring-4 ring-white/90 dark:ring-slate-900/90 shadow-2xl bg-white dark:bg-slate-800"
-                />
-                <span
-                  className={`absolute bottom-2 right-2 w-4 h-4 rounded-full ring-2 ring-white dark:ring-slate-900 ${
-                    liveClinicalStatus
-                      ? CLINICAL_STATUS_META[liveClinicalStatus].dotClass
-                      : isLiveOnline
-                      ? 'bg-emerald-500'
-                      : 'bg-slate-400'
-                  }`}
-                  title={
-                    liveClinicalStatus
-                      ? `${CLINICAL_STATUS_META[liveClinicalStatus].label} (Live)`
-                      : isLiveOnline
-                      ? 'Online'
-                      : 'Offline'
+                  verificationStatus={profile.verificationStatus}
+                  profileCompleted={isProfileFullyCompleted(profile)}
+                  size="2xl"
+                  imgClassName="w-28 h-28 sm:w-36 sm:h-36"
+                  unverifiedClassName="rounded-full ring-4 ring-white/90 dark:ring-slate-900/90 shadow-2xl bg-white dark:bg-slate-800"
+                  statusDot={
+                    <span
+                      className={`absolute z-20 ${
+                        profile.verificationStatus === 'verified' ? 'top-1.5 right-1.5' : 'bottom-2 right-2'
+                      } w-4 h-4 rounded-full ring-2 ring-white dark:ring-slate-900 ${
+                        liveClinicalStatus
+                          ? CLINICAL_STATUS_META[liveClinicalStatus].dotClass
+                          : isLiveOnline
+                          ? 'bg-emerald-500'
+                          : 'bg-slate-400'
+                      }`}
+                      title={
+                        liveClinicalStatus
+                          ? `${CLINICAL_STATUS_META[liveClinicalStatus].label} (Live)`
+                          : isLiveOnline
+                          ? 'Online'
+                          : 'Offline'
+                      }
+                    />
                   }
-                />
-
-                {isMine && (
-                  <>
+                >
+                  {isMine && (
                     <button
                       type="button"
                       id="change-avatar-overlay-btn"
@@ -1003,17 +1095,22 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                       <Camera className="w-6 h-6 mb-0.5" />
                       <span className="text-[10px] font-bold">Update</span>
                     </button>
-                    <button
-                      type="button"
-                      id="change-avatar-badge-btn"
-                      onClick={() => handleOpenPhotoModal('avatar')}
-                      className="absolute bottom-0 right-0 p-2 rounded-full bg-blue-600 hover:bg-blue-700 text-white ring-2 ring-white dark:ring-slate-900 shadow-md transition-transform hover:scale-110 active:scale-95 cursor-pointer z-10"
-                      title="Change Profile Picture"
-                      aria-label="Change Profile Picture"
-                    >
-                      <Camera className="w-3.5 h-3.5" />
-                    </button>
-                  </>
+                  )}
+                </VerifiedAvatar>
+
+                {isMine && (
+                  <button
+                    type="button"
+                    id="change-avatar-badge-btn"
+                    onClick={() => handleOpenPhotoModal('avatar')}
+                    className={`absolute ${
+                      profile.verificationStatus === 'verified' ? 'bottom-1 left-1 z-20' : 'bottom-0 right-0 z-10'
+                    } p-2 rounded-full bg-blue-600 hover:bg-blue-700 text-white ring-2 ring-white dark:ring-slate-900 shadow-md transition-transform hover:scale-110 active:scale-95 cursor-pointer`}
+                    title="Change Profile Picture"
+                    aria-label="Change Profile Picture"
+                  >
+                    <Camera className="w-3.5 h-3.5" />
+                  </button>
                 )}
               </div>
 
@@ -1082,10 +1179,10 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                         onNavigate('messages');
                       }
                     }}
-                    className="inline-flex items-center gap-1.5 sm:gap-2 px-3.5 sm:px-4 py-1.5 sm:py-2 rounded-xl bg-gradient-to-r from-[#0084FF] to-[#00A3FF] hover:from-[#0073E6] hover:to-[#0090E6] text-white text-[11px] sm:text-xs font-bold shadow-md shadow-[#0084FF]/25 hover:shadow-lg hover:shadow-[#0084FF]/35 transition-all transform active:scale-95 cursor-pointer shrink-0"
+                    className="min-h-[44px] sm:min-h-0 inline-flex items-center justify-center gap-1.5 sm:gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-[#0084FF] to-[#00A3FF] hover:from-[#0073E6] hover:to-[#0090E6] text-white text-xs font-bold shadow-md shadow-[#0084FF]/25 hover:shadow-lg hover:shadow-[#0084FF]/35 transition-all transform active:scale-95 cursor-pointer shrink-0"
                     title={`Direct Message Dr. ${profile.fullName}`}
                   >
-                    <MessageCircle className="w-3.5 h-3.5 sm:w-4 sm:h-4 fill-white/20" />
+                    <MessageCircle className="w-4 h-4 fill-white/20" />
                     <span>Message</span>
                   </button>
                   {isLoggedIn && (
@@ -1121,7 +1218,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                           }
                           setBlockActionPending(false);
                         }}
-                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 sm:py-2 rounded-xl border text-[11px] sm:text-xs font-semibold transition-colors cursor-pointer shrink-0 whitespace-nowrap ${
+                        className={`min-h-[44px] sm:min-h-0 inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl border text-xs font-semibold transition-colors cursor-pointer shrink-0 whitespace-nowrap active:scale-95 ${
                           isProfileBlocked
                             ? 'bg-rose-600 border-rose-600 text-white hover:bg-rose-700'
                             : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-rose-50 hover:border-rose-200 hover:text-rose-700 dark:hover:bg-rose-950/40 dark:hover:text-rose-300'
@@ -1134,7 +1231,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                       <button
                         type="button"
                         onClick={() => setReportProfileOpen(true)}
-                        className="inline-flex items-center gap-1 px-2.5 py-1.5 sm:py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-amber-50 hover:border-amber-200 hover:text-amber-700 dark:hover:bg-amber-950/40 dark:hover:text-amber-300 text-[11px] sm:text-xs font-semibold transition-colors cursor-pointer shrink-0 whitespace-nowrap"
+                        className="min-h-[44px] sm:min-h-0 inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-amber-50 hover:border-amber-200 hover:text-amber-700 dark:hover:bg-amber-950/40 dark:hover:text-amber-300 text-xs font-semibold transition-colors cursor-pointer shrink-0 whitespace-nowrap active:scale-95"
                         title="Report this profile"
                       >
                         <Flag className="w-3.5 h-3.5" />
@@ -1149,10 +1246,10 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                   href={`https://wa.me/${profile.whatsapp.replace(/[^0-9]/g, '')}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-4 py-1.5 sm:py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] sm:text-xs font-bold shadow-xs transition-colors shrink-0"
+                  className="min-h-[44px] sm:min-h-0 inline-flex items-center justify-center gap-1.5 px-3.5 sm:px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs transition-colors shrink-0 active:scale-95"
                   aria-label="WhatsApp"
                 >
-                  <WhatsAppIcon className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                  <WhatsAppIcon className="w-4 h-4" />
                   <span>WhatsApp</span>
                 </a>
               )}
@@ -1403,11 +1500,11 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
           )}
 
           {/* Tab Selector: About | Posts | Edit Profile */}
-          <div className="flex gap-4 sm:gap-6 mt-6 border-b border-slate-100 dark:border-slate-800 text-xs font-bold overflow-x-auto no-scrollbar scroll-smooth whitespace-nowrap pb-1">
+          <div className="flex gap-4 sm:gap-6 mt-5 sm:mt-6 border-b border-slate-100 dark:border-slate-800 text-xs font-bold overflow-x-auto no-scrollbar scroll-smooth whitespace-nowrap">
             <button
               type="button"
               onClick={() => setActiveTab('about')}
-              className={`pb-3 border-b-2 transition-colors cursor-pointer shrink-0 ${
+              className={`min-h-[44px] inline-flex items-center px-1 border-b-2 transition-colors cursor-pointer shrink-0 ${
                 activeTab === 'about'
                   ? 'border-blue-600 text-blue-600 dark:text-blue-400'
                   : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
@@ -1419,7 +1516,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
             <button
               type="button"
               onClick={() => setActiveTab('posts')}
-              className={`pb-3 border-b-2 transition-colors flex items-center gap-1.5 cursor-pointer shrink-0 ${
+              className={`min-h-[44px] inline-flex items-center gap-1.5 px-1 border-b-2 transition-colors cursor-pointer shrink-0 ${
                 activeTab === 'posts'
                   ? 'border-blue-600 text-blue-600 dark:text-blue-400'
                   : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
@@ -1436,7 +1533,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
               <button
                 type="button"
                 onClick={() => setActiveTab('edit')}
-                className={`pb-3 border-b-2 transition-colors flex items-center gap-1.5 cursor-pointer shrink-0 ${
+                className={`min-h-[44px] inline-flex items-center gap-1.5 px-1 border-b-2 transition-colors cursor-pointer shrink-0 ${
                   activeTab === 'edit'
                     ? 'border-blue-600 text-blue-600 dark:text-blue-400'
                     : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
@@ -1636,10 +1733,14 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
               className="liquid-glass-card p-5 rounded-3xl space-y-3.5"
             >
               <div className="flex items-start gap-3">
-                <img
+                <VerifiedAvatar
                   src={currentUser.avatarUrl}
                   alt={currentUser.fullName}
-                  className="w-10 h-10 rounded-full object-cover ring-2 ring-blue-500/20 shrink-0"
+                  verificationStatus={currentUser.verificationStatus}
+                  profile={currentUser}
+                  size="md"
+                  imgClassName="w-10 h-10"
+                  unverifiedClassName="rounded-full ring-2 ring-blue-500/20"
                 />
                 <textarea
                   rows={3}
@@ -1782,6 +1883,19 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                     </div>
                   )}
 
+                  {postActionNotice && (
+                    <div className="px-4 py-2.5 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 text-xs font-semibold text-rose-700 dark:text-rose-300 flex items-center justify-between gap-2">
+                      <span>{postActionNotice}</span>
+                      <button
+                        type="button"
+                        onClick={() => setPostActionNotice(null)}
+                        className="font-bold hover:underline cursor-pointer"
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  )}
+
                   {profilePosts.map((post) => {
                 const isPostMine =
                   isMine &&
@@ -1800,17 +1914,25 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                   >
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
-                        <img
+                        <VerifiedAvatar
                           src={post.avatarUrl}
                           alt={post.fullName}
-                          className="w-10 h-10 rounded-full object-cover ring-2 ring-slate-100 dark:ring-slate-800"
+                          verified={profile.verificationStatus === 'verified' || Boolean(post.verified)}
+                          profileCompleted={Boolean(
+                            isMine ? isProfileFullyCompleted(currentUser) : (post.profileCompleted ?? isProfileFullyCompleted(profile))
+                          )}
+                          size="md"
+                          imgClassName="w-10 h-10"
+                          unverifiedClassName="rounded-full ring-2 ring-slate-100 dark:ring-slate-800"
                         />
                         <div>
                           <div className="flex items-center gap-1.5">
                             <span className="font-bold text-sm text-slate-900 dark:text-slate-100">
                               {post.fullName}
                             </span>
-                            <ShieldCheck className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                            {(profile.verificationStatus === 'verified' || post.verified) && (
+                              <ShieldCheck className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                            )}
                             {post.isEdited && (
                               <span className="text-[10px] text-slate-400 font-medium">
                                 (edited)
@@ -1914,6 +2036,10 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                                   avatarUrl: post.avatarUrl,
                                   batchYear: post.batchYear,
                                   createdAt: post.createdAt,
+                                  verified: profile.verificationStatus === 'verified' || Boolean(post.verified),
+                                  profileCompleted: Boolean(
+                                    isMine ? isProfileFullyCompleted(currentUser) : (post.profileCompleted ?? isProfileFullyCompleted(profile))
+                                  ),
                                 },
                                 postCaption: post.content,
                               })
@@ -2135,10 +2261,14 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                 {/* Profile Picture Box */}
                 <div className="p-3.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex flex-col justify-between">
                   <div className="flex items-center gap-3 mb-3">
-                    <img
+                    <VerifiedAvatar
                       src={profile.avatarUrl}
                       alt={profile.fullName}
-                      className="w-16 h-16 rounded-full object-cover ring-2 ring-blue-500/20 shadow-xs"
+                      verificationStatus={profile.verificationStatus}
+                      profileCompleted={isProfileFullyCompleted(profile)}
+                      size="xl"
+                      imgClassName="w-16 h-16"
+                      unverifiedClassName="rounded-full ring-2 ring-blue-500/20 shadow-xs"
                     />
                     <div>
                       <div className="text-xs font-bold text-slate-900 dark:text-slate-100">

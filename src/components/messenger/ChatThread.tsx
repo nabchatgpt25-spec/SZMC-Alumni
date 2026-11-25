@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowLeft,
@@ -43,6 +43,7 @@ import type {
   MessageReaction,
 } from '../../types/messaging';
 import type { ActiveDmAnnotationSession, AnnotationTarget } from '../../types/annotation';
+import { VerifiedAvatar } from '../verification/VerifiedAvatar';
 import { playSound } from '../../utils/audio';
 import {
   CLINICAL_STATUS_META,
@@ -60,8 +61,11 @@ import {
 } from '../../utils/structuredChat';
 import { ClinicalStatusChip } from '../ClinicalStatusChip';
 import { HuddleModal, extractHuddleRoomFromText } from './HuddleModal';
-import { SharedImageAnnotatorModal } from './SharedImageAnnotatorModal';
 import { RichMessageText, StructuredChatCard } from './StructuredChatCard';
+
+const SharedImageAnnotatorModal = lazy(() =>
+  import('./SharedImageAnnotatorModal').then((m) => ({ default: m.SharedImageAnnotatorModal }))
+);
 
 interface SendOptions {
   type?: 'text' | 'like' | 'image' | 'system' | 'ProfileShareCard';
@@ -630,32 +634,36 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
   const callsDisabled = Boolean(conversation.isBlockedEitherWay || isAnnouncement);
 
   return (
-    <div className="flex-1 flex flex-col min-h-0 min-w-0 rounded-3xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm overflow-hidden relative">
+    <div className="flex-1 flex flex-col min-h-0 min-w-0 rounded-none sm:rounded-3xl border-0 sm:border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 sm:shadow-sm overflow-hidden relative">
       {/* Meta Messenger Conversation Header */}
-      <div className="px-3 sm:px-4 py-2.5 sm:py-3 border-b border-slate-100 dark:border-slate-800/80 flex items-center justify-between gap-2 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md z-10">
-        <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+      <div className="px-2.5 sm:px-4 py-2 sm:py-3 border-b border-slate-100 dark:border-slate-800/80 flex items-center justify-between gap-2 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md z-10">
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
           <button
             type="button"
             onClick={onBack}
             aria-label="Back to conversations"
-            className="lg:hidden min-w-[40px] min-h-[40px] -ml-1 rounded-full text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center transition-colors cursor-pointer shrink-0"
+            className="lg:hidden min-w-[44px] min-h-[44px] -ml-1 rounded-full text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center transition-colors cursor-pointer shrink-0 active:scale-95"
           >
             <ArrowLeft className="w-5 h-5" />
           </button>
 
-          <div className="relative shrink-0">
-            <img
-              src={person.avatarUrl}
-              alt={person.fullName}
-              referrerPolicy="no-referrer"
-              className="w-9 h-9 sm:w-10 sm:h-10 rounded-full object-cover ring-1 ring-slate-200/80 dark:ring-slate-700"
-            />
-            {!isGroup &&
+          <VerifiedAvatar
+            src={person.avatarUrl}
+            alt={person.fullName}
+            verificationStatus={person.verificationStatus}
+            profileCompleted={Boolean(person.profileCompleted)}
+            size="md"
+            imgClassName="w-9 h-9 sm:w-10 sm:h-10"
+            unverifiedClassName="rounded-full ring-1 ring-slate-200/80 dark:ring-slate-700"
+            statusDot={
+              !isGroup &&
               !isAnnouncement &&
               (isPeerOnline || peerClinicalStatus) &&
-              !conversation.isBlockedEitherWay && (
+              !conversation.isBlockedEitherWay ? (
                 <span
-                  className={`absolute bottom-0 right-0 w-3 h-3 rounded-full ring-2 ring-white dark:ring-slate-900 ${
+                  className={`absolute z-20 ${
+                    person.verificationStatus === 'verified' ? 'top-0 right-0' : 'bottom-0 right-0'
+                  } w-3 h-3 rounded-full ring-2 ring-white dark:ring-slate-900 ${
                     peerClinicalStatus
                       ? CLINICAL_STATUS_META[peerClinicalStatus].dotClass
                       : 'bg-emerald-500'
@@ -666,8 +674,9 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
                       : 'Active now'
                   }
                 />
-              )}
-          </div>
+              ) : undefined
+            }
+          />
 
           <div className="min-w-0">
             <div className="flex items-center gap-1.5 flex-wrap">
@@ -1841,7 +1850,7 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
             }}
             title="SZMC Medical & Alumni Tools"
             aria-label="Open SZMC Medical and Alumni Tools"
-            className={`min-w-[40px] min-h-[40px] rounded-full flex items-center justify-center transition-colors cursor-pointer shrink-0 ${
+            className={`min-w-[44px] min-h-[44px] sm:min-w-[40px] sm:min-h-[40px] rounded-full flex items-center justify-center transition-colors cursor-pointer shrink-0 active:scale-95 ${
               composerTool
                 ? 'bg-[#0084FF] text-white'
                 : 'text-[#0084FF] hover:bg-blue-50 dark:hover:bg-slate-800'
@@ -1856,7 +1865,7 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
             disabled={uploadingImage || sending}
             title="Attach photo"
             aria-label="Attach photo"
-            className="min-w-[40px] min-h-[40px] rounded-full text-[#0084FF] hover:bg-blue-50 dark:hover:bg-slate-800 flex items-center justify-center transition-colors disabled:opacity-50 cursor-pointer shrink-0"
+            className="min-w-[44px] min-h-[44px] sm:min-w-[40px] sm:min-h-[40px] rounded-full text-[#0084FF] hover:bg-blue-50 dark:hover:bg-slate-800 flex items-center justify-center transition-colors disabled:opacity-50 cursor-pointer shrink-0 active:scale-95"
           >
             <ImageIcon className="w-5 h-5" />
           </button>
@@ -1893,7 +1902,7 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
               onClick={() => setShowEmojiPicker((prev) => !prev)}
               title="Choose emoji"
               aria-label="Choose emoji"
-              className="p-1 text-[#0084FF] hover:opacity-80 transition-opacity cursor-pointer shrink-0"
+              className="p-1.5 text-[#0084FF] hover:opacity-80 transition-opacity cursor-pointer shrink-0"
             >
               <Smile className="w-5 h-5" />
             </button>
@@ -1909,7 +1918,7 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
                 : 'Send Quietly (deliver without notification sound)'
             }
             aria-label="Toggle Send Quietly"
-            className={`min-h-[40px] min-w-[40px] px-2.5 rounded-full border text-xs font-bold inline-flex items-center justify-center gap-1.5 transition-all cursor-pointer shrink-0 whitespace-nowrap ${
+            className={`min-h-[44px] min-w-[44px] sm:min-h-[40px] sm:min-w-[40px] px-2.5 rounded-full border text-xs font-bold inline-flex items-center justify-center gap-1.5 transition-all cursor-pointer shrink-0 whitespace-nowrap active:scale-95 ${
               sendQuietly
                 ? 'bg-slate-800 dark:bg-slate-100 border-slate-800 dark:border-slate-100 text-white dark:text-slate-900 shadow-xs'
                 : 'bg-slate-100 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
@@ -1924,7 +1933,7 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
               type="submit"
               disabled={sending || uploadingImage}
               aria-label={sendQuietly ? 'Send quietly' : 'Send message'}
-              className="w-10 h-10 rounded-full bg-[#0084FF] hover:bg-[#0073E6] text-white flex items-center justify-center shadow-sm shadow-[#0084FF]/30 transition-transform active:scale-95 disabled:opacity-60 cursor-pointer shrink-0"
+              className="w-11 h-11 sm:w-10 sm:h-10 rounded-full bg-[#0084FF] hover:bg-[#0073E6] text-white flex items-center justify-center shadow-sm shadow-[#0084FF]/30 transition-transform active:scale-95 disabled:opacity-60 cursor-pointer shrink-0"
             >
               {sending || uploadingImage ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
@@ -1939,7 +1948,7 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
               disabled={sending}
               title={sendQuietly ? 'Send Like quietly' : 'Send Like'}
               aria-label="Send Like"
-              className="min-w-[40px] min-h-[40px] rounded-full text-[#0084FF] hover:scale-110 flex items-center justify-center transition-transform active:scale-95 cursor-pointer shrink-0"
+              className="min-w-[44px] min-h-[44px] sm:min-w-[40px] sm:min-h-[40px] rounded-full text-[#0084FF] hover:scale-110 flex items-center justify-center transition-transform active:scale-95 cursor-pointer shrink-0"
             >
               <ThumbsUp className="w-5 h-5 fill-[#0084FF]" />
             </button>
@@ -1990,24 +1999,26 @@ export const ChatThread: React.FC<ChatThreadProps> = ({
 
       {/* Shared Clinical Image Annotation Canvas (DM Live Sync) */}
       {annotationTarget && canAnnotateDm && (
-        <SharedImageAnnotatorModal
-          isOpen={true}
-          conversationId={conversation.id}
-          myId={myId}
-          myDisplayName={myDisplayName}
-          myAvatarUrl={myAvatarUrl}
-          peerName={person.fullName}
-          target={annotationTarget}
-          onClose={() => setAnnotationTarget(null)}
-          onSaveToThread={async ({ mediaUrl, caption: annotatedCaption, replyToMessageId }) =>
-            onSend(annotatedCaption, {
-              type: 'image',
-              mediaUrl,
-              replyToMessageId: replyToMessageId ?? null,
-              isSilent: sendQuietly,
-            })
-          }
-        />
+        <Suspense fallback={null}>
+          <SharedImageAnnotatorModal
+            isOpen={true}
+            conversationId={conversation.id}
+            myId={myId}
+            myDisplayName={myDisplayName}
+            myAvatarUrl={myAvatarUrl}
+            peerName={person.fullName}
+            target={annotationTarget}
+            onClose={() => setAnnotationTarget(null)}
+            onSaveToThread={async ({ mediaUrl, caption: annotatedCaption, replyToMessageId }) =>
+              onSend(annotatedCaption, {
+                type: 'image',
+                mediaUrl,
+                replyToMessageId: replyToMessageId ?? null,
+                isSilent: sendQuietly,
+              })
+            }
+          />
+        </Suspense>
       )}
 
       {/* In-App Audio / Video Huddle Modal */}

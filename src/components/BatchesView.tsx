@@ -22,6 +22,7 @@ import { BatchSummary, AlumniProfile, SPECIALTIES_LIST } from '../types';
 import { SZMCLogo } from './SZMCLogo';
 import { fetchBatchesFromDb, fetchBatchAlumniProfilesFromDb } from '../services/supabaseService';
 import { realtimeManager } from '../services/supabaseRealtimeService';
+import { VerifiedAvatar } from './verification/VerifiedAvatar';
 
 interface BatchesViewProps {
   onSelectBatch: (batchYear: number) => void;
@@ -524,16 +525,24 @@ export const BatchesView: React.FC<BatchesViewProps> = ({
                       onClick={() => onViewProfile && onViewProfile(alumnus.id)}
                       className="group bg-slate-50/70 hover:bg-white dark:bg-slate-800/80 dark:hover:bg-slate-800 rounded-2xl p-3.5 border border-slate-200/80 dark:border-slate-700/80 hover:border-blue-400 dark:hover:border-blue-500 shadow-2xs hover:shadow-xs transition-all cursor-pointer flex items-start gap-3"
                     >
-                      <div className="relative shrink-0">
-                        <img
-                          src={alumnus.avatarUrl}
-                          alt={alumnus.fullName}
-                          className="w-11 h-11 rounded-xl object-cover border border-slate-200 dark:border-slate-700"
-                        />
-                        {alumnus.online && (
-                          <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-slate-800" />
-                        )}
-                      </div>
+                      <VerifiedAvatar
+                        src={alumnus.avatarUrl}
+                        alt={alumnus.fullName}
+                        verificationStatus={alumnus.verificationStatus}
+                        profile={alumnus}
+                        size="md"
+                        imgClassName="w-11 h-11"
+                        unverifiedClassName="rounded-xl border border-slate-200 dark:border-slate-700"
+                        statusDot={
+                          alumnus.online ? (
+                            <span
+                              className={`absolute z-20 ${
+                                alumnus.verificationStatus === 'verified' ? 'top-0 right-0' : '-bottom-0.5 -right-0.5'
+                              } w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-slate-800`}
+                            />
+                          ) : undefined
+                        }
+                      />
 
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center justify-between gap-1">

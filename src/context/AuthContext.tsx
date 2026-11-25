@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, useMemo } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import {
   supabase,
@@ -9,27 +9,12 @@ import {
 import {
   getOrCreateSupabaseProfile,
 } from '../lib/supabase-auth';
-import { apiUrl } from '../lib/apiConfig';
 import { AlumniProfile, SUPER_ADMIN_EMAILS, isUserAnyAdmin } from '../types';
-import {
-  DEFAULT_BLANK_USER,
-  ALUMNI_PROFILES,
-  saveStoredAlumniProfiles,
-} from '../data/mockData';
-import {
-  registerUserVouchRequest,
-  submitDocumentForAdminReview,
-} from '../utils/verificationService';
-import campusHeroImg from '../assets/images/szmc_campus_hero.jpg';
+import { DEFAULT_BLANK_USER } from '../data/mockData';
 import { formatToE164Phone, normalizePhoneNumber } from '../utils/phone';
 import { isInstantAutoVerificationActive } from '../services/siteConfigService';
 
 export { formatToE164Phone, normalizePhoneNumber };
-
-interface PendingOtpEntry {
-  otp: string;
-  expiresAt: number;
-}
 
 interface AuthContextType {
   isAuthInitializing: boolean;
@@ -104,12 +89,6 @@ function clearDirectAuthUser() {
   }
 }
 
-function normalizePhoneDigits(phone?: string): string {
-  if (!phone) return '';
-  const digits = phone.replace(/[^0-9]/g, '');
-  return digits.length >= 10 ? digits.slice(-10) : digits;
-}
-
 function cleanEmailMatchAdmin(email?: string): boolean {
   if (!email) return false;
   const clean = email.toLowerCase().trim();
@@ -123,7 +102,6 @@ function cleanEmailMatchAdmin(email?: string): boolean {
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const otpStoreRef = useRef<Map<string, PendingOtpEntry>>(new Map());
   const [supabaseToken, setSupabaseToken] = useState<string | null>(null);
 
   // Synchronously restore direct authenticated alumni from localStorage so there is zero logout on page refresh
@@ -273,14 +251,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const directUser = getDirectAuthUser();
         if (directUser) {
           const directEmail = (directUser.email || '').toLowerCase().trim();
-          const isAdmin = directUser.role === 'admin' || cleanEmailMatchAdmin(directEmail);
+          const isSuper = directUser.role === 'super_admin' || cleanEmailMatchAdmin(directEmail);
+          const hasPortalAccess = isSuper || directUser.role === 'admin' || directUser.role === 'moderator';
           const effective = {
             ...directUser,
-            role: (isAdmin ? 'admin' : directUser.role) as any,
-            verificationStatus: (isAdmin ? 'verified' : directUser.verificationStatus) as any,
+            role: (isSuper ? 'super_admin' : directUser.role) as any,
+            verificationStatus: (isSuper || directUser.role === 'admin' ? 'verified' : directUser.verificationStatus) as any,
           };
           setCurrentUser(effective);
-          setIsAdminUser(isAdmin);
+          setIsAdminUser(hasPortalAccess);
           setIsLoggedIn(true);
         } else {
           setAuthInitializationError(
@@ -347,6 +326,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       .then(({ data: { session }, error }) => {
         clearTimeout(initSafetyTimer);
         if (error) throw error;
+        // Avoid duplicate profile DB query if onAuthStateChange already resolved INITIAL_SESSION
+        if (authEventReceived) {
+          if (!session && !initialDirectUser) {
+            setIsAuthInitializing(false);
+          }
+          return;
+        }
         if (session) {
           const requestId = ++authResolutionIdRef.current;
           void applySession(session, requestId);
@@ -368,13 +354,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       subscription.unsubscribe();
     };
   }, []);
-
-  useEffect(() => {
-    try {
-    } catch {
-      // safe ignore
-    }
-  }, [currentUser]);
 
   useEffect(() => {
     const handleAdminUserUpdate = (e: Event) => {
@@ -417,10 +396,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (directToken) {
       headers.Authorization = `Bearer ${directToken}`;
       return headers;
-    }
-
-    if (anonKey && !headers.Authorization) {
-      headers.Authorization = `Bearer ${anonKey}`;
     }
 
     return headers;
@@ -578,7 +553,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             edgeErr = null;
           } else if (fallbackRes.ok && fallbackJson?.profile) {
             setCurrentUser(fallbackJson.profile);
-            setIsAdminUser(fallbackJson.profile.role === 'admin');
+            setIsAdminUser(
+              isUserAnyAdmin(fallbackJson.profile) ||
+              fallbackJson.profile.role === 'moderator' ||
+              cleanEmailMatchAdmin(fallbackJson.profile.email)
+            );
             setIsLoggedIn(true);
             saveDirectAuthUser(fallbackJson.profile);
             return true;
@@ -667,7 +646,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const profile = await getOrCreateSupabaseProfile(authData.user);
     if (profile) {
       setCurrentUser(profile);
-      setIsAdminUser(profile.role === 'admin');
+      setIsAdminUser(
+        isUserAnyAdmin(profile) ||
+        profile.role === 'moderator' ||
+        cleanEmailMatchAdmin(profile.email)
+      );
       setIsLoggedIn(true);
       saveDirectAuthUser(profile);
       return true;
@@ -748,7 +731,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const profile = await getOrCreateSupabaseProfile(data.user);
       if (profile) {
         setCurrentUser(profile);
-        setIsAdminUser(profile.role === 'admin');
+        setIsAdminUser(
+          isUserAnyAdmin(profile) ||
+          profile.role === 'moderator' ||
+          cleanEmailMatchAdmin(profile.email)
+        );
         setIsLoggedIn(true);
         saveDirectAuthUser(profile);
       }
@@ -861,11 +848,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setSupabaseToken(inMemorySupabaseToken);
     }
 
-    // Require a valid authenticated Supabase session after signUp (do not bypass email confirmation)
+    // Require email confirmation before entering authenticated portal when session is not auto-issued
     if (!signUpData?.session) {
-      throw new Error(
-        'Registration successful! Please check your email inbox and click the verification link to activate your account before signing in.'
-      );
+      return false;
     }
 
     let profile: AlumniProfile | null = null;
@@ -970,7 +955,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     if (profile) {
       setCurrentUser(profile);
-      setIsAdminUser(profile.role === 'admin');
+      setIsAdminUser(
+        isUserAnyAdmin(profile) ||
+        profile.role === 'moderator' ||
+        cleanEmailMatchAdmin(profile.email)
+      );
       setIsLoggedIn(true);
       saveDirectAuthUser(profile);
       return true;
@@ -1088,28 +1077,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     }
 
-    // 3. Fallback / Server-side synchronization to /api/profile/update
+    // 3. Fallback server-side synchronization ONLY if direct Supabase update did not succeed
     let serverSuccess = false;
-    try {
-      const headers = await getAuthHeaders();
-      const sRes = await fetch('/api/profile/update', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          id: currentUser.id,
-          authUserId: currentUser.authUserId,
-          ...updated,
-          phone: cleanPhone ?? updated.phone,
-        }),
-      });
-      if (sRes.ok) {
-        const sData = await sRes.json();
-        if (sData?.success) {
-          serverSuccess = true;
+    if (!supabaseSuccess) {
+      try {
+        const headers = await getAuthHeaders();
+        const sRes = await fetch('/api/profile/update', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            id: currentUser.id,
+            authUserId: currentUser.authUserId,
+            ...updated,
+            phone: cleanPhone ?? updated.phone,
+          }),
+        });
+        if (sRes.ok) {
+          const sData = await sRes.json();
+          if (sData?.success) {
+            serverSuccess = true;
+          }
         }
+      } catch (sErr: any) {
+        console.warn('Server profile update sync notice:', sErr);
       }
-    } catch (sErr: any) {
-      console.warn('Server profile update sync notice:', sErr);
     }
 
     // Strict validation: fail if neither Supabase nor Server confirmed the write
@@ -1126,21 +1117,55 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return { success: true };
   };
 
-  const deleteAccount = async (): Promise<boolean> => {
-    if (isSupabaseConfigured && currentUser.authUserId) {
-      try {
-        await supabase
-          .from('alumni_profiles')
-          .delete()
-          .eq('auth_user_id', currentUser.authUserId);
-      } catch (err) {
-        console.warn('Supabase delete profile warning:', err);
+  const deleteAccount = async (confirmationPassword?: string): Promise<boolean> => {
+    const cleanPass = typeof confirmationPassword === 'string' ? confirmationPassword.trim() : '';
+
+    if (isSupabaseConfigured) {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const sessionUser = sessionData?.session?.user;
+      if (sessionUser?.email && cleanPass) {
+        const { error: reauthErr } = await supabase.auth.signInWithPassword({
+          email: sessionUser.email,
+          password: cleanPass,
+        });
+        if (reauthErr) {
+          throw new Error('Incorrect password. Account deletion cancelled.');
+        }
       }
+    }
+
+    const headers = await getAuthHeaders();
+    let deletedOnServer = false;
+    if (headers.Authorization && currentUser.id) {
+      const delRes = await fetch('/api/auth/delete-account', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ profileId: currentUser.id }),
+      });
+      if (!delRes.ok) {
+        const errJson = await delRes.json().catch(() => ({}));
+        throw new Error(errJson?.error || 'Could not delete account on server.');
+      }
+      deletedOnServer = true;
+    }
+
+    if (!deletedOnServer && isSupabaseConfigured && currentUser.authUserId) {
+      const { error: directDelErr } = await supabase
+        .from('alumni_profiles')
+        .delete()
+        .eq('auth_user_id', currentUser.authUserId);
+      if (directDelErr) {
+        throw new Error(directDelErr.message || 'Could not delete alumni profile.');
+      }
+    }
+
+    if (isSupabaseConfigured) {
       try {
         await supabase.auth.signOut();
       } catch {}
     }
 
+    clearDirectAuthUser();
     authResolutionIdRef.current += 1;
     resolvedAuthUserIdRef.current = null;
     inMemorySupabaseToken = null;
@@ -1190,32 +1215,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return true;
   };
 
-  return (
-    <AuthContext.Provider
-      value={{
-        isAuthInitializing,
-        authInitializationError,
-        isLoggedIn,
-        currentUser,
-        firebaseToken: null,
-        supabaseToken,
-        isAdminUser,
-        login,
-        loginWithPhoneOtp,
-        verifyPhoneOtp,
-        loginWithGoogle,
-        logout,
-        register,
-        updateProfile,
-        deleteAccount,
-        requestPasswordReset,
-        completePasswordRecovery,
-        getAuthHeaders,
-      }}
-    >
-      {children}
-    </AuthContext.Provider>
+  const authContextValue = useMemo<AuthContextType>(
+    () => ({
+      isAuthInitializing,
+      authInitializationError,
+      isLoggedIn,
+      currentUser,
+      firebaseToken: null,
+      supabaseToken,
+      isAdminUser,
+      login,
+      loginWithPhoneOtp,
+      verifyPhoneOtp,
+      loginWithGoogle,
+      logout,
+      register,
+      updateProfile,
+      deleteAccount,
+      requestPasswordReset,
+      completePasswordRecovery,
+      getAuthHeaders,
+    }),
+    // Only re-emit context when actual auth state changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [isAuthInitializing, authInitializationError, isLoggedIn, currentUser, supabaseToken, isAdminUser]
   );
+
+  return <AuthContext.Provider value={authContextValue}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth(): AuthContextType {

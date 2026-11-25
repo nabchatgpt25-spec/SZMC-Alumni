@@ -1,19 +1,12 @@
-var __require = /* @__PURE__ */ ((x) => typeof require !== "undefined" ? require : typeof Proxy !== "undefined" ? new Proxy(x, {
-  get: (a, b) => (typeof require !== "undefined" ? require : a)[b]
-}) : x)(function(x) {
-  if (typeof require !== "undefined") return require.apply(this, arguments);
-  throw Error('Dynamic require of "' + x + '" is not supported');
-});
-
 // server.ts
 import express from "express";
 import compression from "compression";
 import { createServer as createHttpServer } from "http";
-import { existsSync as existsSync2, writeFileSync as writeFileSync2, readFileSync as readFileSync2 } from "fs";
+import { existsSync as existsSync3, writeFileSync as writeFileSync2, readFileSync as readFileSync3, mkdirSync } from "fs";
 import { readFile } from "fs/promises";
-import path2 from "path";
+import path3 from "path";
 import { fileURLToPath as fileURLToPath2 } from "url";
-import crypto3 from "crypto";
+import crypto5 from "crypto";
 import * as dotenv2 from "dotenv";
 
 // server/lib/supabase-server.ts
@@ -48,6 +41,13 @@ var isSupabaseServiceRoleConfigured = Boolean(envServiceRoleKey);
 var isSupabaseServerConfigured = Boolean(
   rawUrl && rawKey && rawUrl.startsWith("http") && !rawUrl.includes("placeholder.supabase.co")
 );
+var anonKeyCandidates = [
+  process.env.SUPABASE_ANON_KEY,
+  process.env.VITE_SUPABASE_ANON_KEY
+];
+var effectiveAnonKey = (anonKeyCandidates.find(
+  (k) => typeof k === "string" && (k.trim().startsWith("eyJ") || k.trim().startsWith("sb_") || k.trim().length > 30)
+) || DEFAULT_SUPABASE_ANON_KEY).trim();
 var effectiveUrl = isSupabaseServerConfigured ? rawUrl : DEFAULT_SUPABASE_URL;
 var effectiveKey = isSupabaseServerConfigured ? rawKey : DEFAULT_SUPABASE_ANON_KEY;
 var supabaseServer = createClient(effectiveUrl, effectiveKey, {
@@ -56,6 +56,34 @@ var supabaseServer = createClient(effectiveUrl, effectiveKey, {
     autoRefreshToken: false
   }
 });
+function createUserScopedSupabaseClient(accessToken) {
+  const cleanToken = accessToken?.trim();
+  if (!isSupabaseServerConfigured || !cleanToken || !cleanToken.startsWith("eyJ")) {
+    return null;
+  }
+  return createClient(effectiveUrl, effectiveAnonKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false
+    },
+    global: {
+      headers: {
+        Authorization: `Bearer ${cleanToken}`
+      }
+    }
+  });
+}
+function getSupabaseWriteClient(accessToken) {
+  if (!isSupabaseServerConfigured) return null;
+  if (isSupabaseServiceRoleConfigured) {
+    return { client: supabaseServer, mode: "service_role" };
+  }
+  const userClient = createUserScopedSupabaseClient(accessToken);
+  if (userClient) {
+    return { client: userClient, mode: "user_jwt" };
+  }
+  return null;
+}
 var UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 async function findAuthUserByEmailOrPhone(params) {
   if (!isSupabaseServerConfigured || !isSupabaseServiceRoleConfigured) {
@@ -391,8 +419,145 @@ async function safeFetchHtml(targetUrl, options) {
   throw new Error("Too many redirects.");
 }
 
-// server/middleware/auth.ts
+// server/lib/password.ts
 import crypto from "crypto";
+var LEGACY_STATIC_SALT = "ndc_dhaka_1949_salt_v1:";
+var SCRYPT_PREFIX = "scrypt:";
+var SCRYPT_KEYLEN = 64;
+function hashPasswordServer(raw) {
+  if (!raw || typeof raw !== "string") return "";
+  if (raw.startsWith(SCRYPT_PREFIX) || raw.startsWith("sha256:")) return raw;
+  const saltHex = crypto.randomBytes(16).toString("hex");
+  const derivedHex = crypto.scryptSync(raw, saltHex, SCRYPT_KEYLEN).toString("hex");
+  return `${SCRYPT_PREFIX}${saltHex}:${derivedHex}`;
+}
+function timingSafeHexEqual(aHex, bHex) {
+  if (!aHex || !bHex || aHex.length !== bHex.length) return false;
+  try {
+    const aBuf = Buffer.from(aHex, "hex");
+    const bBuf = Buffer.from(bHex, "hex");
+    return aBuf.length > 0 && aBuf.length === bBuf.length && crypto.timingSafeEqual(aBuf, bBuf);
+  } catch {
+    return false;
+  }
+}
+function verifyPasswordServer(storedHash, inputPass) {
+  if (!storedHash || typeof storedHash !== "string" || !storedHash.trim()) {
+    return false;
+  }
+  if (!inputPass || typeof inputPass !== "string") {
+    return false;
+  }
+  if (storedHash.startsWith(SCRYPT_PREFIX)) {
+    const rest = storedHash.slice(SCRYPT_PREFIX.length);
+    const sep = rest.indexOf(":");
+    if (sep <= 0) return false;
+    const saltHex = rest.slice(0, sep);
+    const expectedHex = rest.slice(sep + 1);
+    if (!saltHex || !expectedHex) return false;
+    try {
+      const derivedHex = crypto.scryptSync(inputPass, saltHex, SCRYPT_KEYLEN).toString("hex");
+      return timingSafeHexEqual(derivedHex, expectedHex);
+    } catch {
+      return false;
+    }
+  }
+  if (storedHash.startsWith("sha256:")) {
+    const expectedHex = storedHash.slice("sha256:".length);
+    const candidateHex = crypto.createHash("sha256").update(LEGACY_STATIC_SALT + inputPass).digest("hex");
+    return timingSafeHexEqual(candidateHex, expectedHex);
+  }
+  const aDigest = crypto.createHash("sha256").update(storedHash).digest();
+  const bDigest = crypto.createHash("sha256").update(inputPass).digest();
+  return crypto.timingSafeEqual(aDigest, bDigest);
+}
+
+// server/lib/rateLimit.ts
+var MAX_RATE_BUCKETS = 1e4;
+var PRUNE_INTERVAL_MS = 6e4;
+var SlidingRateLimiter = class {
+  constructor() {
+    this.store = /* @__PURE__ */ new Map();
+    this.lastPrunedAt = Date.now();
+  }
+  prune(now = Date.now()) {
+    for (const [key, bucket] of this.store.entries()) {
+      if (now > bucket.resetAt) {
+        this.store.delete(key);
+      }
+    }
+    if (this.store.size > MAX_RATE_BUCKETS) {
+      const overflow = this.store.size - MAX_RATE_BUCKETS;
+      let removed = 0;
+      for (const key of this.store.keys()) {
+        this.store.delete(key);
+        removed += 1;
+        if (removed >= overflow) break;
+      }
+    }
+    this.lastPrunedAt = now;
+  }
+  check(key, maxRequests, windowMs, now = Date.now()) {
+    if (now - this.lastPrunedAt >= PRUNE_INTERVAL_MS || this.store.size >= MAX_RATE_BUCKETS) {
+      this.prune(now);
+    }
+    const bucket = this.store.get(key);
+    if (!bucket || now > bucket.resetAt) {
+      const resetAt = now + windowMs;
+      this.store.set(key, { count: 1, resetAt });
+      return { allowed: true, remaining: Math.max(0, maxRequests - 1), resetAt };
+    }
+    bucket.count += 1;
+    const allowed = bucket.count <= maxRequests;
+    return {
+      allowed,
+      remaining: Math.max(0, maxRequests - bucket.count),
+      resetAt: bucket.resetAt
+    };
+  }
+  get size() {
+    return this.store.size;
+  }
+  clear() {
+    this.store.clear();
+  }
+};
+var globalRateLimiter = new SlidingRateLimiter();
+function resolveClientIp(req) {
+  if (req.ip && typeof req.ip === "string") {
+    return req.ip.replace(/^::ffff:/, "").trim();
+  }
+  const forwarded = req.headers["x-forwarded-for"];
+  if (typeof forwarded === "string" && forwarded.trim()) {
+    return forwarded.split(",")[0].trim();
+  }
+  return req.socket?.remoteAddress || "unknown";
+}
+function rateLimitGuard(maxRequests, windowMs) {
+  return (req, res, next) => {
+    const ip = resolveClientIp(req);
+    const key = `${ip}:${req.baseUrl || req.path}`;
+    const result = globalRateLimiter.check(key, maxRequests, windowMs);
+    if (!result.allowed) {
+      const retryAfterSec = Math.max(1, Math.ceil((result.resetAt - Date.now()) / 1e3));
+      res.setHeader("Retry-After", String(retryAfterSec));
+      return res.status(429).json({
+        error: "Rate limit exceeded. Automated scraping and brute-force requests are blocked."
+      });
+    }
+    return next();
+  };
+}
+
+// server/routes/distDownload.ts
+import { Router } from "express";
+import { existsSync, readFileSync } from "fs";
+import path from "path";
+import os from "os";
+import crypto3 from "crypto";
+
+// server/middleware/auth.ts
+import crypto2 from "crypto";
 var envSuperAdminEmails = (process.env.SUPER_ADMIN_EMAILS || process.env.ADMIN_EMAILS || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
 var SUPER_ADMIN_EMAILS = Array.from(
   /* @__PURE__ */ new Set([
@@ -405,7 +570,7 @@ var SUPER_ADMIN_EMAILS = Array.from(
     ...envSuperAdminEmails
   ])
 );
-var ADMIN_SESSION_SECRET = process.env.ADMIN_SESSION_SECRET?.trim() || crypto.randomBytes(32).toString("hex");
+var ADMIN_SESSION_SECRET = process.env.ADMIN_SESSION_SECRET?.trim() || crypto2.randomBytes(32).toString("hex");
 var ADMIN_TOKEN_PREFIX = "szmc-admin-session:";
 var MEMBER_TOKEN_PREFIX = "szmc-member-session:";
 var SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
@@ -441,7 +606,7 @@ function getRolePermissions(role) {
 }
 function signPayload(prefix, payloadObj) {
   const encoded = Buffer.from(JSON.stringify(payloadObj), "utf-8").toString("base64url");
-  const hmac = crypto.createHmac("sha256", ADMIN_SESSION_SECRET).update(`${prefix}${encoded}`).digest("hex");
+  const hmac = crypto2.createHmac("sha256", ADMIN_SESSION_SECRET).update(`${prefix}${encoded}`).digest("hex");
   return `${prefix}${encoded}:${hmac}`;
 }
 function verifySignedPayload(token, expectedPrefix) {
@@ -452,10 +617,10 @@ function verifySignedPayload(token, expectedPrefix) {
   const encoded = rest.slice(0, sepIdx);
   const providedHmac = rest.slice(sepIdx + 1);
   try {
-    const expectedHmac = crypto.createHmac("sha256", ADMIN_SESSION_SECRET).update(`${expectedPrefix}${encoded}`).digest("hex");
+    const expectedHmac = crypto2.createHmac("sha256", ADMIN_SESSION_SECRET).update(`${expectedPrefix}${encoded}`).digest("hex");
     const providedBuf = Buffer.from(providedHmac, "utf-8");
     const expectedBuf = Buffer.from(expectedHmac, "utf-8");
-    if (providedBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(providedBuf, expectedBuf)) {
+    if (providedBuf.length !== expectedBuf.length || !crypto2.timingSafeEqual(providedBuf, expectedBuf)) {
       return { valid: false };
     }
     const parsed = JSON.parse(Buffer.from(encoded, "base64url").toString("utf-8"));
@@ -614,6 +779,7 @@ async function verifyAuthToken(token) {
     }
     return {
       user,
+      supabaseAccessToken: token,
       dbUser: {
         id: Number(profile?.id || 0),
         uid: user.id,
@@ -644,6 +810,9 @@ async function authenticateBearerRequest(req, res, missingMsg, invalidMsg) {
   req.supabaseUser = authResult.user;
   req.user = authResult.user;
   req.dbUser = authResult.dbUser;
+  if ("supabaseAccessToken" in authResult && authResult.supabaseAccessToken) {
+    req.supabaseAccessToken = authResult.supabaseAccessToken;
+  }
   return authResult;
 }
 var requireAuth = async (req, res, next) => {
@@ -713,1072 +882,121 @@ var optionalAuth = async (req, _res, next) => {
       req.supabaseUser = authResult.user;
       req.user = authResult.user;
       req.dbUser = authResult.dbUser;
+      if ("supabaseAccessToken" in authResult && authResult.supabaseAccessToken) {
+        req.supabaseAccessToken = authResult.supabaseAccessToken;
+      }
     }
   }
   next();
 };
 
-// server/db/adminRepository.ts
-var DEFAULT_STREAM_GROUPS = [
-  { id: 1, stream: "Science", group_code: null, groupCode: null, expected_group_count: 17, expectedGroupCount: 17, is_active: true, isActive: true },
-  { id: 2, stream: "Humanities", group_code: "G", groupCode: "G", expected_group_count: 4, expectedGroupCount: 4, is_active: true, isActive: true },
-  { id: 3, stream: "Humanities", group_code: "H", groupCode: "H", expected_group_count: 4, expectedGroupCount: 4, is_active: true, isActive: true },
-  { id: 4, stream: "Humanities", group_code: "L", groupCode: "L", expected_group_count: 4, expectedGroupCount: 4, is_active: true, isActive: true },
-  { id: 5, stream: "Humanities", group_code: "W", groupCode: "W", expected_group_count: 4, expectedGroupCount: 4, is_active: true, isActive: true },
-  { id: 6, stream: "Business Studies", group_code: "A", groupCode: "A", expected_group_count: 6, expectedGroupCount: 6, is_active: true, isActive: true },
-  { id: 7, stream: "Business Studies", group_code: "B", groupCode: "B", expected_group_count: 6, expectedGroupCount: 6, is_active: true, isActive: true },
-  { id: 8, stream: "Business Studies", group_code: "C", groupCode: "C", expected_group_count: 6, expectedGroupCount: 6, is_active: true, isActive: true },
-  { id: 9, stream: "Business Studies", group_code: "D", groupCode: "D", expected_group_count: 6, expectedGroupCount: 6, is_active: true, isActive: true },
-  { id: 10, stream: "Business Studies", group_code: "E", groupCode: "E", expected_group_count: 6, expectedGroupCount: 6, is_active: true, isActive: true },
-  { id: 11, stream: "Business Studies", group_code: "F", groupCode: "F", expected_group_count: 6, expectedGroupCount: 6, is_active: true, isActive: true }
-];
-var inMemoryAlumniProfiles = [];
-var serverAutoVerifyConfig = {
-  enabled: true,
-  paused: false,
-  expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1e3).toISOString()
-};
-function isServerAutoVerifyActive() {
-  if (!serverAutoVerifyConfig.enabled || serverAutoVerifyConfig.paused) return false;
-  return /* @__PURE__ */ new Date() < new Date(serverAutoVerifyConfig.expiresAt);
+// server/routes/distDownload.ts
+var DIST_TOKEN_FILE = path.join(os.tmpdir(), "szmc-dist-download-token.json");
+function verifySignedDistToken(rawToken) {
+  if (typeof rawToken !== "string" || rawToken.length < 32 || rawToken.length > 256) {
+    return false;
+  }
+  try {
+    if (!existsSync(DIST_TOKEN_FILE)) return false;
+    const raw = readFileSync(DIST_TOKEN_FILE, "utf-8");
+    const parsed = JSON.parse(raw);
+    if (!parsed?.tokenHash || typeof parsed.expiresAt !== "number") return false;
+    if (Date.now() > parsed.expiresAt) return false;
+    const candidateHash = crypto3.createHash("sha256").update(rawToken).digest("hex");
+    const a = Buffer.from(candidateHash, "utf-8");
+    const b = Buffer.from(parsed.tokenHash, "utf-8");
+    return a.length === b.length && crypto3.timingSafeEqual(a, b);
+  } catch {
+    return false;
+  }
 }
-function setServerAutoVerifyConfig(updates) {
-  Object.assign(serverAutoVerifyConfig, updates);
-  return { ...serverAutoVerifyConfig };
+function requireSuperAdminOrSignedDistToken(req, res, next) {
+  if (verifySignedDistToken(req.query.dl)) {
+    return next();
+  }
+  return requireSuperAdmin(req, res, next);
 }
-async function bulkVerifyAllAlumniProfiles(params) {
-  let verifiedCount = 0;
-  if (isSupabaseServerConfigured) {
-    try {
-      const { data, error } = await supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).update({
-        verification_status: "verified",
-        verification_method: "admin_instant",
-        vouches_count: 2,
-        verified_at: (/* @__PURE__ */ new Date()).toISOString()
-      }).neq("verification_status", "verified").select("id");
-      if (!error && data) {
-        verifiedCount = data.length;
-      }
-    } catch (err) {
-      console.warn("Supabase bulk verify notice:", err);
-    }
-  }
-  for (const p of inMemoryAlumniProfiles) {
-    if (p.verificationStatus !== "verified") {
-      p.verificationStatus = "verified";
-      p.verificationMethod = "admin_instant";
-      p.vouchesCount = 2;
-      p.verifiedAt = (/* @__PURE__ */ new Date()).toISOString();
-      verifiedCount++;
-    }
-  }
-  await recordSecurityAuditLog({
-    actorUid: params.actorUid,
-    actorEmail: params.actorEmail,
-    actorRole: params.actorRole,
-    action: "BULK_VERIFY_ALUMNI",
-    targetType: "alumni_profiles",
-    targetId: "ALL_PENDING",
-    summary: `Super Admin bulk verified all ${verifiedCount} pending alumni profiles during launch window.`
-  });
-  return { verifiedCount };
-}
-async function recordSecurityAuditLog(params) {
-  if (isSupabaseServerConfigured) {
-    try {
-      const { data, error } = await supabaseServer.from(SUPABASE_TABLES.AUDIT_LOGS).insert({
-        actor_auth_id: params.actorUid,
-        action: params.action,
-        entity_table: params.targetType,
-        entity_id: params.targetId,
-        reason: params.summary
-      }).select().single();
-      if (!error && data) return data;
-    } catch (err) {
-      console.warn("Supabase audit log insert error:", err);
-    }
-  }
-  return {
-    id: Date.now(),
-    actorUid: params.actorUid,
-    actorEmail: params.actorEmail,
-    action: params.action,
-    summary: params.summary,
-    createdAt: /* @__PURE__ */ new Date()
-  };
-}
-async function getAcademicStreamGroupsConfig() {
-  if (isSupabaseServerConfigured) {
-    try {
-      const { data, error } = await supabaseServer.from(SUPABASE_TABLES.ACADEMIC_STREAM_GROUPS).select("*").order("stream").order("group_code");
-      if (!error && data && data.length > 0) {
-        return data.map((r) => ({
-          id: r.id,
-          stream: r.stream,
-          groupCode: r.group_code,
-          expectedGroupCount: r.expected_group_count,
-          isActive: r.is_active,
-          createdAt: r.created_at,
-          updatedAt: r.updated_at
-        }));
-      }
-    } catch (err) {
-      console.warn("Supabase getAcademicStreamGroupsConfig error:", err);
-    }
-  }
-  return DEFAULT_STREAM_GROUPS;
-}
-async function toggleAcademicStreamGroupActive(params) {
-  if (isSupabaseServerConfigured) {
-    try {
-      const { data, error } = await supabaseServer.from(SUPABASE_TABLES.ACADEMIC_STREAM_GROUPS).update({
-        is_active: params.isActive,
-        updated_at: (/* @__PURE__ */ new Date()).toISOString()
-      }).eq("id", params.id).select().single();
-      if (!error && data) {
-        return {
-          id: data.id,
-          stream: data.stream,
-          groupCode: data.group_code,
-          expectedGroupCount: data.expected_group_count,
-          isActive: data.is_active
-        };
-      }
-    } catch (err) {
-      console.warn("Supabase toggleAcademicStreamGroupActive error:", err);
-    }
-  }
-  const found = DEFAULT_STREAM_GROUPS.find((g) => g.id === params.id);
-  if (!found) throw new Error("Academic stream group row not found.");
-  found.is_active = params.isActive;
-  found.isActive = params.isActive;
-  return found;
-}
-async function getAdminOverviewMetrics() {
-  let totalProfiles = 0;
-  let verifiedProfiles = 0;
-  let pendingProfiles = 0;
-  let suspendedProfiles = 0;
-  let registeredDonors = 0;
-  let pendingDocReviews = 0;
-  let activeBloodEmergencies = 0;
-  let publishedNotices = 0;
-  let scienceCount = 0;
-  let humanitiesCount = 0;
-  let businessCount = 0;
-  let streamGroupsConfig = DEFAULT_STREAM_GROUPS;
-  let recentAuditLogs = [];
-  if (isSupabaseServerConfigured) {
-    try {
-      const [
-        totalRes,
-        verifiedRes,
-        pendingRes,
-        suspendedRes,
-        donorsRes,
-        pendingDocsRes,
-        bloodRes,
-        noticesRes,
-        streamConfigRes,
-        auditLogsRes,
-        sciRes,
-        humRes,
-        busRes
-      ] = await Promise.all([
-        supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).select("id", { count: "exact", head: true }),
-        supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).select("id", { count: "exact", head: true }).eq("verification_status", "verified"),
-        supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).select("id", { count: "exact", head: true }).eq("verification_status", "pending_vouch"),
-        supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).select("id", { count: "exact", head: true }).eq("is_public", false),
-        supabaseServer.from(SUPABASE_TABLES.BLOOD_DONORS).select("user_id", { count: "exact", head: true }).eq("is_registered_donor", true),
-        supabaseServer.from(SUPABASE_TABLES.ADMIN_DOC_SUBMISSIONS).select("id", { count: "exact", head: true }).eq("status", "pending"),
-        supabaseServer.from(SUPABASE_TABLES.BLOOD_REQUESTS).select("id", { count: "exact", head: true }).in("status", ["Active", "Pending Verification"]),
-        supabaseServer.from(SUPABASE_TABLES.OFFICIAL_NOTICES).select("id", { count: "exact", head: true }).eq("is_published", true),
-        supabaseServer.from(SUPABASE_TABLES.ACADEMIC_STREAM_GROUPS).select("*").order("stream").order("group_code"),
-        supabaseServer.from(SUPABASE_TABLES.AUDIT_LOGS).select("*").order("created_at", { ascending: false }).limit(15),
-        supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).select("id", { count: "exact", head: true }).eq("academic_stream", "Science"),
-        supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).select("id", { count: "exact", head: true }).eq("academic_stream", "Humanities"),
-        supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).select("id", { count: "exact", head: true }).eq("academic_stream", "Business Studies")
-      ]);
-      totalProfiles = totalRes.count ?? 0;
-      verifiedProfiles = verifiedRes.count ?? 0;
-      pendingProfiles = pendingRes.count ?? 0;
-      suspendedProfiles = suspendedRes.count ?? 0;
-      registeredDonors = donorsRes.count ?? 0;
-      pendingDocReviews = pendingDocsRes.count ?? 0;
-      activeBloodEmergencies = bloodRes.count ?? 0;
-      publishedNotices = noticesRes.count ?? 0;
-      scienceCount = sciRes.count ?? 0;
-      humanitiesCount = humRes.count ?? 0;
-      businessCount = busRes.count ?? 0;
-      if (streamConfigRes.data && streamConfigRes.data.length > 0) {
-        streamGroupsConfig = streamConfigRes.data.map((r) => ({
-          id: r.id,
-          stream: r.stream,
-          groupCode: r.group_code,
-          expectedGroupCount: r.expected_group_count,
-          isActive: r.is_active
-        }));
-      }
-      if (auditLogsRes.data && auditLogsRes.data.length > 0) {
-        recentAuditLogs = auditLogsRes.data.map((r) => ({
-          id: r.id,
-          actorUid: r.actor_auth_id || "system",
-          actorEmail: r.actor_auth_id || "admin@szmcalumni.net",
-          actorRole: "admin",
-          action: r.action,
-          targetType: r.entity_table,
-          targetId: r.entity_id,
-          severity: "info",
-          summary: r.reason || r.action,
-          createdAt: r.created_at
-        }));
-      }
-    } catch (err) {
-      console.warn("Supabase overview metrics error:", err);
-    }
-  }
-  return {
-    totalProfiles,
-    verifiedProfiles,
-    pendingProfiles,
-    suspendedProfiles,
-    registeredDonors,
-    pendingDocReviews,
-    activeBloodEmergencies,
-    publishedNotices,
-    streamDistribution: {
-      Science: scienceCount,
-      Humanities: humanitiesCount,
-      "Business Studies": businessCount
-    },
-    streamGroupsConfig,
-    recentAuditLogs
-  };
-}
-async function queryPaginatedAlumniProfiles(params) {
-  const page = Math.max(1, params.page || 1);
-  const limit = Math.min(100, Math.max(1, params.limit || 25));
-  const offset = (page - 1) * limit;
-  if (isSupabaseServerConfigured) {
-    try {
-      let query = supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).select("*", { count: "exact" });
-      if (params.batchYear && !Number.isNaN(Number(params.batchYear))) {
-        query = query.eq("batch_year", Number(params.batchYear));
-      }
-      if (params.academicStream && params.academicStream !== "all") {
-        query = query.eq("academic_stream", params.academicStream);
-      }
-      if (params.verificationStatus && params.verificationStatus !== "all") {
-        query = query.eq("verification_status", params.verificationStatus);
-      }
-      if (params.role && params.role !== "all") {
-        query = query.eq("role", params.role);
-      }
-      if (params.bloodGroup && params.bloodGroup !== "all") {
-        query = query.eq("blood_group", params.bloodGroup);
-      }
-      if (params.search && params.search.trim()) {
-        const s = params.search.trim();
-        query = query.or(
-          `full_name.ilike.%${s}%,institution.ilike.%${s}%,profession.ilike.%${s}%,city.ilike.%${s}%,college_roll.ilike.%${s}%`
-        );
-      }
-      query = query.order("created_at", { ascending: false }).range(offset, offset + limit - 1);
-      const { data, count, error } = await query;
-      if (!error && data) {
-        const total2 = count ?? data.length;
-        const totalPages2 = Math.ceil(total2 / limit) || 1;
-        const profiles = data.map((r) => ({
-          id: Number(r.id),
-          fullName: r.full_name || "SZMC Alumnus",
-          avatarUrl: r.avatar_url || "/szmc-logo.png",
-          batchYear: Number(r.batch_year) >= 1 && Number(r.batch_year) <= 35 ? Number(r.batch_year) : 1,
-          session: r.session || null,
-          collegeRoll: r.college_roll || null,
-          academicStream: r.academic_stream || "Science",
-          academicGroup: r.academic_group || null,
-          section: r.section || null,
-          verificationStatus: r.verification_status || "unverified",
-          verificationMethod: r.verification_method || "two_vouches",
-          vouchesCount: Number(r.vouches_count) || 0,
-          vouchTargetCount: Number(r.vouch_target_count) || 2,
-          verifiedByAdmin: r.verified_by_profile_id ? String(r.verified_by_profile_id) : null,
-          profession: r.profession || "",
-          position: r.position || "",
-          institution: r.institution || "",
-          city: r.city || "Dhaka",
-          country: r.country || "Bangladesh",
-          phone: params.includeSensitivePii ? r.phone : r.phone ? "Protected" : null,
-          phoneOwnershipVerified: Boolean(r.phone_ownership_verified),
-          phoneVerifiedAt: r.phone_verified_at || null,
-          phoneVerifiedByAdmin: r.phone_verified_by_profile_id ? String(r.phone_verified_by_profile_id) : null,
-          phoneVerificationNotes: params.includeSensitivePii ? r.phone_verification_notes || null : null,
-          whatsapp: params.includeSensitivePii ? r.whatsapp : r.whatsapp ? "Protected" : null,
-          email: params.includeSensitivePii ? r.email : r.email ? "Protected" : null,
-          bloodGroup: r.blood_group || null,
-          isRegisteredDonor: Boolean(r.is_registered_donor),
-          role: r.role || "member",
-          accountStatus: r.is_public ? "active" : "suspended",
-          createdAt: r.created_at || (/* @__PURE__ */ new Date()).toISOString()
-        }));
-        return {
-          profiles,
-          pagination: { page, limit, total: total2, totalPages: totalPages2 }
-        };
-      }
-    } catch (err) {
-      console.warn("Supabase queryPaginatedAlumniProfiles error:", err);
-    }
-  }
-  let filtered = [...inMemoryAlumniProfiles];
-  if (params.batchYear && !Number.isNaN(Number(params.batchYear))) {
-    filtered = filtered.filter((p) => p.batchYear === Number(params.batchYear));
-  }
-  if (params.academicStream && params.academicStream !== "all") {
-    filtered = filtered.filter((p) => p.academicStream === params.academicStream);
-  }
-  if (params.verificationStatus && params.verificationStatus !== "all") {
-    filtered = filtered.filter((p) => p.verificationStatus === params.verificationStatus);
-  }
-  if (params.role && params.role !== "all") {
-    filtered = filtered.filter((p) => p.role === params.role);
-  }
-  if (params.bloodGroup && params.bloodGroup !== "all") {
-    filtered = filtered.filter((p) => p.bloodGroup === params.bloodGroup);
-  }
-  if (params.search && params.search.trim()) {
-    const s = params.search.trim().toLowerCase();
-    filtered = filtered.filter(
-      (p) => p.fullName && p.fullName.toLowerCase().includes(s) || p.institution && p.institution.toLowerCase().includes(s) || p.profession && p.profession.toLowerCase().includes(s) || p.city && p.city.toLowerCase().includes(s) || p.collegeRoll && p.collegeRoll.toLowerCase().includes(s)
-    );
-  }
-  const total = filtered.length;
-  const totalPages = Math.ceil(total / limit) || 1;
-  const pageProfiles = filtered.slice(offset, offset + limit).map((r) => ({
-    ...r,
-    phone: params.includeSensitivePii ? r.phone : r.phone ? "Protected" : null,
-    whatsapp: params.includeSensitivePii ? r.whatsapp : r.whatsapp ? "Protected" : null,
-    email: params.includeSensitivePii ? r.email : r.email ? "Protected" : null
-  }));
-  return {
-    profiles: pageProfiles,
-    pagination: { page, limit, total, totalPages }
-  };
-}
-async function createOrRegisterAlumniProfile(input) {
-  const cleanEmail = (input.email || "").trim().toLowerCase() || null;
-  const cleanPhone = (input.phone || "").trim() || null;
-  const batchNum = input.batchYear > 1900 ? Math.min(35, Math.max(1, input.batchYear - 1991)) : Math.min(35, Math.max(1, Number(input.batchYear) || 1));
-  const session = input.session || `${1991 + batchNum}-${String(1992 + batchNum).slice(-2)}`;
-  const streamVal = input.academicStream === "Humanities" || input.academicStream === "Business Studies" ? input.academicStream : "Science";
-  const groupVal = streamVal === "Science" ? null : input.academicGroup ? input.academicGroup.trim().toUpperCase() : null;
-  let effectiveAuthUid = null;
-  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  if (input.userUid && uuidRegex.test(input.userUid)) {
-    effectiveAuthUid = input.userUid;
-  }
-  if (isSupabaseServerConfigured) {
-    try {
-      if (!effectiveAuthUid && cleanEmail) {
-        const existingAuthUser = await findAuthUserByEmailOrPhone({ email: cleanEmail });
-        if (existingAuthUser) {
-          effectiveAuthUid = existingAuthUser.id;
+function createDistDownloadRouter(rootDir) {
+  const router = Router();
+  router.get(
+    [
+      "/download/szmc-alumni-dist.zip",
+      "/szmc-alumni-dist.zip",
+      "/download/dist.zip",
+      "/dist.zip",
+      "/api/download-dist",
+      "/download-dist"
+    ],
+    requireSuperAdminOrSignedDistToken,
+    (_req, res) => {
+      const candidates = [
+        path.resolve(rootDir, "szmc-alumni-dist.zip"),
+        path.resolve(rootDir, "dist", "szmc-alumni-dist.zip"),
+        path.resolve(rootDir, "public", "szmc-alumni-dist.zip"),
+        path.resolve(rootDir, "public", "dist.zip"),
+        path.resolve(rootDir, "dist.zip"),
+        path.resolve(rootDir, "szmc-alumni-dist.tar.gz"),
+        path.resolve(rootDir, "public", "szmc-alumni-dist.tar.gz")
+      ];
+      for (const c of candidates) {
+        if (existsSync(c)) {
+          res.setHeader("Cache-Control", "no-store");
+          return res.download(c, "szmc-alumni-dist.zip");
         }
       }
-      if (!effectiveAuthUid && cleanEmail && (input.rawPassword || input.passwordHash)) {
-        const initialPass = input.rawPassword || "TempPass_" + Date.now();
-        try {
-          const { data: createdAuthUser, error: createAuthErr } = await supabaseServer.auth.admin.createUser({
-            email: cleanEmail,
-            password: initialPass,
-            email_confirm: false,
-            user_metadata: {
-              full_name: input.fullName.trim(),
-              batch_year: batchNum,
-              phone: cleanPhone
-            }
-          });
-          if (!createAuthErr && createdAuthUser?.user) {
-            effectiveAuthUid = createdAuthUser.user.id;
-          }
-        } catch {
-        }
-        if (!effectiveAuthUid) {
-          try {
-            const { data: sData, error: sErr } = await supabaseServer.auth.signUp({
-              email: cleanEmail,
-              password: initialPass,
-              options: {
-                data: {
-                  full_name: input.fullName.trim(),
-                  batch_year: batchNum,
-                  phone: cleanPhone
-                }
-              }
-            });
-            if (!sErr && sData?.user) {
-              effectiveAuthUid = sData.user.id;
-            }
-          } catch {
-          }
-        }
-      }
-      if (effectiveAuthUid) {
-        const { data, error } = await supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).upsert(
-          {
-            auth_user_id: effectiveAuthUid,
-            full_name: input.fullName.trim(),
-            avatar_url: input.avatarUrl || "/assets/aistudio/images__1__2778177d.png",
-            batch_year: batchNum,
-            session,
-            college_roll: input.collegeRoll?.trim() || null,
-            academic_stream: streamVal,
-            academic_group: groupVal,
-            section: input.section || "SZMC",
-            profession: input.profession || "",
-            position: input.position || "",
-            institution: input.institution || "",
-            specialty: Array.isArray(input.specialty) ? input.specialty : [],
-            degree: Array.isArray(input.degree) ? input.degree : ["MBBS"],
-            city: input.city || "Bogura",
-            country: input.country || "Bangladesh",
-            phone: cleanPhone,
-            whatsapp: input.whatsapp?.trim() || null,
-            email: cleanEmail,
-            blood_group: input.bloodGroup || null,
-            role: "member",
-            verification_status: isServerAutoVerifyActive() ? "verified" : "unverified",
-            verification_method: isServerAutoVerifyActive() ? "admin_instant" : null,
-            vouches_count: isServerAutoVerifyActive() ? 2 : 0,
-            vouch_target_count: 2,
-            verified_at: isServerAutoVerifyActive() ? (/* @__PURE__ */ new Date()).toISOString() : null,
-            is_public: true
-          },
-          { onConflict: "auth_user_id" }
-        ).select().single();
-        if (!error && data) {
-          const profileResult = {
-            id: Number(data.id),
-            fullName: data.full_name,
-            avatarUrl: data.avatar_url,
-            batchYear: data.batch_year,
-            session: data.session,
-            collegeRoll: data.college_roll,
-            academicStream: data.academic_stream,
-            academicGroup: data.academic_group,
-            section: data.section,
-            profession: data.profession,
-            position: data.position,
-            institution: data.institution,
-            city: data.city,
-            country: data.country,
-            phone: data.phone,
-            email: data.email,
-            bloodGroup: data.blood_group,
-            role: data.role,
-            verificationStatus: data.verification_status,
-            isPublic: data.is_public,
-            createdAt: data.created_at
-          };
-          const existingIdx2 = inMemoryAlumniProfiles.findIndex(
-            (p) => p.id === profileResult.id || cleanEmail && p.email?.toLowerCase() === cleanEmail
-          );
-          if (existingIdx2 >= 0) {
-            inMemoryAlumniProfiles[existingIdx2] = profileResult;
-          } else {
-            inMemoryAlumniProfiles.unshift(profileResult);
-          }
-          return profileResult;
-        } else if (error) {
-          console.warn("Supabase alumni_profiles upsert notice:", error.message);
-        }
-      }
-    } catch (err) {
-      console.warn("Supabase createOrRegisterAlumniProfile notice:", err);
+      return res.status(404).send("Production dist archive not found. Please build first.");
     }
-  }
-  const fallbackId = Date.now();
-  const fallbackProfile = {
-    id: fallbackId,
-    fullName: input.fullName.trim(),
-    avatarUrl: input.avatarUrl || "/assets/aistudio/images__1__2778177d.png",
-    batchYear: batchNum,
-    session,
-    collegeRoll: input.collegeRoll?.trim() || null,
-    academicStream: streamVal,
-    academicGroup: groupVal,
-    section: input.section || "SZMC",
-    profession: input.profession || "Medical Doctor",
-    position: input.position || "",
-    institution: input.institution || "Shaheed Ziaur Rahman Medical College Hospital",
-    city: input.city || "Bogura",
-    country: input.country || "Bangladesh",
-    phone: cleanPhone,
-    phoneOwnershipVerified: false,
-    phoneVerifiedAt: null,
-    phoneVerifiedByProfileId: null,
-    phoneVerificationNotes: null,
-    email: cleanEmail,
-    passwordHash: input.passwordHash || null,
-    bloodGroup: input.bloodGroup || null,
-    role: "member",
-    verificationStatus: isServerAutoVerifyActive() ? "verified" : "unverified",
-    verificationMethod: isServerAutoVerifyActive() ? "admin_instant" : null,
-    vouchesCount: isServerAutoVerifyActive() ? 2 : 0,
-    vouchTargetCount: 2,
-    verifiedAt: isServerAutoVerifyActive() ? (/* @__PURE__ */ new Date()).toISOString() : null,
-    accountStatus: "active",
-    isPublic: true,
-    authUserId: effectiveAuthUid || `local-${fallbackId}`,
-    createdAt: (/* @__PURE__ */ new Date()).toISOString()
-  };
-  const existingIdx = inMemoryAlumniProfiles.findIndex(
-    (p) => cleanEmail && p.email?.toLowerCase() === cleanEmail
   );
-  if (existingIdx >= 0) {
-    inMemoryAlumniProfiles[existingIdx] = fallbackProfile;
-  } else {
-    inMemoryAlumniProfiles.unshift(fallbackProfile);
-  }
-  return fallbackProfile;
-}
-async function findAlumniByCredential(credential) {
-  const clean = credential.trim().toLowerCase();
-  if (isSupabaseServerConfigured && clean) {
-    try {
-      let query = supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).select("*");
-      if (clean.includes("@")) {
-        query = query.eq("email", clean);
-      } else {
-        const cleanDigits2 = clean.replace(/[^0-9]/g, "");
-        query = query.or(`phone.eq.${clean},phone.eq.+88${clean},phone.eq.+880${cleanDigits2}`);
-      }
-      const { data, error } = await query.maybeSingle();
-      if (!error && data) {
-        return {
-          id: Number(data.id),
-          fullName: data.full_name,
-          avatarUrl: data.avatar_url,
-          batchYear: Number(data.batch_year),
-          session: data.session,
-          collegeRoll: data.college_roll,
-          academicStream: data.academic_stream,
-          academicGroup: data.academic_group,
-          section: data.section,
-          profession: data.profession,
-          position: data.position,
-          institution: data.institution,
-          city: data.city,
-          country: data.country,
-          phone: data.phone,
-          phoneOwnershipVerified: Boolean(data.phone_ownership_verified),
-          phoneVerifiedAt: data.phone_verified_at || null,
-          phoneVerifiedByProfileId: data.phone_verified_by_profile_id || null,
-          phoneVerificationNotes: data.phone_verification_notes || null,
-          email: data.email,
-          bloodGroup: data.blood_group,
-          role: data.role,
-          verificationStatus: data.verification_status,
-          accountStatus: data.is_public ? "active" : "suspended",
-          passwordHash: null,
-          authUserId: data.auth_user_id || void 0,
-          createdAt: data.created_at
-        };
-      }
-      if (clean.includes("@")) {
-        const matched = await findAuthUserByEmailOrPhone({ email: clean });
-        if (matched && matched.email_confirmed_at) {
-          const restored = await createOrRegisterAlumniProfile({
-            userUid: matched.id,
-            fullName: matched.user_metadata?.full_name || matched.user_metadata?.name || clean.split("@")[0],
-            batchYear: Number(matched.user_metadata?.batch_year) || 25,
-            email: clean,
-            phone: matched.user_metadata?.phone || null
-          });
-          return restored;
+  router.get(
+    ["/download/szmc-alumni-dist.tar.gz", "/szmc-alumni-dist.tar.gz"],
+    requireSuperAdminOrSignedDistToken,
+    (_req, res) => {
+      const candidates = [
+        path.resolve(rootDir, "public", "szmc-alumni-dist.tar.gz"),
+        path.resolve(rootDir, "szmc-alumni-dist.tar.gz")
+      ];
+      for (const c of candidates) {
+        if (existsSync(c)) {
+          res.setHeader("Cache-Control", "no-store");
+          return res.download(c, "szmc-alumni-dist.tar.gz");
         }
       }
-    } catch (err) {
-      console.warn("Supabase findAlumniByCredential error:", err);
+      return res.status(404).send("Production dist tar.gz archive not found.");
     }
-  }
-  const cleanDigits = clean.replace(/[^0-9]/g, "");
-  const found = inMemoryAlumniProfiles.find(
-    (p) => p.email && p.email.toLowerCase() === clean || cleanDigits && p.phone && p.phone.replace(/[^0-9]/g, "").endsWith(cleanDigits)
   );
-  return found || null;
-}
-async function updateAlumniPassword(profileId, passwordHash) {
-  if (isSupabaseServerConfigured && profileId) {
-    try {
-      await supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).update({ updated_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("id", profileId);
-      return true;
-    } catch (err) {
-      console.warn("Supabase updateAlumniPassword error:", err);
-    }
-  }
-  const found = inMemoryAlumniProfiles.find((p) => p.id === profileId);
-  if (found) {
-    found.passwordHash = passwordHash;
-  }
-  return true;
-}
-async function deleteAlumniProfile(profileId) {
-  if (isSupabaseServerConfigured && profileId) {
-    try {
-      const { error } = await supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).delete().eq("id", profileId);
-      return !error;
-    } catch (err) {
-      console.warn("Supabase deleteAlumniProfile error:", err);
-    }
-  }
-  const idx = inMemoryAlumniProfiles.findIndex((p) => p.id === profileId);
-  if (idx !== -1) {
-    inMemoryAlumniProfiles.splice(idx, 1);
-  }
-  return true;
-}
-async function updateAlumniProfileRecord(profileId, updates) {
-  const dbUpdates = {
-    updated_at: (/* @__PURE__ */ new Date()).toISOString()
-  };
-  if (updates.fullName !== void 0) dbUpdates.full_name = updates.fullName;
-  if (updates.avatarUrl !== void 0) dbUpdates.avatar_url = updates.avatarUrl;
-  if (updates.coverUrl !== void 0) dbUpdates.cover_url = updates.coverUrl;
-  if (updates.batchYear !== void 0) dbUpdates.batch_year = Number(updates.batchYear);
-  if (updates.collegeRoll !== void 0) dbUpdates.college_roll = updates.collegeRoll;
-  if (updates.profession !== void 0) dbUpdates.profession = updates.profession;
-  if (updates.position !== void 0) dbUpdates.position = updates.position;
-  if (updates.institution !== void 0) dbUpdates.institution = updates.institution;
-  if (updates.cadre !== void 0) dbUpdates.cadre = updates.cadre;
-  if (updates.city !== void 0) dbUpdates.city = updates.city;
-  if (updates.country !== void 0) dbUpdates.country = updates.country;
-  if (updates.bio !== void 0) dbUpdates.bio = updates.bio;
-  if (updates.whatsapp !== void 0) dbUpdates.whatsapp = updates.whatsapp;
-  if (updates.fbLink !== void 0) dbUpdates.fb_link = updates.fbLink;
-  if (updates.phone !== void 0) dbUpdates.phone = updates.phone;
-  if (updates.email !== void 0) dbUpdates.email = updates.email;
-  if (updates.careerHistory !== void 0) dbUpdates.career_history = updates.careerHistory;
-  if (updates.degree !== void 0) dbUpdates.degree = updates.degree;
-  if (updates.specialty !== void 0) dbUpdates.specialty = updates.specialty;
-  if (updates.specialtyOther !== void 0) dbUpdates.specialty_other = updates.specialtyOther;
-  if (updates.bloodGroup !== void 0) dbUpdates.blood_group = updates.bloodGroup;
-  if (updates.isPublic !== void 0) dbUpdates.is_public = updates.isPublic;
-  if (isSupabaseServerConfigured && profileId) {
-    try {
-      await supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).update(dbUpdates).eq("id", profileId);
-    } catch (err) {
-      console.warn("Supabase updateAlumniProfileRecord error:", err);
-    }
-  }
-  const idx = inMemoryAlumniProfiles.findIndex((p) => p.id === profileId);
-  if (idx !== -1) {
-    inMemoryAlumniProfiles[idx] = {
-      ...inMemoryAlumniProfiles[idx],
-      ...updates
-    };
-    return inMemoryAlumniProfiles[idx];
-  }
-  return { id: profileId, ...updates };
-}
-async function adminUpdateAlumniGovernance(params) {
-  if (params.role !== void 0) {
-    const supportedRoles = ["member", "moderator", "admin"];
-    if (params.actorRole !== "admin" || !supportedRoles.includes(params.role)) {
-      throw new Error("Only administrators may assign supported database roles.");
-    }
-  }
-  if (params.verificationStatus !== void 0 && isSupabaseServerConfigured) {
-    const { data: target, error: targetError } = await supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).select("auth_user_id, role").eq("id", params.profileId).maybeSingle();
-    if (targetError || !target) throw new Error("Alumni profile not found.");
-    if (target.auth_user_id === params.actorUid) {
-      throw new Error("Administrators cannot change their own verification status.");
-    }
-    if (target.role === "admin" && params.actorRole !== "admin") {
-      throw new Error("Only administrators may change an administrator profile.");
-    }
-  }
-  if (isSupabaseServerConfigured && params.profileId) {
-    try {
-      const updates = {
-        updated_at: (/* @__PURE__ */ new Date()).toISOString()
-      };
-      if (params.verificationStatus) updates.verification_status = params.verificationStatus;
-      if (params.role) updates.role = params.role;
-      if (params.academicStream) updates.academic_stream = params.academicStream;
-      if (params.academicGroup !== void 0) updates.academic_group = params.academicGroup;
-      if (params.accountStatus !== void 0) updates.is_public = params.accountStatus !== "suspended";
-      const { data, error } = await supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).update(updates).eq("id", params.profileId).select().single();
-      if (!error && data) {
-        await recordSecurityAuditLog({
-          actorUid: params.actorUid,
-          actorEmail: params.actorEmail,
-          actorRole: params.actorRole,
-          action: "UPDATE_PROFILE_GOVERNANCE",
-          targetType: "alumni_profile",
-          targetId: String(params.profileId),
-          severity: "info",
-          summary: `Updated profile governance for ${data.full_name} (ID ${data.id}).`
-        });
-        return {
-          id: Number(data.id),
-          fullName: data.full_name,
-          verificationStatus: data.verification_status,
-          role: data.role,
-          accountStatus: data.is_public ? "active" : "suspended",
-          academicStream: data.academic_stream,
-          academicGroup: data.academic_group,
-          updatedAt: data.updated_at
-        };
-      }
-    } catch (err) {
-      console.warn("Supabase adminUpdateAlumniGovernance error:", err);
-      throw err;
-    }
-  }
-  throw new Error("Supabase is required to update profile governance.");
-}
-async function adminVerifyAlumniPhoneOwnership(params) {
-  const profileId = Number(params.profileId);
-  const now = (/* @__PURE__ */ new Date()).toISOString();
-  if (isSupabaseServerConfigured && profileId) {
-    try {
-      const { data: profile, error: fetchErr } = await supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).select("*").eq("id", profileId).single();
-      if (fetchErr || !profile) {
-        throw new Error("Alumni profile not found.");
-      }
-      if (profile.auth_user_id === params.actorUid) {
-        throw new Error("Administrators cannot verify their own phone ownership.");
-      }
-      const rawPhone = (profile.phone || "").trim();
-      if (!rawPhone) {
-        throw new Error("Alumnus does not have a registered mobile number to verify.");
-      }
-      const normalizedPhone = rawPhone.startsWith("+") ? rawPhone.replace(/[^\d+]/g, "") : rawPhone.replace(/\D/g, "").startsWith("880") ? `+${rawPhone.replace(/\D/g, "")}` : `+880${rawPhone.replace(/\D/g, "").replace(/^0+/, "")}`;
-      const { data: duplicate } = await supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).select("id, full_name").eq("phone", normalizedPhone).eq("phone_ownership_verified", true).neq("id", profileId).maybeSingle();
-      if (duplicate) {
-        throw new Error(
-          `This phone number (${normalizedPhone}) is already verified for another alumnus (${duplicate.full_name}, ID: ${duplicate.id}). Dual-account phone reuse is prohibited.`
-        );
-      }
-      const { data: updated, error: updateErr } = await supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).update({
-        phone: normalizedPhone,
-        phone_ownership_verified: true,
-        phone_verified_at: now,
-        phone_verification_notes: params.notes || "Verified by portal administrator",
-        updated_at: now
-      }).eq("id", profileId).select().single();
-      if (updateErr || !updated) {
-        throw new Error("Phone verification could not be saved.");
-      }
-      if (profile.auth_user_id) {
-        try {
-          await supabaseServer.auth.admin.updateUserById(profile.auth_user_id, {
-            phone: normalizedPhone,
-            phone_confirm: true
-          });
-        } catch (authErr) {
-          console.warn("Note: GoTrue phone provider update notice:", authErr?.message || authErr);
+  router.get(
+    [
+      "/download/szmc-supabase-migrations.zip",
+      "/szmc-supabase-migrations.zip",
+      "/download/migrations.zip",
+      "/api/download-migrations"
+    ],
+    requireSuperAdminOrSignedDistToken,
+    (_req, res) => {
+      const candidates = [path.resolve(rootDir, "szmc-supabase-migrations.zip")];
+      for (const c of candidates) {
+        if (existsSync(c)) {
+          res.setHeader("Cache-Control", "no-store");
+          return res.download(c, "szmc-supabase-migrations.zip");
         }
       }
-      await recordSecurityAuditLog({
-        actorUid: params.actorUid,
-        actorEmail: params.actorEmail,
-        actorRole: params.actorRole,
-        action: "VERIFY_PHONE_OWNERSHIP",
-        targetType: "alumni_profile",
-        targetId: String(profileId),
-        severity: "info",
-        summary: `Admin verified phone ownership for ${profile.full_name} (${normalizedPhone}). Phone login enabled.`
-      });
-      return {
-        id: profileId,
-        fullName: profile.full_name,
-        phone: normalizedPhone,
-        phoneOwnershipVerified: true,
-        phoneVerifiedAt: now,
-        phoneVerificationNotes: params.notes || "Verified by portal administrator"
-      };
-    } catch (err) {
-      console.error("adminVerifyAlumniPhoneOwnership error:", err);
-      throw err;
+      return res.status(404).send("Supabase migrations archive not found.");
     }
-  }
-  throw new Error("Supabase is required to verify phone ownership.");
-}
-async function adminRevokeAlumniPhoneOwnership(params) {
-  const profileId = Number(params.profileId);
-  const now = (/* @__PURE__ */ new Date()).toISOString();
-  if (isSupabaseServerConfigured && profileId) {
-    try {
-      const { data: profile } = await supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).select("*").eq("id", profileId).single();
-      if (profile) {
-        await supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).update({
-          phone_ownership_verified: false,
-          phone_verified_at: null,
-          phone_verification_notes: params.notes || "Phone verification revoked by administrator",
-          updated_at: now
-        }).eq("id", profileId);
-        await recordSecurityAuditLog({
-          actorUid: params.actorUid,
-          actorEmail: params.actorEmail,
-          actorRole: params.actorRole,
-          action: "REVOKE_PHONE_OWNERSHIP",
-          targetType: "alumni_profile",
-          targetId: String(profileId),
-          severity: "warning",
-          summary: `Admin revoked phone ownership verification for ${profile.full_name} (${profile.phone}). Phone login disabled.`
-        });
-      }
-      return { id: profileId, phoneOwnershipVerified: false };
-    } catch (err) {
-      console.error("adminRevokeAlumniPhoneOwnership error:", err);
-      throw err;
-    }
-  }
-  const found = inMemoryAlumniProfiles.find((p) => p.id === profileId);
-  if (found) {
-    found.phoneOwnershipVerified = false;
-    found.phoneVerifiedAt = null;
-  }
-  return { id: profileId, phoneOwnershipVerified: false };
-}
-async function getVerificationQueue(statusFilter) {
-  if (isSupabaseServerConfigured) {
-    try {
-      let query = supabaseServer.from(SUPABASE_TABLES.ADMIN_DOC_SUBMISSIONS).select("*").order("submitted_at", { ascending: false });
-      if (statusFilter && statusFilter !== "all") {
-        query = query.eq("status", statusFilter);
-      }
-      const { data, error } = await query;
-      if (!error && data) {
-        return data.map((r) => ({
-          id: r.id,
-          submissionCode: `DOC-${String(r.id).slice(0, 8)}`,
-          profileId: r.user_id,
-          fullName: "SZMC Alumnus",
-          avatarUrl: "/assets/aistudio/images__1__2778177d.png",
-          batchYear: r.batch_year,
-          collegeRoll: r.college_roll,
-          academicStream: r.academic_stream,
-          academicGroup: r.academic_group,
-          docType: r.doc_type,
-          docTypeLabel: r.doc_type_label,
-          documentUrl: r.storage_object_path,
-          status: r.status,
-          submittedAt: r.submitted_at,
-          reviewedBy: r.reviewed_by ? String(r.reviewed_by) : null,
-          reviewedAt: r.reviewed_at,
-          adminNote: r.admin_note
-        }));
-      }
-    } catch (err) {
-      console.warn("Supabase getVerificationQueue error:", err);
-    }
-  }
-  return [];
-}
-async function reviewVerificationSubmission(params) {
-  if (isSupabaseServerConfigured && params.submissionId) {
-    try {
-      const { data: submission, error: submissionError } = await supabaseServer.from(SUPABASE_TABLES.ADMIN_DOC_SUBMISSIONS).select("id, user_id").eq("id", params.submissionId).maybeSingle();
-      if (submissionError || !submission) throw new Error("Verification submission not found.");
-      if (submission.user_id) {
-        const { data: applicant, error: applicantError } = await supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).select("auth_user_id").eq("id", submission.user_id).maybeSingle();
-        if (applicantError) throw applicantError;
-        if (applicant?.auth_user_id === params.actorUid) {
-          throw new Error("Administrators cannot review their own verification submission.");
-        }
-      }
-      const { data, error } = await supabaseServer.from(SUPABASE_TABLES.ADMIN_DOC_SUBMISSIONS).update({
-        status: params.decision,
-        admin_note: params.adminNote || "Reviewed by central admin",
-        reviewed_at: (/* @__PURE__ */ new Date()).toISOString()
-      }).eq("id", params.submissionId).select().single();
-      if (!error && data) {
-        if (params.decision === "approved" && data.user_id) {
-          await supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).update({
-            verification_status: "verified",
-            verification_method: "id_card_upload",
-            verified_at: (/* @__PURE__ */ new Date()).toISOString()
-          }).eq("id", data.user_id);
-        }
-        await recordSecurityAuditLog({
-          actorUid: params.actorUid,
-          actorEmail: params.actorEmail,
-          actorRole: params.actorRole,
-          action: params.decision === "approved" ? "APPROVE_VERIFICATION_DOC" : "REJECT_VERIFICATION_DOC",
-          targetType: "verification_submission",
-          targetId: String(params.submissionId),
-          severity: params.decision === "approved" ? "info" : "warning",
-          summary: `${params.decision.toUpperCase()} document verification for submission ID ${params.submissionId}.`
-        });
-        return data;
-      }
-    } catch (err) {
-      console.warn("Supabase reviewVerificationSubmission error:", err);
-      throw err;
-    }
-  }
-  throw new Error("Supabase is required to review verification submissions.");
-}
-async function getBloodEmergencyList() {
-  if (isSupabaseServerConfigured) {
-    try {
-      const { data, error } = await supabaseServer.from(SUPABASE_TABLES.BLOOD_REQUESTS).select("*").order("created_at", { ascending: false });
-      if (!error && data) {
-        return data.map((r) => ({
-          id: r.id,
-          requestCode: `BLD-${String(r.id).slice(0, 8)}`,
-          patientName: r.patient_relation || "SZMC Patient",
-          bloodGroup: r.blood_group,
-          unitsNeeded: r.units_required,
-          unitsFulfilled: r.units_fulfilled || 0,
-          hospitalName: r.hospital_name,
-          hospitalArea: r.hospital_area,
-          contactNumber: r.coordination_ref || "Through Portal",
-          urgencyLevel: r.emergency_level,
-          status: r.status,
-          verifiedByAdmin: r.verified_by_admin_id ? String(r.verified_by_admin_id) : null,
-          moderationNote: r.moderation_note,
-          createdAt: r.created_at,
-          updatedAt: r.updated_at
-        }));
-      }
-    } catch (err) {
-      console.warn("Supabase getBloodEmergencyList error:", err);
-    }
-  }
-  return [];
-}
-async function moderateBloodEmergency(params) {
-  if (isSupabaseServerConfigured && params.id) {
-    try {
-      const updates = {
-        status: params.status,
-        updated_at: (/* @__PURE__ */ new Date()).toISOString()
-      };
-      if (params.unitsFulfilled !== void 0) updates.units_fulfilled = params.unitsFulfilled;
-      if (params.moderationNote !== void 0) updates.moderation_note = params.moderationNote;
-      const { data, error } = await supabaseServer.from(SUPABASE_TABLES.BLOOD_REQUESTS).update(updates).eq("id", params.id).select().single();
-      if (!error && data) {
-        await recordSecurityAuditLog({
-          actorUid: params.actorUid,
-          actorEmail: params.actorEmail,
-          actorRole: params.actorRole,
-          action: "MODERATE_BLOOD_REQUEST",
-          targetType: "blood_request",
-          targetId: String(params.id),
-          severity: "info",
-          summary: `Moderated blood request ${params.id} to "${params.status}".`
-        });
-        return data;
-      }
-    } catch (err) {
-      console.warn("Supabase moderateBloodEmergency error:", err);
-    }
-  }
-  return {
-    id: params.id,
-    status: params.status,
-    unitsFulfilled: params.unitsFulfilled,
-    moderationNote: params.moderationNote
-  };
-}
-async function getOfficialNoticesList() {
-  if (isSupabaseServerConfigured) {
-    try {
-      const { data, error } = await supabaseServer.from(SUPABASE_TABLES.OFFICIAL_NOTICES).select("*").order("is_urgent", { ascending: false }).order("created_at", { ascending: false });
-      if (!error && data) {
-        return data.map((r) => ({
-          id: r.id,
-          refNo: r.ref_no || `SZMC/NOT-${String(r.id).slice(0, 6)}`,
-          title: r.title,
-          category: r.category,
-          content: r.full_content || r.summary,
-          targetBatch: null,
-          isPinned: r.is_urgent,
-          isPublished: r.is_published,
-          authorName: r.signatory_name || "Alumni Secretariat",
-          createdAt: r.created_at,
-          updatedAt: r.updated_at
-        }));
-      }
-    } catch (err) {
-      console.warn("Supabase getOfficialNoticesList error:", err);
-    }
-  }
-  return [];
-}
-async function createOrUpdateOfficialNotice(params) {
-  if (isSupabaseServerConfigured) {
-    try {
-      if (params.id) {
-        const { data, error } = await supabaseServer.from(SUPABASE_TABLES.OFFICIAL_NOTICES).update({
-          title: params.title.trim(),
-          category: params.category,
-          full_content: params.content.trim(),
-          summary: params.content.trim().slice(0, 200),
-          is_urgent: Boolean(params.isPinned),
-          is_published: Boolean(params.isPublished ?? true),
-          updated_at: (/* @__PURE__ */ new Date()).toISOString()
-        }).eq("id", params.id).select().single();
-        if (!error && data) return data;
-      } else {
-        const { data, error } = await supabaseServer.from(SUPABASE_TABLES.OFFICIAL_NOTICES).insert({
-          ref_no: `SZMC/NOT-2026/${Math.floor(Math.random() * 900) + 100}`,
-          title: params.title.trim(),
-          category: params.category,
-          published_date: (/* @__PURE__ */ new Date()).toISOString().split("T")[0],
-          summary: params.content.trim().slice(0, 200),
-          full_content: params.content.trim(),
-          is_urgent: Boolean(params.isPinned),
-          is_published: Boolean(params.isPublished ?? true),
-          signatory_name: params.actorEmail,
-          signatory_designation: "Portal Administrator",
-          signatory_organization: "Shaheed Ziaur Rahman Medical College Alumni Association"
-        }).select().single();
-        if (!error && data) return data;
-      }
-    } catch (err) {
-      console.warn("Supabase createOrUpdateOfficialNotice error:", err);
-    }
-  }
-  return {
-    id: params.id || Date.now(),
-    refNo: `SZMC/NOT-2026/099`,
-    title: params.title.trim(),
-    category: params.category,
-    content: params.content.trim(),
-    isPinned: Boolean(params.isPinned),
-    isPublished: Boolean(params.isPublished ?? true),
-    authorName: params.actorEmail,
-    createdAt: /* @__PURE__ */ new Date(),
-    updatedAt: /* @__PURE__ */ new Date()
-  };
-}
-async function generateBulkBatchCohortSample(params) {
-  await recordSecurityAuditLog({
-    actorUid: params.actorUid,
-    actorEmail: params.actorEmail,
-    actorRole: params.actorRole,
-    action: "BULK_COHORT_ATTEMPT",
-    targetType: "alumni_profile",
-    targetId: "PRODUCTION_NOOP",
-    severity: "info",
-    summary: "Bulk sample generation skipped in production mode (Supabase is single source of truth)."
-  });
-  return { insertedCount: 0 };
+  );
+  return router;
 }
 
+// server/routes/telemetry.ts
+import { Router as Router2 } from "express";
+
 // server/db/telemetryRepository.ts
-import { existsSync, readFileSync, writeFileSync } from "fs";
-import path from "path";
+import { existsSync as existsSync2, readFileSync as readFileSync2, writeFileSync } from "fs";
+import path2 from "path";
 import { fileURLToPath } from "url";
-import crypto2 from "crypto";
+import crypto4 from "crypto";
 var __filename = fileURLToPath(import.meta.url);
-var __dirname = path.dirname(__filename);
-var LOCAL_TELEMETRY_FILE = path.resolve(__dirname, "..", "..", "szmc-telemetry-store.json");
+var __dirname = path2.dirname(__filename);
+var LOCAL_TELEMETRY_FILE = path2.resolve(__dirname, "..", "..", "szmc-telemetry-store.json");
 var ALLOWED_TELEMETRY_EVENT_TYPES = /* @__PURE__ */ new Set([
   "session_start",
   "session_heartbeat",
@@ -1902,8 +1120,8 @@ var supabaseTablesAvailable = null;
 var flushDiskTimer = null;
 function loadLocalStore() {
   try {
-    if (existsSync(LOCAL_TELEMETRY_FILE)) {
-      const raw = readFileSync(LOCAL_TELEMETRY_FILE, "utf-8");
+    if (existsSync2(LOCAL_TELEMETRY_FILE)) {
+      const raw = readFileSync2(LOCAL_TELEMETRY_FILE, "utf-8");
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === "object") {
         store = {
@@ -2034,7 +1252,7 @@ async function ingestTelemetryBatch(input, verifiedDbUser) {
       }
     }
     const record = {
-      id: `${Date.now()}-${crypto2.randomBytes(4).toString("hex")}`,
+      id: `${Date.now()}-${crypto4.randomBytes(4).toString("hex")}`,
       session_id: sessionId,
       profile_id: sessionRecord.profile_id,
       auth_user_id: sessionRecord.auth_user_id,
@@ -2810,7 +2028,7 @@ async function createAdSegment(input, createdBy) {
   if (!name) throw new Error("Audience segment name is required.");
   const nowIso = (/* @__PURE__ */ new Date()).toISOString();
   const segment = {
-    id: `seg-${Date.now()}-${crypto2.randomBytes(3).toString("hex")}`,
+    id: `seg-${Date.now()}-${crypto4.randomBytes(3).toString("hex")}`,
     name,
     description: clampString(input.description, 240) || "",
     target_routes: Array.isArray(input.target_routes) ? input.target_routes.map((r) => String(r).toLowerCase().trim()).filter(Boolean).slice(0, 15) : [],
@@ -2853,6 +2071,1302 @@ async function clearTelemetryLogs() {
   scheduleDiskFlush();
 }
 
+// server/routes/telemetry.ts
+function resolveActorEmail(req) {
+  return req.dbUser?.email || "Super Admin";
+}
+function createTelemetryRouter() {
+  const router = Router2();
+  router.post(
+    "/api/telemetry/batch",
+    rateLimitGuard(180, 6e4),
+    optionalAuth,
+    async (req, res) => {
+      try {
+        const body = req.body;
+        if (!body || typeof body !== "object" || !body.session?.sessionId) {
+          return res.status(400).json({ error: "Invalid telemetry payload." });
+        }
+        const result = await ingestTelemetryBatch(body, req.dbUser || null);
+        return res.json({ ok: true, ...result });
+      } catch (err) {
+        return res.status(500).json({ error: err?.message || "Failed to ingest telemetry batch." });
+      }
+    }
+  );
+  router.get(
+    "/api/admin/telemetry/overview",
+    rateLimitGuard(120, 6e4),
+    requireSuperAdmin,
+    async (req, res) => {
+      try {
+        const rawRange = Number(req.query.rangeHours);
+        const rangeHours = Number.isFinite(rawRange) && rawRange >= 0 && rawRange <= 8760 ? rawRange : 168;
+        const overview = await getTelemetryOverview(rangeHours);
+        return res.json(overview);
+      } catch (err) {
+        return res.status(500).json({ error: err?.message || "Failed to load telemetry overview." });
+      }
+    }
+  );
+  router.get(
+    "/api/admin/telemetry/user/:userKey",
+    rateLimitGuard(120, 6e4),
+    requireSuperAdmin,
+    async (req, res) => {
+      try {
+        const userKey = decodeURIComponent(String(req.params.userKey || "")).trim();
+        if (!userKey || userKey.length > 140) {
+          return res.status(400).json({ error: "Invalid user identifier." });
+        }
+        const dossier = await getUserTelemetryDossier(userKey);
+        if (!dossier) {
+          return res.status(404).json({ error: "No behavioral telemetry found for this user." });
+        }
+        return res.json(dossier);
+      } catch (err) {
+        return res.status(500).json({ error: err?.message || "Failed to load user dossier." });
+      }
+    }
+  );
+  router.get(
+    "/api/admin/telemetry/segments",
+    rateLimitGuard(120, 6e4),
+    requireSuperAdmin,
+    async (_req, res) => {
+      try {
+        const segments = await listAdSegments();
+        return res.json({ segments });
+      } catch (err) {
+        return res.status(500).json({ error: err?.message || "Failed to list audience segments." });
+      }
+    }
+  );
+  router.post(
+    "/api/admin/telemetry/segments",
+    rateLimitGuard(60, 6e4),
+    requireSuperAdmin,
+    async (req, res) => {
+      try {
+        const created = await createAdSegment(req.body || {}, resolveActorEmail(req));
+        return res.status(201).json({ success: true, segment: created });
+      } catch (err) {
+        return res.status(400).json({ error: err?.message || "Failed to create audience segment." });
+      }
+    }
+  );
+  router.delete(
+    "/api/admin/telemetry/segments/:id",
+    rateLimitGuard(60, 6e4),
+    requireSuperAdmin,
+    async (req, res) => {
+      try {
+        const id = String(req.params.id || "").trim();
+        await deleteAdSegment(id);
+        return res.json({ success: true });
+      } catch (err) {
+        return res.status(500).json({ error: err?.message || "Failed to delete audience segment." });
+      }
+    }
+  );
+  router.post(
+    "/api/admin/telemetry/clear",
+    rateLimitGuard(10, 6e4),
+    requireSuperAdmin,
+    async (_req, res) => {
+      try {
+        await clearTelemetryLogs();
+        return res.json({ success: true, message: "Local telemetry session buffer cleared." });
+      } catch (err) {
+        return res.status(500).json({ error: err?.message || "Failed to clear telemetry logs." });
+      }
+    }
+  );
+  return router;
+}
+
+// server/routes/push.ts
+import { Router as Router3 } from "express";
+
+// server/lib/validation.ts
+function cleanText(value, maxLength) {
+  if (typeof value !== "string") return "";
+  return value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "").trim().slice(0, maxLength);
+}
+function normalizeSafeHttpUrl(value) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith("/")) return trimmed.slice(0, 500);
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+      return parsed.href.slice(0, 1e3);
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+// server/routes/push.ts
+var memoryPushSubscriptions = /* @__PURE__ */ new Map();
+function extractBearerToken(req) {
+  const header = req.headers.authorization;
+  if (typeof header === "string" && header.startsWith("Bearer ")) {
+    return header.slice(7).trim();
+  }
+  return null;
+}
+function createPushRouter() {
+  const router = Router3();
+  router.get("/api/push/vapid-public-key", rateLimitGuard(60, 6e4), (_req, res) => {
+    const publicKey = (process.env.VAPID_PUBLIC_KEY || process.env.VITE_VAPID_PUBLIC_KEY || "").trim();
+    return res.json({
+      configured: Boolean(publicKey),
+      publicKey: publicKey || null
+    });
+  });
+  router.post(
+    "/api/push/subscribe",
+    rateLimitGuard(30, 6e4),
+    requireAuth,
+    async (req, res) => {
+      try {
+        const profileId = Number(req.dbUser?.id || 0);
+        if (!profileId) {
+          return res.status(401).json({ error: "Valid user profile required." });
+        }
+        const sub = req.body?.subscription || req.body;
+        const endpoint = normalizeSafeHttpUrl(sub?.endpoint);
+        const p256dh = cleanText(sub?.keys?.p256dh || sub?.p256dh, 512);
+        const authSecret = cleanText(sub?.keys?.auth || sub?.auth, 256);
+        if (!endpoint || !p256dh || !authSecret) {
+          return res.status(400).json({ error: "Valid Web Push subscription (endpoint, p256dh, auth) required." });
+        }
+        const userAgent = cleanText(req.headers["user-agent"] || "", 300);
+        const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+        memoryPushSubscriptions.set(`${profileId}:${endpoint}`, {
+          profileId,
+          endpoint,
+          p256dh,
+          auth: authSecret,
+          userAgent,
+          updatedAt: nowIso
+        });
+        if (isSupabaseServerConfigured) {
+          const writeCtx = getSupabaseWriteClient(req.supabaseAccessToken || extractBearerToken(req));
+          const dbClient = writeCtx?.client || supabaseServer;
+          const { error } = await dbClient.from("push_subscriptions").upsert(
+            {
+              profile_id: profileId,
+              endpoint,
+              p256dh,
+              auth: authSecret,
+              user_agent: userAgent || null,
+              updated_at: nowIso
+            },
+            { onConflict: "profile_id,endpoint" }
+          );
+          if (!error) {
+            return res.status(201).json({ ok: true, persisted: "supabase" });
+          }
+        }
+        return res.status(201).json({ ok: true, persisted: "memory" });
+      } catch (err) {
+        return res.status(500).json({ error: err?.message || "Failed to save push subscription." });
+      }
+    }
+  );
+  router.post(
+    "/api/push/unsubscribe",
+    rateLimitGuard(30, 6e4),
+    requireAuth,
+    async (req, res) => {
+      try {
+        const profileId = Number(req.dbUser?.id || 0);
+        const endpoint = normalizeSafeHttpUrl(req.body?.endpoint);
+        if (!profileId || !endpoint) {
+          return res.status(400).json({ error: "Valid profile and endpoint required." });
+        }
+        memoryPushSubscriptions.delete(`${profileId}:${endpoint}`);
+        if (isSupabaseServerConfigured) {
+          const writeCtx = getSupabaseWriteClient(req.supabaseAccessToken || extractBearerToken(req));
+          const dbClient = writeCtx?.client || supabaseServer;
+          await dbClient.from("push_subscriptions").delete().eq("profile_id", profileId).eq("endpoint", endpoint);
+        }
+        return res.json({ ok: true });
+      } catch (err) {
+        return res.status(500).json({ error: err?.message || "Failed to remove push subscription." });
+      }
+    }
+  );
+  return router;
+}
+
+// server/db/adminRepository.ts
+var DEFAULT_STREAM_GROUPS = [
+  { id: 1, stream: "Science", group_code: null, groupCode: null, expected_group_count: 17, expectedGroupCount: 17, is_active: true, isActive: true },
+  { id: 2, stream: "Humanities", group_code: "G", groupCode: "G", expected_group_count: 4, expectedGroupCount: 4, is_active: true, isActive: true },
+  { id: 3, stream: "Humanities", group_code: "H", groupCode: "H", expected_group_count: 4, expectedGroupCount: 4, is_active: true, isActive: true },
+  { id: 4, stream: "Humanities", group_code: "L", groupCode: "L", expected_group_count: 4, expectedGroupCount: 4, is_active: true, isActive: true },
+  { id: 5, stream: "Humanities", group_code: "W", groupCode: "W", expected_group_count: 4, expectedGroupCount: 4, is_active: true, isActive: true },
+  { id: 6, stream: "Business Studies", group_code: "A", groupCode: "A", expected_group_count: 6, expectedGroupCount: 6, is_active: true, isActive: true },
+  { id: 7, stream: "Business Studies", group_code: "B", groupCode: "B", expected_group_count: 6, expectedGroupCount: 6, is_active: true, isActive: true },
+  { id: 8, stream: "Business Studies", group_code: "C", groupCode: "C", expected_group_count: 6, expectedGroupCount: 6, is_active: true, isActive: true },
+  { id: 9, stream: "Business Studies", group_code: "D", groupCode: "D", expected_group_count: 6, expectedGroupCount: 6, is_active: true, isActive: true },
+  { id: 10, stream: "Business Studies", group_code: "E", groupCode: "E", expected_group_count: 6, expectedGroupCount: 6, is_active: true, isActive: true },
+  { id: 11, stream: "Business Studies", group_code: "F", groupCode: "F", expected_group_count: 6, expectedGroupCount: 6, is_active: true, isActive: true }
+];
+var inMemoryAlumniProfiles = [];
+var serverAutoVerifyConfig = {
+  enabled: true,
+  paused: false,
+  expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1e3).toISOString()
+};
+function isServerAutoVerifyActive() {
+  if (!serverAutoVerifyConfig.enabled || serverAutoVerifyConfig.paused) return false;
+  return /* @__PURE__ */ new Date() < new Date(serverAutoVerifyConfig.expiresAt);
+}
+function setServerAutoVerifyConfig(updates) {
+  Object.assign(serverAutoVerifyConfig, updates);
+  return { ...serverAutoVerifyConfig };
+}
+async function bulkVerifyAllAlumniProfiles(params) {
+  let verifiedCount = 0;
+  if (isSupabaseServerConfigured) {
+    try {
+      const { data, error } = await supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).update({
+        verification_status: "verified",
+        verification_method: "admin_instant",
+        vouches_count: 2,
+        verified_at: (/* @__PURE__ */ new Date()).toISOString()
+      }).neq("verification_status", "verified").select("id");
+      if (!error && data) {
+        verifiedCount = data.length;
+      }
+    } catch (err) {
+      console.warn("Supabase bulk verify notice:", err);
+    }
+  }
+  for (const p of inMemoryAlumniProfiles) {
+    if (p.verificationStatus !== "verified") {
+      p.verificationStatus = "verified";
+      p.verificationMethod = "admin_instant";
+      p.vouchesCount = 2;
+      p.verifiedAt = (/* @__PURE__ */ new Date()).toISOString();
+      verifiedCount++;
+    }
+  }
+  await recordSecurityAuditLog({
+    actorUid: params.actorUid,
+    actorEmail: params.actorEmail,
+    actorRole: params.actorRole,
+    action: "BULK_VERIFY_ALUMNI",
+    targetType: "alumni_profiles",
+    targetId: "ALL_PENDING",
+    summary: `Super Admin bulk verified all ${verifiedCount} pending alumni profiles during launch window.`
+  });
+  return { verifiedCount };
+}
+async function recordSecurityAuditLog(params) {
+  if (isSupabaseServerConfigured) {
+    try {
+      const { data, error } = await supabaseServer.from(SUPABASE_TABLES.AUDIT_LOGS).insert({
+        actor_auth_id: params.actorUid,
+        action: params.action,
+        entity_table: params.targetType,
+        entity_id: params.targetId,
+        reason: params.summary
+      }).select().single();
+      if (!error && data) return data;
+    } catch (err) {
+      console.warn("Supabase audit log insert error:", err);
+    }
+  }
+  return {
+    id: Date.now(),
+    actorUid: params.actorUid,
+    actorEmail: params.actorEmail,
+    action: params.action,
+    summary: params.summary,
+    createdAt: /* @__PURE__ */ new Date()
+  };
+}
+async function getAcademicStreamGroupsConfig() {
+  if (isSupabaseServerConfigured) {
+    try {
+      const { data, error } = await supabaseServer.from(SUPABASE_TABLES.ACADEMIC_STREAM_GROUPS).select("id, stream, group_code, expected_group_count, is_active, created_at, updated_at").order("stream").order("group_code");
+      if (!error && data && data.length > 0) {
+        return data.map((r) => ({
+          id: r.id,
+          stream: r.stream,
+          groupCode: r.group_code,
+          expectedGroupCount: r.expected_group_count,
+          isActive: r.is_active,
+          createdAt: r.created_at,
+          updatedAt: r.updated_at
+        }));
+      }
+    } catch (err) {
+      console.warn("Supabase getAcademicStreamGroupsConfig error:", err);
+    }
+  }
+  return DEFAULT_STREAM_GROUPS;
+}
+async function toggleAcademicStreamGroupActive(params) {
+  if (isSupabaseServerConfigured) {
+    try {
+      const { data, error } = await supabaseServer.from(SUPABASE_TABLES.ACADEMIC_STREAM_GROUPS).update({
+        is_active: params.isActive,
+        updated_at: (/* @__PURE__ */ new Date()).toISOString()
+      }).eq("id", params.id).select().single();
+      if (!error && data) {
+        return {
+          id: data.id,
+          stream: data.stream,
+          groupCode: data.group_code,
+          expectedGroupCount: data.expected_group_count,
+          isActive: data.is_active
+        };
+      }
+    } catch (err) {
+      console.warn("Supabase toggleAcademicStreamGroupActive error:", err);
+    }
+  }
+  const found = DEFAULT_STREAM_GROUPS.find((g) => g.id === params.id);
+  if (!found) throw new Error("Academic stream group row not found.");
+  found.is_active = params.isActive;
+  found.isActive = params.isActive;
+  return found;
+}
+async function getAdminOverviewMetrics() {
+  let totalProfiles = 0;
+  let verifiedProfiles = 0;
+  let pendingProfiles = 0;
+  let suspendedProfiles = 0;
+  let registeredDonors = 0;
+  let pendingDocReviews = 0;
+  let activeBloodEmergencies = 0;
+  let publishedNotices = 0;
+  let scienceCount = 0;
+  let humanitiesCount = 0;
+  let businessCount = 0;
+  let streamGroupsConfig = DEFAULT_STREAM_GROUPS;
+  let recentAuditLogs = [];
+  if (isSupabaseServerConfigured) {
+    try {
+      const [
+        totalRes,
+        verifiedRes,
+        pendingRes,
+        suspendedRes,
+        donorsRes,
+        pendingDocsRes,
+        bloodRes,
+        noticesRes,
+        streamConfigRes,
+        auditLogsRes,
+        sciRes,
+        humRes,
+        busRes
+      ] = await Promise.all([
+        supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).select("id", { count: "exact", head: true }),
+        supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).select("id", { count: "exact", head: true }).eq("verification_status", "verified"),
+        supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).select("id", { count: "exact", head: true }).eq("verification_status", "pending_vouch"),
+        supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).select("id", { count: "exact", head: true }).eq("is_public", false),
+        supabaseServer.from(SUPABASE_TABLES.BLOOD_DONORS).select("user_id", { count: "exact", head: true }).eq("is_registered_donor", true),
+        supabaseServer.from(SUPABASE_TABLES.ADMIN_DOC_SUBMISSIONS).select("id", { count: "exact", head: true }).eq("status", "pending"),
+        supabaseServer.from(SUPABASE_TABLES.BLOOD_REQUESTS).select("id", { count: "exact", head: true }).in("status", ["Active", "Pending Verification"]),
+        supabaseServer.from(SUPABASE_TABLES.OFFICIAL_NOTICES).select("id", { count: "exact", head: true }).eq("is_published", true),
+        supabaseServer.from(SUPABASE_TABLES.ACADEMIC_STREAM_GROUPS).select("*").order("stream").order("group_code"),
+        supabaseServer.from(SUPABASE_TABLES.AUDIT_LOGS).select("*").order("created_at", { ascending: false }).limit(15),
+        supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).select("id", { count: "exact", head: true }).eq("academic_stream", "Science"),
+        supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).select("id", { count: "exact", head: true }).eq("academic_stream", "Humanities"),
+        supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).select("id", { count: "exact", head: true }).eq("academic_stream", "Business Studies")
+      ]);
+      totalProfiles = totalRes.count ?? 0;
+      verifiedProfiles = verifiedRes.count ?? 0;
+      pendingProfiles = pendingRes.count ?? 0;
+      suspendedProfiles = suspendedRes.count ?? 0;
+      registeredDonors = donorsRes.count ?? 0;
+      pendingDocReviews = pendingDocsRes.count ?? 0;
+      activeBloodEmergencies = bloodRes.count ?? 0;
+      publishedNotices = noticesRes.count ?? 0;
+      scienceCount = sciRes.count ?? 0;
+      humanitiesCount = humRes.count ?? 0;
+      businessCount = busRes.count ?? 0;
+      if (streamConfigRes.data && streamConfigRes.data.length > 0) {
+        streamGroupsConfig = streamConfigRes.data.map((r) => ({
+          id: r.id,
+          stream: r.stream,
+          groupCode: r.group_code,
+          expectedGroupCount: r.expected_group_count,
+          isActive: r.is_active
+        }));
+      }
+      if (auditLogsRes.data && auditLogsRes.data.length > 0) {
+        recentAuditLogs = auditLogsRes.data.map((r) => ({
+          id: r.id,
+          actorUid: r.actor_auth_id || "system",
+          actorEmail: r.actor_auth_id || "admin@szmcalumni.net",
+          actorRole: "admin",
+          action: r.action,
+          targetType: r.entity_table,
+          targetId: r.entity_id,
+          severity: "info",
+          summary: r.reason || r.action,
+          createdAt: r.created_at
+        }));
+      }
+    } catch (err) {
+      console.warn("Supabase overview metrics error:", err);
+    }
+  }
+  return {
+    totalProfiles,
+    verifiedProfiles,
+    pendingProfiles,
+    suspendedProfiles,
+    registeredDonors,
+    pendingDocReviews,
+    activeBloodEmergencies,
+    publishedNotices,
+    streamDistribution: {
+      Science: scienceCount,
+      Humanities: humanitiesCount,
+      "Business Studies": businessCount
+    },
+    streamGroupsConfig,
+    recentAuditLogs
+  };
+}
+async function queryPaginatedAlumniProfiles(params) {
+  const page = Math.max(1, params.page || 1);
+  const limit = Math.min(100, Math.max(1, params.limit || 25));
+  const offset = (page - 1) * limit;
+  if (isSupabaseServerConfigured) {
+    try {
+      let query = supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).select("*", { count: "exact" });
+      if (params.batchYear && !Number.isNaN(Number(params.batchYear))) {
+        query = query.eq("batch_year", Number(params.batchYear));
+      }
+      if (params.academicStream && params.academicStream !== "all") {
+        query = query.eq("academic_stream", params.academicStream);
+      }
+      if (params.verificationStatus && params.verificationStatus !== "all") {
+        query = query.eq("verification_status", params.verificationStatus);
+      }
+      if (params.role && params.role !== "all") {
+        query = query.eq("role", params.role);
+      }
+      if (params.bloodGroup && params.bloodGroup !== "all") {
+        query = query.eq("blood_group", params.bloodGroup);
+      }
+      if (params.search && params.search.trim()) {
+        const s = params.search.trim();
+        query = query.or(
+          `full_name.ilike.%${s}%,institution.ilike.%${s}%,profession.ilike.%${s}%,city.ilike.%${s}%,college_roll.ilike.%${s}%`
+        );
+      }
+      query = query.order("created_at", { ascending: false }).range(offset, offset + limit - 1);
+      const { data, count, error } = await query;
+      if (!error && data) {
+        const total2 = count ?? data.length;
+        const totalPages2 = Math.ceil(total2 / limit) || 1;
+        const profiles = data.map((r) => ({
+          id: Number(r.id),
+          fullName: r.full_name || "SZMC Alumnus",
+          avatarUrl: r.avatar_url || "/szmc-logo.png",
+          batchYear: Number(r.batch_year) >= 1 && Number(r.batch_year) <= 35 ? Number(r.batch_year) : 1,
+          session: r.session || null,
+          collegeRoll: r.college_roll || null,
+          academicStream: r.academic_stream || "Science",
+          academicGroup: r.academic_group || null,
+          section: r.section || null,
+          verificationStatus: r.verification_status || "unverified",
+          verificationMethod: r.verification_method || "two_vouches",
+          vouchesCount: Number(r.vouches_count) || 0,
+          vouchTargetCount: Number(r.vouch_target_count) || 2,
+          verifiedByAdmin: r.verified_by_profile_id ? String(r.verified_by_profile_id) : null,
+          profession: r.profession || "",
+          position: r.position || "",
+          institution: r.institution || "",
+          city: r.city || "Dhaka",
+          country: r.country || "Bangladesh",
+          phone: params.includeSensitivePii ? r.phone : r.phone ? "Protected" : null,
+          phoneOwnershipVerified: Boolean(r.phone_ownership_verified),
+          phoneVerifiedAt: r.phone_verified_at || null,
+          phoneVerifiedByAdmin: r.phone_verified_by_profile_id ? String(r.phone_verified_by_profile_id) : null,
+          phoneVerificationNotes: params.includeSensitivePii ? r.phone_verification_notes || null : null,
+          whatsapp: params.includeSensitivePii ? r.whatsapp : r.whatsapp ? "Protected" : null,
+          email: params.includeSensitivePii ? r.email : r.email ? "Protected" : null,
+          bloodGroup: r.blood_group || null,
+          isRegisteredDonor: Boolean(r.is_registered_donor),
+          role: r.role || "member",
+          accountStatus: r.is_public ? "active" : "suspended",
+          createdAt: r.created_at || (/* @__PURE__ */ new Date()).toISOString()
+        }));
+        return {
+          profiles,
+          pagination: { page, limit, total: total2, totalPages: totalPages2 }
+        };
+      }
+    } catch (err) {
+      console.warn("Supabase queryPaginatedAlumniProfiles error:", err);
+    }
+  }
+  let filtered = [...inMemoryAlumniProfiles];
+  if (params.batchYear && !Number.isNaN(Number(params.batchYear))) {
+    filtered = filtered.filter((p) => p.batchYear === Number(params.batchYear));
+  }
+  if (params.academicStream && params.academicStream !== "all") {
+    filtered = filtered.filter((p) => p.academicStream === params.academicStream);
+  }
+  if (params.verificationStatus && params.verificationStatus !== "all") {
+    filtered = filtered.filter((p) => p.verificationStatus === params.verificationStatus);
+  }
+  if (params.role && params.role !== "all") {
+    filtered = filtered.filter((p) => p.role === params.role);
+  }
+  if (params.bloodGroup && params.bloodGroup !== "all") {
+    filtered = filtered.filter((p) => p.bloodGroup === params.bloodGroup);
+  }
+  if (params.search && params.search.trim()) {
+    const s = params.search.trim().toLowerCase();
+    filtered = filtered.filter(
+      (p) => p.fullName && p.fullName.toLowerCase().includes(s) || p.institution && p.institution.toLowerCase().includes(s) || p.profession && p.profession.toLowerCase().includes(s) || p.city && p.city.toLowerCase().includes(s) || p.collegeRoll && p.collegeRoll.toLowerCase().includes(s)
+    );
+  }
+  const total = filtered.length;
+  const totalPages = Math.ceil(total / limit) || 1;
+  const pageProfiles = filtered.slice(offset, offset + limit).map((r) => ({
+    ...r,
+    phone: params.includeSensitivePii ? r.phone : r.phone ? "Protected" : null,
+    whatsapp: params.includeSensitivePii ? r.whatsapp : r.whatsapp ? "Protected" : null,
+    email: params.includeSensitivePii ? r.email : r.email ? "Protected" : null
+  }));
+  return {
+    profiles: pageProfiles,
+    pagination: { page, limit, total, totalPages }
+  };
+}
+async function createOrRegisterAlumniProfile(input) {
+  const cleanEmail = (input.email || "").trim().toLowerCase() || null;
+  const cleanPhone = (input.phone || "").trim() || null;
+  const batchNum = input.batchYear > 1900 ? Math.min(35, Math.max(1, input.batchYear - 1991)) : Math.min(35, Math.max(1, Number(input.batchYear) || 1));
+  const session = input.session || `${1991 + batchNum}-${String(1992 + batchNum).slice(-2)}`;
+  const streamVal = input.academicStream === "Humanities" || input.academicStream === "Business Studies" ? input.academicStream : "Science";
+  const groupVal = streamVal === "Science" ? null : input.academicGroup ? input.academicGroup.trim().toUpperCase() : null;
+  let effectiveAuthUid = null;
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (input.userUid && uuidRegex.test(input.userUid)) {
+    effectiveAuthUid = input.userUid;
+  }
+  if (isSupabaseServerConfigured) {
+    try {
+      if (!effectiveAuthUid && cleanEmail) {
+        const existingAuthUser = await findAuthUserByEmailOrPhone({ email: cleanEmail });
+        if (existingAuthUser) {
+          effectiveAuthUid = existingAuthUser.id;
+        }
+      }
+      if (!effectiveAuthUid && cleanEmail && (input.rawPassword || input.passwordHash)) {
+        const initialPass = input.rawPassword || "TempPass_" + Date.now();
+        try {
+          const { data: createdAuthUser, error: createAuthErr } = await supabaseServer.auth.admin.createUser({
+            email: cleanEmail,
+            password: initialPass,
+            email_confirm: false,
+            user_metadata: {
+              full_name: input.fullName.trim(),
+              batch_year: batchNum,
+              phone: cleanPhone
+            }
+          });
+          if (!createAuthErr && createdAuthUser?.user) {
+            effectiveAuthUid = createdAuthUser.user.id;
+          }
+        } catch {
+        }
+        if (!effectiveAuthUid) {
+          try {
+            const { data: sData, error: sErr } = await supabaseServer.auth.signUp({
+              email: cleanEmail,
+              password: initialPass,
+              options: {
+                data: {
+                  full_name: input.fullName.trim(),
+                  batch_year: batchNum,
+                  phone: cleanPhone
+                }
+              }
+            });
+            if (!sErr && sData?.user) {
+              effectiveAuthUid = sData.user.id;
+            }
+          } catch {
+          }
+        }
+      }
+      if (effectiveAuthUid) {
+        const { data, error } = await supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).upsert(
+          {
+            auth_user_id: effectiveAuthUid,
+            full_name: input.fullName.trim(),
+            avatar_url: input.avatarUrl || "/assets/aistudio/images__1__2778177d.png",
+            batch_year: batchNum,
+            session,
+            college_roll: input.collegeRoll?.trim() || null,
+            academic_stream: streamVal,
+            academic_group: groupVal,
+            section: input.section || "SZMC",
+            profession: input.profession || "",
+            position: input.position || "",
+            institution: input.institution || "",
+            specialty: Array.isArray(input.specialty) ? input.specialty : [],
+            degree: Array.isArray(input.degree) ? input.degree : ["MBBS"],
+            city: input.city || "Bogura",
+            country: input.country || "Bangladesh",
+            phone: cleanPhone,
+            whatsapp: input.whatsapp?.trim() || null,
+            email: cleanEmail,
+            blood_group: input.bloodGroup || null,
+            role: "member",
+            verification_status: isServerAutoVerifyActive() ? "verified" : "unverified",
+            verification_method: isServerAutoVerifyActive() ? "admin_instant" : null,
+            vouches_count: isServerAutoVerifyActive() ? 2 : 0,
+            vouch_target_count: 2,
+            verified_at: isServerAutoVerifyActive() ? (/* @__PURE__ */ new Date()).toISOString() : null,
+            is_public: true
+          },
+          { onConflict: "auth_user_id" }
+        ).select().single();
+        if (!error && data) {
+          const profileResult = {
+            id: Number(data.id),
+            fullName: data.full_name,
+            avatarUrl: data.avatar_url,
+            batchYear: data.batch_year,
+            session: data.session,
+            collegeRoll: data.college_roll,
+            academicStream: data.academic_stream,
+            academicGroup: data.academic_group,
+            section: data.section,
+            profession: data.profession,
+            position: data.position,
+            institution: data.institution,
+            city: data.city,
+            country: data.country,
+            phone: data.phone,
+            email: data.email,
+            bloodGroup: data.blood_group,
+            role: data.role,
+            verificationStatus: data.verification_status,
+            isPublic: data.is_public,
+            createdAt: data.created_at
+          };
+          const existingIdx2 = inMemoryAlumniProfiles.findIndex(
+            (p) => p.id === profileResult.id || cleanEmail && p.email?.toLowerCase() === cleanEmail
+          );
+          if (existingIdx2 >= 0) {
+            inMemoryAlumniProfiles[existingIdx2] = profileResult;
+          } else {
+            inMemoryAlumniProfiles.unshift(profileResult);
+          }
+          return profileResult;
+        } else if (error) {
+          console.warn("Supabase alumni_profiles upsert notice:", error.message);
+        }
+      }
+    } catch (err) {
+      console.warn("Supabase createOrRegisterAlumniProfile notice:", err);
+    }
+  }
+  const fallbackId = Date.now();
+  const fallbackProfile = {
+    id: fallbackId,
+    fullName: input.fullName.trim(),
+    avatarUrl: input.avatarUrl || "/assets/aistudio/images__1__2778177d.png",
+    batchYear: batchNum,
+    session,
+    collegeRoll: input.collegeRoll?.trim() || null,
+    academicStream: streamVal,
+    academicGroup: groupVal,
+    section: input.section || "SZMC",
+    profession: input.profession || "Medical Doctor",
+    position: input.position || "",
+    institution: input.institution || "Shaheed Ziaur Rahman Medical College Hospital",
+    city: input.city || "Bogura",
+    country: input.country || "Bangladesh",
+    phone: cleanPhone,
+    phoneOwnershipVerified: false,
+    phoneVerifiedAt: null,
+    phoneVerifiedByProfileId: null,
+    phoneVerificationNotes: null,
+    email: cleanEmail,
+    passwordHash: input.passwordHash || null,
+    bloodGroup: input.bloodGroup || null,
+    role: "member",
+    verificationStatus: isServerAutoVerifyActive() ? "verified" : "unverified",
+    verificationMethod: isServerAutoVerifyActive() ? "admin_instant" : null,
+    vouchesCount: isServerAutoVerifyActive() ? 2 : 0,
+    vouchTargetCount: 2,
+    verifiedAt: isServerAutoVerifyActive() ? (/* @__PURE__ */ new Date()).toISOString() : null,
+    accountStatus: "active",
+    isPublic: true,
+    authUserId: effectiveAuthUid || `local-${fallbackId}`,
+    createdAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+  const existingIdx = inMemoryAlumniProfiles.findIndex(
+    (p) => cleanEmail && p.email?.toLowerCase() === cleanEmail
+  );
+  if (existingIdx >= 0) {
+    inMemoryAlumniProfiles[existingIdx] = fallbackProfile;
+  } else {
+    inMemoryAlumniProfiles.unshift(fallbackProfile);
+  }
+  return fallbackProfile;
+}
+async function findAlumniByCredential(credential) {
+  const clean = credential.trim().toLowerCase();
+  if (isSupabaseServerConfigured && clean) {
+    try {
+      let query = supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).select("id, full_name, avatar_url, batch_year, session, college_roll, academic_stream, academic_group, section, profession, position, institution, city, country, phone, phone_ownership_verified, phone_verified_at, phone_verified_by_profile_id, phone_verification_notes, email, blood_group, role, verification_status, is_public, auth_user_id, created_at");
+      if (clean.includes("@")) {
+        query = query.eq("email", clean);
+      } else {
+        const cleanDigits2 = clean.replace(/[^0-9]/g, "");
+        query = query.or(`phone.eq.${clean},phone.eq.+88${clean},phone.eq.+880${cleanDigits2}`);
+      }
+      const { data, error } = await query.maybeSingle();
+      if (!error && data) {
+        return {
+          id: Number(data.id),
+          fullName: data.full_name,
+          avatarUrl: data.avatar_url,
+          batchYear: Number(data.batch_year),
+          session: data.session,
+          collegeRoll: data.college_roll,
+          academicStream: data.academic_stream,
+          academicGroup: data.academic_group,
+          section: data.section,
+          profession: data.profession,
+          position: data.position,
+          institution: data.institution,
+          city: data.city,
+          country: data.country,
+          phone: data.phone,
+          phoneOwnershipVerified: Boolean(data.phone_ownership_verified),
+          phoneVerifiedAt: data.phone_verified_at || null,
+          phoneVerifiedByProfileId: data.phone_verified_by_profile_id || null,
+          phoneVerificationNotes: data.phone_verification_notes || null,
+          email: data.email,
+          bloodGroup: data.blood_group,
+          role: data.role,
+          verificationStatus: data.verification_status,
+          accountStatus: data.is_public ? "active" : "suspended",
+          passwordHash: null,
+          authUserId: data.auth_user_id || void 0,
+          createdAt: data.created_at
+        };
+      }
+      if (clean.includes("@")) {
+        const matched = await findAuthUserByEmailOrPhone({ email: clean });
+        if (matched && matched.email_confirmed_at) {
+          const restored = await createOrRegisterAlumniProfile({
+            userUid: matched.id,
+            fullName: matched.user_metadata?.full_name || matched.user_metadata?.name || clean.split("@")[0],
+            batchYear: Number(matched.user_metadata?.batch_year) || 25,
+            email: clean,
+            phone: matched.user_metadata?.phone || null
+          });
+          return restored;
+        }
+      }
+    } catch (err) {
+      console.warn("Supabase findAlumniByCredential error:", err);
+    }
+  }
+  const cleanDigits = clean.replace(/[^0-9]/g, "");
+  const found = inMemoryAlumniProfiles.find(
+    (p) => p.email && p.email.toLowerCase() === clean || cleanDigits && p.phone && p.phone.replace(/[^0-9]/g, "").endsWith(cleanDigits)
+  );
+  return found || null;
+}
+async function updateAlumniPassword(profileId, passwordHash) {
+  if (isSupabaseServerConfigured && profileId) {
+    try {
+      await supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).update({ updated_at: (/* @__PURE__ */ new Date()).toISOString() }).eq("id", profileId);
+      return true;
+    } catch (err) {
+      console.warn("Supabase updateAlumniPassword error:", err);
+    }
+  }
+  const found = inMemoryAlumniProfiles.find((p) => p.id === profileId);
+  if (found) {
+    found.passwordHash = passwordHash;
+  }
+  return true;
+}
+async function deleteAlumniProfile(profileId) {
+  if (isSupabaseServerConfigured && profileId) {
+    try {
+      const { error } = await supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).delete().eq("id", profileId);
+      return !error;
+    } catch (err) {
+      console.warn("Supabase deleteAlumniProfile error:", err);
+    }
+  }
+  const idx = inMemoryAlumniProfiles.findIndex((p) => p.id === profileId);
+  if (idx !== -1) {
+    inMemoryAlumniProfiles.splice(idx, 1);
+  }
+  return true;
+}
+async function updateAlumniProfileRecord(profileId, updates) {
+  const dbUpdates = {
+    updated_at: (/* @__PURE__ */ new Date()).toISOString()
+  };
+  if (updates.fullName !== void 0) dbUpdates.full_name = updates.fullName;
+  if (updates.avatarUrl !== void 0) dbUpdates.avatar_url = updates.avatarUrl;
+  if (updates.coverUrl !== void 0) dbUpdates.cover_url = updates.coverUrl;
+  if (updates.batchYear !== void 0) dbUpdates.batch_year = Number(updates.batchYear);
+  if (updates.collegeRoll !== void 0) dbUpdates.college_roll = updates.collegeRoll;
+  if (updates.profession !== void 0) dbUpdates.profession = updates.profession;
+  if (updates.position !== void 0) dbUpdates.position = updates.position;
+  if (updates.institution !== void 0) dbUpdates.institution = updates.institution;
+  if (updates.cadre !== void 0) dbUpdates.cadre = updates.cadre;
+  if (updates.city !== void 0) dbUpdates.city = updates.city;
+  if (updates.country !== void 0) dbUpdates.country = updates.country;
+  if (updates.bio !== void 0) dbUpdates.bio = updates.bio;
+  if (updates.whatsapp !== void 0) dbUpdates.whatsapp = updates.whatsapp;
+  if (updates.fbLink !== void 0) dbUpdates.fb_link = updates.fbLink;
+  if (updates.phone !== void 0) dbUpdates.phone = updates.phone;
+  if (updates.email !== void 0) dbUpdates.email = updates.email;
+  if (updates.careerHistory !== void 0) dbUpdates.career_history = updates.careerHistory;
+  if (updates.degree !== void 0) dbUpdates.degree = updates.degree;
+  if (updates.specialty !== void 0) dbUpdates.specialty = updates.specialty;
+  if (updates.specialtyOther !== void 0) dbUpdates.specialty_other = updates.specialtyOther;
+  if (updates.bloodGroup !== void 0) dbUpdates.blood_group = updates.bloodGroup;
+  if (updates.isPublic !== void 0) dbUpdates.is_public = updates.isPublic;
+  if (updates.showContactToVerified !== void 0) {
+    dbUpdates.show_contact_to_verified = Boolean(updates.showContactToVerified);
+  }
+  if (updates.userPreferences !== void 0 && typeof updates.userPreferences === "object") {
+    dbUpdates.user_preferences = updates.userPreferences;
+  }
+  if (isSupabaseServerConfigured && profileId) {
+    try {
+      const { error } = await supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).update(dbUpdates).eq("id", profileId);
+      if (error && dbUpdates.user_preferences !== void 0) {
+        const { user_preferences: _ignored, ...compatUpdates } = dbUpdates;
+        await supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).update(compatUpdates).eq("id", profileId);
+      }
+    } catch (err) {
+      console.warn("Supabase updateAlumniProfileRecord error:", err);
+    }
+  }
+  const idx = inMemoryAlumniProfiles.findIndex((p) => p.id === profileId);
+  if (idx !== -1) {
+    inMemoryAlumniProfiles[idx] = {
+      ...inMemoryAlumniProfiles[idx],
+      ...updates
+    };
+    return inMemoryAlumniProfiles[idx];
+  }
+  return { id: profileId, ...updates };
+}
+async function adminUpdateAlumniGovernance(params) {
+  if (params.role !== void 0) {
+    const supportedRoles = ["member", "moderator", "admin"];
+    if (params.actorRole !== "admin" || !supportedRoles.includes(params.role)) {
+      throw new Error("Only administrators may assign supported database roles.");
+    }
+  }
+  if (params.verificationStatus !== void 0 && isSupabaseServerConfigured) {
+    const { data: target, error: targetError } = await supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).select("auth_user_id, role").eq("id", params.profileId).maybeSingle();
+    if (targetError || !target) throw new Error("Alumni profile not found.");
+    if (target.auth_user_id === params.actorUid) {
+      throw new Error("Administrators cannot change their own verification status.");
+    }
+    if (target.role === "admin" && params.actorRole !== "admin") {
+      throw new Error("Only administrators may change an administrator profile.");
+    }
+  }
+  if (isSupabaseServerConfigured && params.profileId) {
+    try {
+      const updates = {
+        updated_at: (/* @__PURE__ */ new Date()).toISOString()
+      };
+      if (params.verificationStatus) updates.verification_status = params.verificationStatus;
+      if (params.role) updates.role = params.role;
+      if (params.academicStream) updates.academic_stream = params.academicStream;
+      if (params.academicGroup !== void 0) updates.academic_group = params.academicGroup;
+      if (params.accountStatus !== void 0) updates.is_public = params.accountStatus !== "suspended";
+      const { data, error } = await supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).update(updates).eq("id", params.profileId).select().single();
+      if (!error && data) {
+        await recordSecurityAuditLog({
+          actorUid: params.actorUid,
+          actorEmail: params.actorEmail,
+          actorRole: params.actorRole,
+          action: "UPDATE_PROFILE_GOVERNANCE",
+          targetType: "alumni_profile",
+          targetId: String(params.profileId),
+          severity: "info",
+          summary: `Updated profile governance for ${data.full_name} (ID ${data.id}).`
+        });
+        return {
+          id: Number(data.id),
+          fullName: data.full_name,
+          verificationStatus: data.verification_status,
+          role: data.role,
+          accountStatus: data.is_public ? "active" : "suspended",
+          academicStream: data.academic_stream,
+          academicGroup: data.academic_group,
+          updatedAt: data.updated_at
+        };
+      }
+    } catch (err) {
+      console.warn("Supabase adminUpdateAlumniGovernance error:", err);
+      throw err;
+    }
+  }
+  throw new Error("Supabase is required to update profile governance.");
+}
+async function adminVerifyAlumniPhoneOwnership(params) {
+  const profileId = Number(params.profileId);
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  if (isSupabaseServerConfigured && profileId) {
+    try {
+      const { data: profile, error: fetchErr } = await supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).select("id, auth_user_id, phone, full_name, email").eq("id", profileId).single();
+      if (fetchErr || !profile) {
+        throw new Error("Alumni profile not found.");
+      }
+      if (profile.auth_user_id === params.actorUid) {
+        throw new Error("Administrators cannot verify their own phone ownership.");
+      }
+      const rawPhone = (profile.phone || "").trim();
+      if (!rawPhone) {
+        throw new Error("Alumnus does not have a registered mobile number to verify.");
+      }
+      const normalizedPhone = rawPhone.startsWith("+") ? rawPhone.replace(/[^\d+]/g, "") : rawPhone.replace(/\D/g, "").startsWith("880") ? `+${rawPhone.replace(/\D/g, "")}` : `+880${rawPhone.replace(/\D/g, "").replace(/^0+/, "")}`;
+      const { data: duplicate } = await supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).select("id, full_name").eq("phone", normalizedPhone).eq("phone_ownership_verified", true).neq("id", profileId).maybeSingle();
+      if (duplicate) {
+        throw new Error(
+          `This phone number (${normalizedPhone}) is already verified for another alumnus (${duplicate.full_name}, ID: ${duplicate.id}). Dual-account phone reuse is prohibited.`
+        );
+      }
+      const { data: updated, error: updateErr } = await supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).update({
+        phone: normalizedPhone,
+        phone_ownership_verified: true,
+        phone_verified_at: now,
+        phone_verification_notes: params.notes || "Verified by portal administrator",
+        updated_at: now
+      }).eq("id", profileId).select().single();
+      if (updateErr || !updated) {
+        throw new Error("Phone verification could not be saved.");
+      }
+      if (profile.auth_user_id) {
+        try {
+          await supabaseServer.auth.admin.updateUserById(profile.auth_user_id, {
+            phone: normalizedPhone,
+            phone_confirm: true
+          });
+        } catch (authErr) {
+          console.warn("Note: GoTrue phone provider update notice:", authErr?.message || authErr);
+        }
+      }
+      await recordSecurityAuditLog({
+        actorUid: params.actorUid,
+        actorEmail: params.actorEmail,
+        actorRole: params.actorRole,
+        action: "VERIFY_PHONE_OWNERSHIP",
+        targetType: "alumni_profile",
+        targetId: String(profileId),
+        severity: "info",
+        summary: `Admin verified phone ownership for ${profile.full_name} (${normalizedPhone}). Phone login enabled.`
+      });
+      return {
+        id: profileId,
+        fullName: profile.full_name,
+        phone: normalizedPhone,
+        phoneOwnershipVerified: true,
+        phoneVerifiedAt: now,
+        phoneVerificationNotes: params.notes || "Verified by portal administrator"
+      };
+    } catch (err) {
+      console.error("adminVerifyAlumniPhoneOwnership error:", err);
+      throw err;
+    }
+  }
+  throw new Error("Supabase is required to verify phone ownership.");
+}
+async function adminRevokeAlumniPhoneOwnership(params) {
+  const profileId = Number(params.profileId);
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  if (isSupabaseServerConfigured && profileId) {
+    try {
+      const { data: profile } = await supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).select("*").eq("id", profileId).single();
+      if (profile) {
+        await supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).update({
+          phone_ownership_verified: false,
+          phone_verified_at: null,
+          phone_verification_notes: params.notes || "Phone verification revoked by administrator",
+          updated_at: now
+        }).eq("id", profileId);
+        await recordSecurityAuditLog({
+          actorUid: params.actorUid,
+          actorEmail: params.actorEmail,
+          actorRole: params.actorRole,
+          action: "REVOKE_PHONE_OWNERSHIP",
+          targetType: "alumni_profile",
+          targetId: String(profileId),
+          severity: "warning",
+          summary: `Admin revoked phone ownership verification for ${profile.full_name} (${profile.phone}). Phone login disabled.`
+        });
+      }
+      return { id: profileId, phoneOwnershipVerified: false };
+    } catch (err) {
+      console.error("adminRevokeAlumniPhoneOwnership error:", err);
+      throw err;
+    }
+  }
+  const found = inMemoryAlumniProfiles.find((p) => p.id === profileId);
+  if (found) {
+    found.phoneOwnershipVerified = false;
+    found.phoneVerifiedAt = null;
+  }
+  return { id: profileId, phoneOwnershipVerified: false };
+}
+async function getVerificationQueue(statusFilter) {
+  if (isSupabaseServerConfigured) {
+    try {
+      let query = supabaseServer.from(SUPABASE_TABLES.ADMIN_DOC_SUBMISSIONS).select("*").order("submitted_at", { ascending: false });
+      if (statusFilter && statusFilter !== "all") {
+        query = query.eq("status", statusFilter);
+      }
+      const { data, error } = await query;
+      if (!error && data) {
+        return data.map((r) => ({
+          id: r.id,
+          submissionCode: `DOC-${String(r.id).slice(0, 8)}`,
+          profileId: r.user_id,
+          fullName: "SZMC Alumnus",
+          avatarUrl: "/assets/aistudio/images__1__2778177d.png",
+          batchYear: r.batch_year,
+          collegeRoll: r.college_roll,
+          academicStream: r.academic_stream,
+          academicGroup: r.academic_group,
+          docType: r.doc_type,
+          docTypeLabel: r.doc_type_label,
+          documentUrl: r.storage_object_path,
+          status: r.status,
+          submittedAt: r.submitted_at,
+          reviewedBy: r.reviewed_by ? String(r.reviewed_by) : null,
+          reviewedAt: r.reviewed_at,
+          adminNote: r.admin_note
+        }));
+      }
+    } catch (err) {
+      console.warn("Supabase getVerificationQueue error:", err);
+    }
+  }
+  return [];
+}
+async function reviewVerificationSubmission(params) {
+  if (isSupabaseServerConfigured && params.submissionId) {
+    try {
+      const { data: submission, error: submissionError } = await supabaseServer.from(SUPABASE_TABLES.ADMIN_DOC_SUBMISSIONS).select("id, user_id").eq("id", params.submissionId).maybeSingle();
+      if (submissionError || !submission) throw new Error("Verification submission not found.");
+      if (submission.user_id) {
+        const { data: applicant, error: applicantError } = await supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).select("auth_user_id").eq("id", submission.user_id).maybeSingle();
+        if (applicantError) throw applicantError;
+        if (applicant?.auth_user_id === params.actorUid) {
+          throw new Error("Administrators cannot review their own verification submission.");
+        }
+      }
+      const { data, error } = await supabaseServer.from(SUPABASE_TABLES.ADMIN_DOC_SUBMISSIONS).update({
+        status: params.decision,
+        admin_note: params.adminNote || "Reviewed by central admin",
+        reviewed_at: (/* @__PURE__ */ new Date()).toISOString()
+      }).eq("id", params.submissionId).select().single();
+      if (!error && data) {
+        if (params.decision === "approved" && data.user_id) {
+          await supabaseServer.from(SUPABASE_TABLES.ALUMNI_PROFILES).update({
+            verification_status: "verified",
+            verification_method: "id_card_upload",
+            verified_at: (/* @__PURE__ */ new Date()).toISOString()
+          }).eq("id", data.user_id);
+        }
+        await recordSecurityAuditLog({
+          actorUid: params.actorUid,
+          actorEmail: params.actorEmail,
+          actorRole: params.actorRole,
+          action: params.decision === "approved" ? "APPROVE_VERIFICATION_DOC" : "REJECT_VERIFICATION_DOC",
+          targetType: "verification_submission",
+          targetId: String(params.submissionId),
+          severity: params.decision === "approved" ? "info" : "warning",
+          summary: `${params.decision.toUpperCase()} document verification for submission ID ${params.submissionId}.`
+        });
+        return data;
+      }
+    } catch (err) {
+      console.warn("Supabase reviewVerificationSubmission error:", err);
+      throw err;
+    }
+  }
+  throw new Error("Supabase is required to review verification submissions.");
+}
+async function getBloodEmergencyList() {
+  if (isSupabaseServerConfigured) {
+    try {
+      const { data, error } = await supabaseServer.from(SUPABASE_TABLES.BLOOD_REQUESTS).select("*").order("created_at", { ascending: false });
+      if (!error && data) {
+        return data.map((r) => ({
+          id: r.id,
+          requestCode: `BLD-${String(r.id).slice(0, 8)}`,
+          patientName: r.patient_relation || "SZMC Patient",
+          bloodGroup: r.blood_group,
+          unitsNeeded: r.units_required,
+          unitsFulfilled: r.units_fulfilled || 0,
+          hospitalName: r.hospital_name,
+          hospitalArea: r.hospital_area,
+          contactNumber: r.coordination_ref || "Through Portal",
+          urgencyLevel: r.emergency_level,
+          status: r.status,
+          verifiedByAdmin: r.verified_by_admin_id ? String(r.verified_by_admin_id) : null,
+          moderationNote: r.moderation_note,
+          createdAt: r.created_at,
+          updatedAt: r.updated_at
+        }));
+      }
+    } catch (err) {
+      console.warn("Supabase getBloodEmergencyList error:", err);
+    }
+  }
+  return [];
+}
+async function moderateBloodEmergency(params) {
+  if (isSupabaseServerConfigured && params.id) {
+    try {
+      const updates = {
+        status: params.status,
+        updated_at: (/* @__PURE__ */ new Date()).toISOString()
+      };
+      if (params.unitsFulfilled !== void 0) updates.units_fulfilled = params.unitsFulfilled;
+      if (params.moderationNote !== void 0) updates.moderation_note = params.moderationNote;
+      const { data, error } = await supabaseServer.from(SUPABASE_TABLES.BLOOD_REQUESTS).update(updates).eq("id", params.id).select().single();
+      if (!error && data) {
+        await recordSecurityAuditLog({
+          actorUid: params.actorUid,
+          actorEmail: params.actorEmail,
+          actorRole: params.actorRole,
+          action: "MODERATE_BLOOD_REQUEST",
+          targetType: "blood_request",
+          targetId: String(params.id),
+          severity: "info",
+          summary: `Moderated blood request ${params.id} to "${params.status}".`
+        });
+        return data;
+      }
+    } catch (err) {
+      console.warn("Supabase moderateBloodEmergency error:", err);
+    }
+  }
+  return {
+    id: params.id,
+    status: params.status,
+    unitsFulfilled: params.unitsFulfilled,
+    moderationNote: params.moderationNote
+  };
+}
+async function getOfficialNoticesList() {
+  if (isSupabaseServerConfigured) {
+    try {
+      const { data, error } = await supabaseServer.from(SUPABASE_TABLES.OFFICIAL_NOTICES).select("*").order("is_urgent", { ascending: false }).order("created_at", { ascending: false });
+      if (!error && data) {
+        return data.map((r) => ({
+          id: r.id,
+          refNo: r.ref_no || `SZMC/NOT-${String(r.id).slice(0, 6)}`,
+          title: r.title,
+          category: r.category,
+          content: r.full_content || r.summary,
+          targetBatch: null,
+          isPinned: r.is_urgent,
+          isPublished: r.is_published,
+          authorName: r.signatory_name || "Alumni Secretariat",
+          createdAt: r.created_at,
+          updatedAt: r.updated_at
+        }));
+      }
+    } catch (err) {
+      console.warn("Supabase getOfficialNoticesList error:", err);
+    }
+  }
+  return [];
+}
+async function createOrUpdateOfficialNotice(params) {
+  if (isSupabaseServerConfigured) {
+    try {
+      if (params.id) {
+        const { data, error } = await supabaseServer.from(SUPABASE_TABLES.OFFICIAL_NOTICES).update({
+          title: params.title.trim(),
+          category: params.category,
+          full_content: params.content.trim(),
+          summary: params.content.trim().slice(0, 200),
+          is_urgent: Boolean(params.isPinned),
+          is_published: Boolean(params.isPublished ?? true),
+          updated_at: (/* @__PURE__ */ new Date()).toISOString()
+        }).eq("id", params.id).select().single();
+        if (!error && data) return data;
+      } else {
+        const { data, error } = await supabaseServer.from(SUPABASE_TABLES.OFFICIAL_NOTICES).insert({
+          ref_no: `SZMC/NOT-2026/${Math.floor(Math.random() * 900) + 100}`,
+          title: params.title.trim(),
+          category: params.category,
+          published_date: (/* @__PURE__ */ new Date()).toISOString().split("T")[0],
+          summary: params.content.trim().slice(0, 200),
+          full_content: params.content.trim(),
+          is_urgent: Boolean(params.isPinned),
+          is_published: Boolean(params.isPublished ?? true),
+          signatory_name: params.actorEmail,
+          signatory_designation: "Portal Administrator",
+          signatory_organization: "Shaheed Ziaur Rahman Medical College Alumni Association"
+        }).select().single();
+        if (!error && data) return data;
+      }
+    } catch (err) {
+      console.warn("Supabase createOrUpdateOfficialNotice error:", err);
+    }
+  }
+  return {
+    id: params.id || Date.now(),
+    refNo: `SZMC/NOT-2026/099`,
+    title: params.title.trim(),
+    category: params.category,
+    content: params.content.trim(),
+    isPinned: Boolean(params.isPinned),
+    isPublished: Boolean(params.isPublished ?? true),
+    authorName: params.actorEmail,
+    createdAt: /* @__PURE__ */ new Date(),
+    updatedAt: /* @__PURE__ */ new Date()
+  };
+}
+async function generateBulkBatchCohortSample(params) {
+  await recordSecurityAuditLog({
+    actorUid: params.actorUid,
+    actorEmail: params.actorEmail,
+    actorRole: params.actorRole,
+    action: "BULK_COHORT_ATTEMPT",
+    targetType: "alumni_profile",
+    targetId: "PRODUCTION_NOOP",
+    severity: "info",
+    summary: "Bulk sample generation skipped in production mode (Supabase is single source of truth)."
+  });
+  return { insertedCount: 0 };
+}
+
 // server.ts
 if (typeof globalThis.__dirname !== "undefined") {
   delete globalThis.__dirname;
@@ -2868,8 +3382,9 @@ process.on("unhandledRejection", (reason) => {
 });
 dotenv2.config({ quiet: true });
 var __filename2 = fileURLToPath2(import.meta.url);
-var __dirname2 = path2.dirname(__filename2);
+var __dirname2 = path3.dirname(__filename2);
 var app = express();
+app.set("trust proxy", 1);
 var args = process.argv.slice(2);
 var portFlagIdx = args.indexOf("--port");
 var cliPort = portFlagIdx !== -1 && args[portFlagIdx + 1] ? Number(args[portFlagIdx + 1]) : void 0;
@@ -2909,26 +3424,6 @@ app.use(compression({
 }));
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
-var rateLimitStore = /* @__PURE__ */ new Map();
-function rateLimitGuard(maxRequests, windowMs) {
-  return (req, res, next) => {
-    const ip = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.socket.remoteAddress || "unknown";
-    const key = `${ip}:${req.baseUrl || req.path}`;
-    const now = Date.now();
-    const bucket = rateLimitStore.get(key);
-    if (!bucket || now > bucket.resetAt) {
-      rateLimitStore.set(key, { count: 1, resetAt: now + windowMs });
-      return next();
-    }
-    bucket.count += 1;
-    if (bucket.count > maxRequests) {
-      return res.status(429).json({
-        error: "Rate limit exceeded. Automated scraping and brute-force requests are blocked."
-      });
-    }
-    return next();
-  };
-}
 function resolveActor(req) {
   if (req.dbUser) {
     return {
@@ -2951,17 +3446,6 @@ app.get("/api/auth/verify-session", requireAuth, (req, res) => {
     timestamp: (/* @__PURE__ */ new Date()).toISOString()
   });
 });
-app.get(["/api/download-dist", "/download-dist", "/download/dist.zip", "/szmc-alumni-dist.zip"], requireSuperAdmin, (_req, res) => {
-  const publicZip = path2.resolve(__dirname2, "public", "szmc-alumni-dist.zip");
-  if (existsSync2(publicZip)) {
-    return res.download(publicZip, "szmc-alumni-dist.zip");
-  }
-  const distZip = path2.resolve(__dirname2, "dist", "szmc-alumni-dist.zip");
-  if (existsSync2(distZip)) {
-    return res.download(distZip, "szmc-alumni-dist.zip");
-  }
-  return res.status(404).json({ error: "Distribution bundle not found" });
-});
 app.post("/api/auth/sync", requireAuth, async (req, res) => {
   try {
     res.json({
@@ -2980,13 +3464,13 @@ function formatAlumniRowToProfile(row) {
     fullName: row.fullName || "SZMC Alumnus",
     avatarUrl: row.avatarUrl || "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=200&auto=format&fit=crop&q=80",
     coverUrl: row.coverUrl || void 0,
-    batchYear: row.batchYear || 68,
+    batchYear: row.batchYear || 25,
     session: row.session || void 0,
     collegeRoll: row.collegeRoll || "",
-    academicStream: row.academicStream,
+    academicStream: row.academicStream || "MBBS",
     academicGroup: row.academicGroup,
-    group: row.academicStream || "Science",
-    section: row.section || "Group 4",
+    group: row.academicStream || "MBBS",
+    section: row.section || "MBBS",
     verificationStatus: row.verificationStatus || "pending_vouch",
     verificationMethod: row.verificationMethod || "two_vouches",
     verifiedBy: row.verifiedByAdmin ? [row.verifiedByAdmin] : [],
@@ -2997,8 +3481,8 @@ function formatAlumniRowToProfile(row) {
     institution: row.institution || "",
     cadre: row.cadre || "",
     specialty: Array.isArray(row.specialty) ? row.specialty : [],
-    degree: Array.isArray(row.degree) ? row.degree : ["HSC"],
-    city: row.city || "Dhaka",
+    degree: Array.isArray(row.degree) ? row.degree : ["MBBS"],
+    city: row.city || "Bogura",
     country: row.country || "Bangladesh",
     phone: row.phone || "",
     phoneOwnershipVerified: Boolean(row.phoneOwnershipVerified ?? row.phone_ownership_verified),
@@ -3019,20 +3503,6 @@ function formatAlumniRowToProfile(row) {
     postsCount: row.postsCount || 0,
     badges: Array.isArray(row.badges) ? row.badges : []
   };
-}
-var PASSWORD_SALT = "ndc_dhaka_1949_salt_v1:";
-function hashPasswordServer(raw) {
-  if (!raw) return "";
-  if (raw.startsWith("sha256:")) return raw;
-  const hash = crypto3.createHash("sha256").update(PASSWORD_SALT + raw).digest("hex");
-  return `sha256:${hash}`;
-}
-function verifyPasswordServer(storedHash, inputPass) {
-  if (!storedHash) return true;
-  const hashedInput = hashPasswordServer(inputPass);
-  if (storedHash === hashedInput) return true;
-  if (storedHash === inputPass) return true;
-  return false;
 }
 app.post("/api/auth/register", rateLimitGuard(25, 6e4), async (req, res) => {
   try {
@@ -3137,9 +3607,9 @@ async function handleUnifiedLoginCore(req, res) {
     const cleanId = identifier.trim();
     const isEmail = cleanId.includes("@");
     const safeCompareSecret = (provided, expected) => {
-      const a = crypto3.createHash("sha256").update(provided).digest();
-      const b = crypto3.createHash("sha256").update(expected).digest();
-      return crypto3.timingSafeEqual(a, b);
+      const a = crypto5.createHash("sha256").update(provided).digest();
+      const b = crypto5.createHash("sha256").update(expected).digest();
+      return crypto5.timingSafeEqual(a, b);
     };
     const isDedicatedSuperAdmin = isEmail && isSuperAdminEmail(cleanId);
     if (isDedicatedSuperAdmin) {
@@ -3505,120 +3975,15 @@ app.post("/api/admin/bulk-verify-all", rateLimitGuard(15, 6e4), requireSuperAdmi
     res.status(500).json({ error: err.message || "Failed to bulk verify profiles" });
   }
 });
-app.post(
-  "/api/telemetry/batch",
-  rateLimitGuard(180, 6e4),
-  optionalAuth,
-  async (req, res) => {
-    try {
-      const body = req.body;
-      if (!body || typeof body !== "object" || !body.session?.sessionId) {
-        return res.status(400).json({ error: "Invalid telemetry payload." });
-      }
-      const result = await ingestTelemetryBatch(body, req.dbUser || null);
-      return res.json({ ok: true, ...result });
-    } catch (err) {
-      return res.status(500).json({ error: err?.message || "Failed to ingest telemetry batch." });
-    }
-  }
-);
-app.get(
-  "/api/admin/telemetry/overview",
-  rateLimitGuard(120, 6e4),
-  requireSuperAdmin,
-  async (req, res) => {
-    try {
-      const rawRange = Number(req.query.rangeHours);
-      const rangeHours = Number.isFinite(rawRange) && rawRange >= 0 && rawRange <= 8760 ? rawRange : 168;
-      const overview = await getTelemetryOverview(rangeHours);
-      return res.json(overview);
-    } catch (err) {
-      return res.status(500).json({ error: err?.message || "Failed to load telemetry overview." });
-    }
-  }
-);
-app.get(
-  "/api/admin/telemetry/user/:userKey",
-  rateLimitGuard(120, 6e4),
-  requireSuperAdmin,
-  async (req, res) => {
-    try {
-      const userKey = decodeURIComponent(String(req.params.userKey || "")).trim();
-      if (!userKey || userKey.length > 140) {
-        return res.status(400).json({ error: "Invalid user identifier." });
-      }
-      const dossier = await getUserTelemetryDossier(userKey);
-      if (!dossier) {
-        return res.status(404).json({ error: "No behavioral telemetry found for this user." });
-      }
-      return res.json(dossier);
-    } catch (err) {
-      return res.status(500).json({ error: err?.message || "Failed to load user dossier." });
-    }
-  }
-);
-app.get(
-  "/api/admin/telemetry/segments",
-  rateLimitGuard(120, 6e4),
-  requireSuperAdmin,
-  async (_req, res) => {
-    try {
-      const segments = await listAdSegments();
-      return res.json({ segments });
-    } catch (err) {
-      return res.status(500).json({ error: err?.message || "Failed to list audience segments." });
-    }
-  }
-);
-app.post(
-  "/api/admin/telemetry/segments",
-  rateLimitGuard(60, 6e4),
-  requireSuperAdmin,
-  async (req, res) => {
-    try {
-      const actor = resolveActor(req);
-      const created = await createAdSegment(req.body || {}, actor.email || "Super Admin");
-      return res.status(201).json({ success: true, segment: created });
-    } catch (err) {
-      return res.status(400).json({ error: err?.message || "Failed to create audience segment." });
-    }
-  }
-);
-app.delete(
-  "/api/admin/telemetry/segments/:id",
-  rateLimitGuard(60, 6e4),
-  requireSuperAdmin,
-  async (req, res) => {
-    try {
-      const id = String(req.params.id || "").trim();
-      await deleteAdSegment(id);
-      return res.json({ success: true });
-    } catch (err) {
-      return res.status(500).json({ error: err?.message || "Failed to delete audience segment." });
-    }
-  }
-);
-app.post(
-  "/api/admin/telemetry/clear",
-  rateLimitGuard(10, 6e4),
-  requireSuperAdmin,
-  async (_req, res) => {
-    try {
-      await clearTelemetryLogs();
-      return res.json({ success: true, message: "Local telemetry session buffer cleared." });
-    } catch (err) {
-      return res.status(500).json({ error: err?.message || "Failed to clear telemetry logs." });
-    }
-  }
-);
+app.use(createTelemetryRouter());
+app.use(createPushRouter());
 var serverSiteConfigStore = null;
-var SITE_CONFIG_FILE = path2.resolve(__dirname2, "szmc-site-config.json");
+var SITE_CONFIG_FILE = path3.resolve(__dirname2, "szmc-site-config.json");
 function cleanAndPersistBase64Avatars(members) {
   if (!Array.isArray(members)) return [];
-  const uploadsDir = path2.resolve(__dirname2, "public", "uploads", "avatars");
-  if (!existsSync2(uploadsDir)) {
+  const uploadsDir = path3.resolve(__dirname2, "public", "uploads", "avatars");
+  if (!existsSync3(uploadsDir)) {
     try {
-      const { mkdirSync } = __require("fs");
       mkdirSync(uploadsDir, { recursive: true });
     } catch {
     }
@@ -3630,7 +3995,7 @@ function cleanAndPersistBase64Avatars(members) {
         if (matches && matches[2]) {
           const ext = matches[1] === "jpeg" ? "jpg" : matches[1];
           const fileName = `hof_${Date.now()}_${idx}.${ext}`;
-          const filePath = path2.join(uploadsDir, fileName);
+          const filePath = path3.join(uploadsDir, fileName);
           writeFileSync2(filePath, Buffer.from(matches[2], "base64"));
           return {
             ...member,
@@ -3647,8 +4012,8 @@ function cleanAndPersistBase64Avatars(members) {
 async function hydrateServerSiteConfigFromSupabase() {
   let diskConfig = null;
   try {
-    if (existsSync2(SITE_CONFIG_FILE)) {
-      const raw = readFileSync2(SITE_CONFIG_FILE, "utf-8");
+    if (existsSync3(SITE_CONFIG_FILE)) {
+      const raw = readFileSync3(SITE_CONFIG_FILE, "utf-8");
       diskConfig = JSON.parse(raw);
     }
   } catch (err) {
@@ -3695,8 +4060,8 @@ async function hydrateServerSiteConfigFromSupabase() {
 function loadServerSiteConfig() {
   if (serverSiteConfigStore) return serverSiteConfigStore;
   try {
-    if (existsSync2(SITE_CONFIG_FILE)) {
-      const raw = readFileSync2(SITE_CONFIG_FILE, "utf-8");
+    if (existsSync3(SITE_CONFIG_FILE)) {
+      const raw = readFileSync3(SITE_CONFIG_FILE, "utf-8");
       serverSiteConfigStore = JSON.parse(raw);
       return serverSiteConfigStore;
     }
@@ -3750,10 +4115,11 @@ app.get("/api/hall-of-fame", async (_req, res) => {
 });
 app.post("/api/admin/site-config", rateLimitGuard(120, 6e4), requireAdmin, async (req, res) => {
   try {
-    const patch = req.body;
-    if (!patch || typeof patch !== "object") {
+    const rawBody = req.body;
+    if (!rawBody || typeof rawBody !== "object") {
       return res.status(400).json({ error: "Invalid configuration payload" });
     }
+    const { _clientSupabaseSynced, ...patch } = rawBody;
     const updated = saveServerSiteConfig(patch);
     broadcastFeedEvent({
       type: "SITE_CONFIG_UPDATED",
@@ -3770,37 +4136,48 @@ app.post("/api/admin/site-config", rateLimitGuard(120, 6e4), requireAdmin, async
     }
     let supabaseSynced = false;
     let supabaseSyncError = null;
-    if (isSupabaseServerConfigured) {
-      const nowIso = (/* @__PURE__ */ new Date()).toISOString();
-      const hofMembers = Array.isArray(updated.featuredAlumni) ? updated.featuredAlumni : [];
-      const results = await Promise.allSettled([
-        supabaseServer.from("site_settings").upsert({
-          key: "master_site_config",
-          value: updated,
-          updated_at: nowIso
-        }, { onConflict: "key" }),
-        supabaseServer.from("site_settings").upsert({
-          key: "hall_of_fame",
-          value: {
-            members: hofMembers,
+    let syncMode = "server_local_fallback";
+    if (_clientSupabaseSynced === true && !isSupabaseServiceRoleConfigured) {
+      supabaseSynced = true;
+      syncMode = "client_jwt";
+    } else if (isSupabaseServerConfigured) {
+      const writeTarget = getSupabaseWriteClient(req.supabaseAccessToken);
+      if (writeTarget) {
+        syncMode = writeTarget.mode;
+        const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+        const hofMembers = Array.isArray(updated.featuredAlumni) ? updated.featuredAlumni : [];
+        const results = await Promise.allSettled([
+          writeTarget.client.from("site_settings").upsert({
+            key: "master_site_config",
+            value: updated,
             updated_at: nowIso
-          },
-          updated_at: nowIso
-        }, { onConflict: "key" })
-      ]);
-      const errors = results.map((r) => r.status === "rejected" ? r.reason?.message : r.value?.error?.message).filter(Boolean);
-      if (errors.length === 0) {
-        supabaseSynced = true;
+          }, { onConflict: "key" }),
+          writeTarget.client.from("site_settings").upsert({
+            key: "hall_of_fame",
+            value: {
+              members: hofMembers,
+              updated_at: nowIso
+            },
+            updated_at: nowIso
+          }, { onConflict: "key" })
+        ]);
+        const errors = results.map((r) => r.status === "rejected" ? r.reason?.message : r.value?.error?.message).filter(Boolean);
+        if (errors.length === 0) {
+          supabaseSynced = true;
+        } else {
+          supabaseSyncError = errors.join("; ");
+          console.warn("Supabase site_settings server sync error:", supabaseSyncError);
+        }
       } else {
-        supabaseSyncError = errors.join("; ");
-        console.warn("Supabase site_settings server sync error:", supabaseSyncError);
+        syncMode = "server_local_fallback";
       }
     }
     return res.json({
       success: true,
       supabaseSynced,
+      syncMode,
       supabaseSyncError,
-      message: supabaseSynced ? "Site configuration & Hall of Fame saved to Supabase and broadcast live across all devices!" : "Site configuration broadcast live (check SUPABASE_SERVICE_ROLE_KEY for server-side Supabase sync).",
+      message: supabaseSynced ? "Site configuration & Hall of Fame saved to Supabase and broadcast live across all devices!" : "Site configuration saved on server and broadcast live across all devices.",
       savedAt: updated.updatedAt,
       config: updated
     });
@@ -3811,13 +4188,17 @@ app.post("/api/admin/site-config", rateLimitGuard(120, 6e4), requireAdmin, async
 });
 app.post("/api/auth/reset-password", rateLimitGuard(10, 6e4), requireAuth, async (req, res) => {
   try {
-    const { phone, newPassword } = req.body;
-    if (!phone?.trim() || !newPassword || newPassword.length < 6) {
-      return res.status(400).json({ error: "Valid phone number and new password (min 6 chars) required." });
+    const { phone, email, newPassword } = req.body || {};
+    if (!newPassword || typeof newPassword !== "string" || newPassword.length < 6) {
+      return res.status(400).json({ error: "New password must be at least 6 characters." });
     }
-    const alumnus = await findAlumniByCredential(phone.trim());
+    const credential = typeof phone === "string" && phone.trim() || typeof email === "string" && email.trim() || req.dbUser?.email || "";
+    if (!credential) {
+      return res.status(400).json({ error: "Valid account credential and new password (min 6 chars) required." });
+    }
+    const alumnus = await findAlumniByCredential(credential);
     if (!alumnus) {
-      return res.status(404).json({ error: "No account found with this mobile number." });
+      return res.status(404).json({ error: "No matching account found." });
     }
     const isAdminCaller = req.dbUser?.role === "admin" || req.dbUser?.role === "super_admin";
     const isOwnerCaller = req.dbUser?.id === Number(alumnus.id) || req.dbUser?.email && alumnus.email && req.dbUser.email.toLowerCase() === alumnus.email.toLowerCase();
@@ -4560,30 +4941,179 @@ app.post("/api/posts/:id/reply", rateLimitGuard(90, 6e4), requireAuth, async (re
   }
 });
 var memoryGalleryAlbums = [];
-app.get("/api/gallery/albums", rateLimitGuard(60, 6e4), async (_req, res) => {
+var memoryGalleryPhotoLikes = /* @__PURE__ */ new Map();
+var memoryGalleryLikeCounts = /* @__PURE__ */ new Map();
+var ALLOWED_GALLERY_CATEGORIES = /* @__PURE__ */ new Set([
+  "reunion",
+  "academic",
+  "campus",
+  "convocation",
+  "sports",
+  "cultural",
+  "all"
+]);
+var ALLOWED_GALLERY_IMAGE_EXTS = /* @__PURE__ */ new Set(["jpg", "jpeg", "png", "webp", "gif"]);
+var ALLOWED_GALLERY_VIDEO_EXTS = /* @__PURE__ */ new Set(["mp4", "webm", "mov", "ogg"]);
+function sanitizeGalleryUrl(raw) {
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith("https://") || trimmed.startsWith("http://")) {
+    return trimmed;
+  }
+  if (trimmed.startsWith("/assets/") || trimmed.startsWith("/uploads/")) {
+    return trimmed;
+  }
+  if (/^data:image\/(jpeg|jpg|png|webp|gif);base64,[A-Za-z0-9+/=\s]+$/i.test(trimmed)) {
+    return trimmed;
+  }
+  return null;
+}
+function normalizeGalleryBatchYear(raw) {
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > 38) return null;
+  return n;
+}
+function extractBearerToken2(req) {
+  const header = req.headers.authorization;
+  if (typeof header !== "string" || !header.toLowerCase().startsWith("bearer ")) return null;
+  return header.slice(7).trim() || null;
+}
+function formatGalleryPhotoRow(p, album, currentUserId) {
+  const photoId = String(p.id);
+  const dbLikes = Number(p.likes_count) || 0;
+  const serverLikes = memoryGalleryLikeCounts.get(photoId);
+  const likesCount = typeof serverLikes === "number" ? Math.max(0, serverLikes) : dbLikes;
+  const likedSet = memoryGalleryPhotoLikes.get(photoId);
+  const likedByMe = currentUserId > 0 && Boolean(likedSet?.has(currentUserId));
+  const uploaderRel = Array.isArray(p.uploader) ? p.uploader[0] : p.uploader;
+  return {
+    id: photoId,
+    albumId: Number(album.id),
+    url: p.url || p.photo_url || album.cover_url || album.cover_photo_url,
+    caption: p.caption || "",
+    category: album.category,
+    batchYear: p.batch_year || album.batch_year || void 0,
+    year: String(p.batch_year || album.batch_year || 2026),
+    uploaderName: uploaderRel?.full_name || p.uploader_name || "SZMC Alumnus",
+    uploaderAvatar: uploaderRel?.avatar_url || void 0,
+    uploaderId: p.uploader_id ? Number(p.uploader_id) : void 0,
+    uploadedAt: p.uploaded_at || p.created_at || void 0,
+    likesCount,
+    likedByMe,
+    tags: Array.isArray(p.tags) ? p.tags : [],
+    mediaType: p.media_type === "video" ? "video" : "image",
+    fileSize: p.file_size || "1.2 MB"
+  };
+}
+app.post(
+  "/api/gallery/upload",
+  rateLimitGuard(40, 6e4),
+  requireAuth,
+  express.raw({ type: ["image/*", "video/*", "application/octet-stream"], limit: "25mb" }),
+  async (req, res) => {
+    try {
+      const rawExt = String(req.headers["x-file-ext"] || "jpg").replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+      const isVideo = ALLOWED_GALLERY_VIDEO_EXTS.has(rawExt);
+      const isImage = ALLOWED_GALLERY_IMAGE_EXTS.has(rawExt);
+      if (!isImage && !isVideo) {
+        return res.status(400).json({
+          error: "Unsupported media format. Allowed: JPG, PNG, WEBP, GIF, MP4, WEBM, MOV, OGG."
+        });
+      }
+      const buffer = Buffer.isBuffer(req.body) ? req.body : null;
+      if (!buffer || buffer.length === 0) {
+        return res.status(400).json({ error: "Empty media upload payload." });
+      }
+      const contentTypeMap = {
+        jpg: "image/jpeg",
+        jpeg: "image/jpeg",
+        png: "image/png",
+        webp: "image/webp",
+        gif: "image/gif",
+        mp4: "video/mp4",
+        webm: "video/webm",
+        mov: "video/quicktime",
+        ogg: "video/ogg"
+      };
+      const contentType = contentTypeMap[rawExt] || "application/octet-stream";
+      const userIdSafe = String(req.dbUser?.id || "alumni").replace(/[^a-zA-Z0-9_-]/g, "");
+      const rawAlbumFolder = String(req.headers["x-album-id"] || "general").replace(/[^a-zA-Z0-9_-]/g, "");
+      const fileName = `gallery_${userIdSafe}_${Date.now()}_${crypto5.randomBytes(4).toString("hex")}.${rawExt}`;
+      if (isSupabaseServerConfigured) {
+        const writeCtx = getSupabaseWriteClient(req.supabaseAccessToken || extractBearerToken2(req));
+        const storageClient = writeCtx?.client || supabaseServer;
+        const bucketName = isVideo ? "post-media" : "gallery";
+        const storagePath = isVideo ? `gallery-videos/${rawAlbumFolder}/${fileName}` : `albums/${rawAlbumFolder}/${fileName}`;
+        try {
+          const { error: upErr } = await storageClient.storage.from(bucketName).upload(storagePath, buffer, {
+            contentType,
+            cacheControl: "3600",
+            upsert: true
+          });
+          if (!upErr) {
+            const { data: pubData } = storageClient.storage.from(bucketName).getPublicUrl(storagePath);
+            if (pubData?.publicUrl) {
+              return res.status(201).json({
+                url: pubData.publicUrl,
+                storagePath,
+                bucket: bucketName
+              });
+            }
+          } else {
+            console.warn("[Server] Gallery Supabase Storage upload notice:", upErr.message);
+          }
+        } catch (supaErr) {
+          console.warn("[Server] Gallery Supabase Storage upload fallback:", supaErr);
+        }
+      }
+      const uploadsDir = path3.resolve(__dirname2, "public", "uploads", "gallery");
+      if (!existsSync3(uploadsDir)) {
+        mkdirSync(uploadsDir, { recursive: true });
+      }
+      const targetPath = path3.resolve(uploadsDir, fileName);
+      if (!targetPath.startsWith(uploadsDir + path3.sep)) {
+        return res.status(400).json({ error: "Invalid upload file path." });
+      }
+      writeFileSync2(targetPath, buffer);
+      return res.status(201).json({
+        url: `/uploads/gallery/${fileName}`,
+        storagePath: `uploads/gallery/${fileName}`,
+        bucket: "local"
+      });
+    } catch (err) {
+      console.error("[Server] Gallery media upload error:", err);
+      return res.status(500).json({ error: err?.message || "Failed to upload gallery media." });
+    }
+  }
+);
+app.get("/api/gallery/albums", rateLimitGuard(90, 6e4), optionalAuth, async (req, res) => {
   try {
+    const currentUserId = Number(req.dbUser?.id || 0);
     if (isSupabaseServerConfigured) {
       try {
-        const { data: albums, error } = await supabaseServer.from("gallery_albums").select("*, gallery_photos(*)").order("created_at", { ascending: false });
-        if (!error && albums && albums.length > 0) {
-          const formatted = albums.map((a) => {
-            const rawPhotos = a.gallery_photos || [];
-            const photos = rawPhotos.map((p) => ({
-              id: String(p.id),
-              albumId: Number(a.id),
-              url: p.url || p.photo_url || a.cover_url || a.cover_photo_url,
-              caption: p.caption || "",
-              category: a.category,
-              batchYear: p.batch_year || a.batch_year,
-              year: String(a.batch_year || 2026),
-              uploaderName: p.uploader_name || "SZMC Alumnus",
-              uploaderId: p.uploader_id ? Number(p.uploader_id) : void 0,
-              likes: Number(p.likes_count) || 0,
-              liked: false,
-              tags: Array.isArray(p.tags) ? p.tags : [],
-              mediaType: p.media_type || "image",
-              fileSize: p.file_size || "1.2 MB"
-            }));
+        let albumsData = null;
+        let queryError = null;
+        const richRes = await supabaseServer.from("gallery_albums").select(
+          "*, creator:alumni_profiles!gallery_albums_created_by_id_fkey(id, full_name, avatar_url), gallery_photos(*, uploader:alumni_profiles!gallery_photos_uploader_id_fkey(id, full_name, avatar_url))"
+        ).eq("is_published", true).order("created_at", { ascending: false });
+        if (!richRes.error && Array.isArray(richRes.data)) {
+          albumsData = richRes.data;
+        } else {
+          const basicRes = await supabaseServer.from("gallery_albums").select("*, gallery_photos(*)").order("created_at", { ascending: false });
+          albumsData = basicRes.data;
+          queryError = basicRes.error;
+        }
+        if (!queryError && Array.isArray(albumsData)) {
+          const formatted = albumsData.map((a) => {
+            const rawPhotos = Array.isArray(a.gallery_photos) ? [...a.gallery_photos] : [];
+            rawPhotos.sort((p1, p2) => {
+              const t1 = p1.uploaded_at ? new Date(p1.uploaded_at).getTime() : 0;
+              const t2 = p2.uploaded_at ? new Date(p2.uploaded_at).getTime() : 0;
+              return t2 - t1;
+            });
+            const photos = rawPhotos.filter((p) => p.is_approved !== false).map((p) => formatGalleryPhotoRow(p, a, currentUserId));
+            const creatorRel = Array.isArray(a.creator) ? a.creator[0] : a.creator;
             return {
               id: Number(a.id),
               title: a.title,
@@ -4592,20 +5122,21 @@ app.get("/api/gallery/albums", rateLimitGuard(60, 6e4), async (_req, res) => {
               date: a.event_date_label || "2026",
               location: a.location || "SZMC Campus, Silimpur, Bogura",
               batchYear: a.batch_year || 0,
-              photosCount: photos.length || a.photos_count || 1,
+              photosCount: photos.length,
               coverUrl: a.cover_url || a.cover_photo_url || (photos[0]?.url ?? "/assets/aistudio/images__1__2778177d.png"),
-              createdBy: a.created_by || "SZMC Alumni",
+              createdBy: creatorRel?.full_name || a.created_by || "SZMC Alumni",
               createdById: a.created_by_id ? Number(a.created_by_id) : void 0,
+              createdDate: a.created_at || void 0,
               photos
             };
           });
-          return res.json({ albums: formatted });
+          return res.json({ albums: formatted, source: "supabase" });
         }
       } catch (err) {
         console.warn("Supabase fetch gallery albums notice:", err);
       }
     }
-    return res.json({ albums: memoryGalleryAlbums });
+    return res.json({ albums: memoryGalleryAlbums, source: "memory" });
   } catch (err) {
     return res.status(500).json({ error: err.message || "Failed to fetch gallery albums" });
   }
@@ -4614,167 +5145,419 @@ app.post("/api/gallery/albums", rateLimitGuard(30, 6e4), requireAuth, async (req
   try {
     const { title, description, category, eventDateLabel, location, batchYear, coverUrl, createdBy } = req.body;
     const createdById = Number(req.dbUser?.id || 0);
-    if (!title || !title.trim()) {
-      return res.status(400).json({ error: "Album title is required" });
+    const authorName = String(req.dbUser?.fullName || createdBy || "SZMC Alumnus").trim();
+    const cleanTitle = typeof title === "string" ? title.trim() : "";
+    if (cleanTitle.length < 2 || cleanTitle.length > 250) {
+      return res.status(400).json({ error: "Album title must be between 2 and 250 characters." });
     }
-    const validCat = ["reunion", "academic", "campus", "sports", "cultural", "milestone", "convocation"];
-    const normCat = (category || "campus").toLowerCase();
-    const finalCat = validCat.includes(normCat) ? normCat : "campus";
-    const finalCover = coverUrl || "https://images.unsplash.com/photo-1511795409834-ef04bbd61622?w=1000&auto=format&fit=crop&q=80";
+    const normCat = String(category || "campus").toLowerCase();
+    const finalCat = ALLOWED_GALLERY_CATEGORIES.has(normCat) ? normCat : "campus";
+    const validatedCover = sanitizeGalleryUrl(coverUrl);
+    if (coverUrl && !validatedCover) {
+      return res.status(400).json({ error: "Invalid cover photo URL format." });
+    }
+    const finalCover = validatedCover || "https://hjuyiqyviohinbhzaipl.supabase.co/storage/v1/object/public/gallery/szmc/campus_1.jpg";
+    const safeBatchYear = normalizeGalleryBatchYear(batchYear);
+    const safeDateLabel = String(eventDateLabel || "Recent").trim().slice(0, 64) || "Recent";
     let insertedAlbumId = null;
+    let insertedCoverPhotoId = null;
     if (isSupabaseServerConfigured) {
-      try {
-        const payload = {
-          title: title.trim(),
-          description: description || "SZMC Album",
-          category: finalCat,
-          event_date_label: eventDateLabel || "Recent",
-          location: location || "SZMC Campus, Silimpur, Bogura",
-          batch_year: Number(batchYear) || null,
-          cover_url: finalCover,
-          cover_photo_url: finalCover,
-          is_published: true,
-          photos_count: 1
-        };
-        if (createdById) payload.created_by_id = Number(createdById);
-        if (createdBy) payload.created_by = String(createdBy);
-        const { data, error } = await supabaseServer.from("gallery_albums").insert(payload).select("id").single();
-        if (!error && data?.id) {
-          insertedAlbumId = Number(data.id);
-          await supabaseServer.from("gallery_photos").insert({
-            album_id: insertedAlbumId,
-            url: finalCover,
-            photo_url: finalCover,
-            caption: `${title.trim()} - Cover Photo`,
-            uploader_id: createdById ? Number(createdById) : null,
-            uploader_name: createdBy ? String(createdBy) : "SZMC Alumnus",
-            is_approved: true
-          });
-        }
-      } catch (err) {
-        console.warn("Supabase create album notice:", err);
+      const writeCtx = getSupabaseWriteClient(req.supabaseAccessToken || extractBearerToken2(req));
+      const dbClient = writeCtx?.client || supabaseServer;
+      const payload = {
+        title: cleanTitle,
+        description: typeof description === "string" && description.trim() ? description.trim() : "SZMC Album",
+        category: finalCat,
+        event_date_label: safeDateLabel,
+        location: typeof location === "string" && location.trim() ? location.trim() : "SZMC Campus, Silimpur, Bogura",
+        batch_year: safeBatchYear,
+        cover_url: finalCover,
+        cover_photo_url: finalCover,
+        is_published: true,
+        photos_count: 1,
+        photo_count: 1,
+        created_by: authorName
+      };
+      if (createdById > 0) payload.created_by_id = createdById;
+      const { data, error } = await dbClient.from("gallery_albums").insert(payload).select("id").single();
+      if (error || !data?.id) {
+        console.error("[Server] Supabase create album error:", error?.message || error);
+        return res.status(500).json({
+          error: error?.message || "Could not save album to Supabase database."
+        });
+      }
+      insertedAlbumId = Number(data.id);
+      const coverPhotoPayload = {
+        album_id: insertedAlbumId,
+        url: finalCover,
+        photo_url: finalCover,
+        caption: `${cleanTitle} - Cover Photo`,
+        batch_year: safeBatchYear,
+        tags: ["Cover", finalCat],
+        media_type: "image",
+        uploader_name: authorName,
+        is_approved: true
+      };
+      if (createdById > 0) coverPhotoPayload.uploader_id = createdById;
+      const { data: photoData, error: photoErr } = await dbClient.from("gallery_photos").insert(coverPhotoPayload).select("id").single();
+      if (!photoErr && photoData?.id) {
+        insertedCoverPhotoId = String(photoData.id);
+      } else if (photoErr) {
+        console.warn("[Server] Cover photo insert notice:", photoErr.message);
       }
     }
     const finalId = insertedAlbumId || Date.now();
+    const coverPhotoId = insertedCoverPhotoId || `p-${Date.now()}`;
     const albumObj = {
       id: finalId,
-      title: title.trim(),
+      title: cleanTitle,
       description: description || "A collection of SZMC memories.",
       category: finalCat,
-      date: eventDateLabel || "Recent",
+      date: safeDateLabel,
       location: location || "SZMC Campus, Silimpur, Bogura",
-      batchYear: Number(batchYear) || 0,
+      batchYear: safeBatchYear || 0,
       photosCount: 1,
       coverUrl: finalCover,
-      createdById: createdById ? Number(createdById) : void 0,
-      createdBy: createdBy || "SZMC Alumnus",
+      createdById: createdById > 0 ? createdById : void 0,
+      createdBy: authorName,
       photos: [
         {
-          id: `p-${Date.now()}`,
+          id: coverPhotoId,
+          albumId: finalId,
           url: finalCover,
-          caption: `${title.trim()} - Cover Photo`,
-          uploaderId: createdById ? Number(createdById) : void 0,
-          uploaderName: createdBy || "SZMC Alumnus",
-          batchYear: Number(batchYear) || 0,
-          uploadedAt: "Today",
-          likesCount: 1,
-          likedByMe: true,
-          tags: ["Cover", finalCat]
+          caption: `${cleanTitle} - Cover Photo`,
+          uploaderId: createdById > 0 ? createdById : void 0,
+          uploaderName: authorName,
+          batchYear: safeBatchYear || void 0,
+          uploadedAt: (/* @__PURE__ */ new Date()).toISOString(),
+          likesCount: 0,
+          likedByMe: false,
+          tags: ["Cover", finalCat],
+          mediaType: "image"
         }
       ]
     };
     memoryGalleryAlbums.unshift(albumObj);
-    return res.status(201).json({ success: true, album: albumObj });
+    broadcastFeedEvent({
+      type: "GALLERY_UPDATED",
+      action: "ALBUM_CREATED",
+      albumId: finalId,
+      timestamp: Date.now()
+    });
+    return res.status(201).json({ success: true, album: albumObj, coverPhotoId });
   } catch (err) {
     return res.status(500).json({ error: err.message || "Failed to create album" });
   }
 });
 app.post("/api/gallery/photos", rateLimitGuard(60, 6e4), requireAuth, async (req, res) => {
   try {
-    const { albumId, url, photoUrl, caption, batchYear, tags, mediaType, fileSize, uploaderName } = req.body;
+    const {
+      albumId,
+      album_id,
+      url,
+      photoUrl,
+      photo_url,
+      storagePath,
+      storage_object_path,
+      caption,
+      batchYear,
+      batch_year,
+      tags,
+      mediaType,
+      media_type,
+      fileSize,
+      file_size,
+      uploaderName,
+      uploader_name
+    } = req.body;
+    const targetAlbumId = Number(albumId ?? album_id);
     const uploaderId = Number(req.dbUser?.id || 0);
-    const finalUrl = url || photoUrl;
-    if (!albumId || !finalUrl) {
-      return res.status(400).json({ error: "albumId and url are required" });
+    const authorName = String(req.dbUser?.fullName || uploaderName || uploader_name || "SZMC Alumnus").trim();
+    const rawUrl2 = url || photoUrl || photo_url;
+    const finalUrl = sanitizeGalleryUrl(rawUrl2);
+    if (!Number.isInteger(targetAlbumId) || targetAlbumId <= 0 || !finalUrl) {
+      return res.status(400).json({ error: "Valid albumId and safe media url are required." });
     }
+    const safeBatchYear = normalizeGalleryBatchYear(batchYear ?? batch_year);
+    const safeMediaType = (mediaType || media_type) === "video" ? "video" : "image";
+    const safeTags = Array.isArray(tags) ? tags.map((t) => String(t).trim()).filter(Boolean).slice(0, 12) : [];
+    const safeCaption = typeof caption === "string" && caption.trim() ? caption.trim().slice(0, 1e3) : null;
+    const safeFileSize = typeof (fileSize || file_size) === "string" ? String(fileSize || file_size).slice(0, 32) : null;
+    const safeStoragePath = typeof (storagePath || storage_object_path) === "string" ? String(storagePath || storage_object_path).slice(0, 500) : null;
     let insertedPhotoId = null;
     if (isSupabaseServerConfigured) {
+      const writeCtx = getSupabaseWriteClient(req.supabaseAccessToken || extractBearerToken2(req));
+      const dbClient = writeCtx?.client || supabaseServer;
+      const payload = {
+        album_id: targetAlbumId,
+        url: finalUrl,
+        photo_url: finalUrl,
+        storage_object_path: safeStoragePath,
+        caption: safeCaption,
+        batch_year: safeBatchYear,
+        tags: safeTags,
+        media_type: safeMediaType,
+        file_size: safeFileSize,
+        uploader_name: authorName,
+        is_approved: true
+      };
+      if (uploaderId > 0) payload.uploader_id = uploaderId;
+      const { data, error } = await dbClient.from("gallery_photos").insert(payload).select("id").single();
+      if (error || !data?.id) {
+        console.error("[Server] Supabase add gallery photo error:", error?.message || error);
+        return res.status(500).json({
+          error: error?.message || "Could not save photo to Supabase database."
+        });
+      }
+      insertedPhotoId = String(data.id);
       try {
-        const payload = {
-          album_id: Number(albumId),
-          url: finalUrl,
-          photo_url: finalUrl,
-          caption: caption || null,
-          batch_year: Number(batchYear) || null,
-          tags: Array.isArray(tags) ? tags : [],
-          media_type: mediaType || "image",
-          file_size: fileSize || null,
-          is_approved: true
-        };
-        if (uploaderId) payload.uploader_id = Number(uploaderId);
-        if (uploaderName) payload.uploader_name = String(uploaderName);
-        const { data, error } = await supabaseServer.from("gallery_photos").insert(payload).select("id").single();
-        if (!error && data?.id) {
-          insertedPhotoId = String(data.id);
-          const { count } = await supabaseServer.from("gallery_photos").select("id", { count: "exact", head: true }).eq("album_id", Number(albumId));
-          if (typeof count === "number") {
-            await supabaseServer.from("gallery_albums").update({ photos_count: count, photo_count: count }).eq("id", Number(albumId));
-          }
+        const { count } = await dbClient.from("gallery_photos").select("id", { count: "exact", head: true }).eq("album_id", targetAlbumId);
+        if (typeof count === "number") {
+          await dbClient.from("gallery_albums").update({ photos_count: count, photo_count: count }).eq("id", targetAlbumId);
         }
-      } catch (err) {
-        console.warn("Supabase add gallery photo notice:", err);
+      } catch {
       }
     }
     const photoObj = {
       id: insertedPhotoId || `p-${Date.now()}`,
-      albumId: Number(albumId),
+      albumId: targetAlbumId,
       url: finalUrl,
-      caption: caption || "",
-      uploaderId: uploaderId ? Number(uploaderId) : void 0,
-      uploaderName: uploaderName || "SZMC Alumnus",
-      batchYear: Number(batchYear) || 0,
-      tags: Array.isArray(tags) ? tags : [],
-      mediaType: mediaType || "image",
-      fileSize: fileSize || "1.2 MB"
+      caption: safeCaption || "",
+      uploaderId: uploaderId > 0 ? uploaderId : void 0,
+      uploaderName: authorName,
+      batchYear: safeBatchYear || void 0,
+      uploadedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      likesCount: 0,
+      likedByMe: false,
+      tags: safeTags,
+      mediaType: safeMediaType,
+      fileSize: safeFileSize || "1.2 MB"
     };
-    const memAlbum = memoryGalleryAlbums.find((a) => a.id === Number(albumId));
+    const memAlbum = memoryGalleryAlbums.find((a) => Number(a.id) === targetAlbumId);
     if (memAlbum) {
       if (!Array.isArray(memAlbum.photos)) memAlbum.photos = [];
       memAlbum.photos.unshift(photoObj);
       memAlbum.photosCount = memAlbum.photos.length;
     }
+    broadcastFeedEvent({
+      type: "GALLERY_UPDATED",
+      action: "PHOTO_ADDED",
+      albumId: targetAlbumId,
+      photoId: photoObj.id,
+      timestamp: Date.now()
+    });
     return res.status(201).json({ success: true, photo: photoObj });
   } catch (err) {
     return res.status(500).json({ error: err.message || "Failed to add photo" });
   }
 });
+app.post("/api/gallery/photos/:id/like", rateLimitGuard(120, 6e4), requireAuth, async (req, res) => {
+  try {
+    const photoId = String(req.params.id || "").trim();
+    if (!photoId) {
+      return res.status(400).json({ error: "Photo ID is required." });
+    }
+    const actorId = Number(req.dbUser?.id || 0);
+    if (actorId <= 0) {
+      return res.status(401).json({ error: "Authentication required to like photos." });
+    }
+    let currentDbLikes = 0;
+    let albumId = req.body?.albumId ? Number(req.body.albumId) : null;
+    if (isSupabaseServerConfigured) {
+      const { data: existingPhoto } = await supabaseServer.from("gallery_photos").select("id, album_id, likes_count").eq("id", photoId).maybeSingle();
+      if (existingPhoto) {
+        currentDbLikes = Number(existingPhoto.likes_count) || 0;
+        albumId = Number(existingPhoto.album_id) || albumId;
+      }
+    }
+    let likedSet = memoryGalleryPhotoLikes.get(photoId);
+    if (!likedSet) {
+      likedSet = /* @__PURE__ */ new Set();
+      memoryGalleryPhotoLikes.set(photoId, likedSet);
+    }
+    const baseCount = memoryGalleryLikeCounts.has(photoId) ? memoryGalleryLikeCounts.get(photoId) : currentDbLikes;
+    const desiredLiked = typeof req.body?.liked === "boolean" ? Boolean(req.body.liked) : !likedSet.has(actorId);
+    const wasLiked = likedSet.has(actorId);
+    let nextLikesCount = baseCount;
+    if (desiredLiked && !wasLiked) {
+      likedSet.add(actorId);
+      nextLikesCount = baseCount + 1;
+    } else if (!desiredLiked && wasLiked) {
+      likedSet.delete(actorId);
+      nextLikesCount = Math.max(0, baseCount - 1);
+    } else if (desiredLiked && wasLiked && typeof req.body?.liked === "boolean") {
+      nextLikesCount = Math.max(1, baseCount);
+    } else if (!desiredLiked && !wasLiked && typeof req.body?.liked === "boolean") {
+      nextLikesCount = Math.max(0, baseCount - 1);
+    }
+    memoryGalleryLikeCounts.set(photoId, nextLikesCount);
+    let persistedToSupabase = false;
+    if (isSupabaseServerConfigured) {
+      try {
+        const writeCtx = getSupabaseWriteClient(req.supabaseAccessToken || extractBearerToken2(req));
+        const dbClient = writeCtx?.client || supabaseServer;
+        const { data: updatedRow, error: upErr } = await dbClient.from("gallery_photos").update({ likes_count: nextLikesCount }).eq("id", photoId).select("likes_count").maybeSingle();
+        if (!upErr && updatedRow && Number(updatedRow.likes_count) === nextLikesCount) {
+          persistedToSupabase = true;
+        }
+      } catch (err) {
+        console.warn("[Server] Gallery photo like Supabase update notice:", err);
+      }
+    }
+    for (const alb of memoryGalleryAlbums) {
+      const target = Array.isArray(alb.photos) ? alb.photos.find((p) => String(p.id) === photoId) : null;
+      if (target) {
+        target.likesCount = nextLikesCount;
+        break;
+      }
+    }
+    broadcastFeedEvent({
+      type: "GALLERY_UPDATED",
+      action: "PHOTO_LIKED",
+      albumId,
+      photoId,
+      likesCount: nextLikesCount,
+      timestamp: Date.now()
+    });
+    return res.json({
+      success: true,
+      photoId,
+      albumId,
+      likedByMe: desiredLiked,
+      likesCount: nextLikesCount,
+      persistedToSupabase
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err?.message || "Failed to update photo like." });
+  }
+});
+app.patch("/api/gallery/albums/:id", rateLimitGuard(40, 6e4), requireAuth, async (req, res) => {
+  try {
+    const albumId = Number(req.params.id);
+    if (!Number.isInteger(albumId) || albumId <= 0) {
+      return res.status(400).json({ error: "Valid Album ID is required." });
+    }
+    const requesterUserId = Number(req.dbUser?.id || 0);
+    const requesterIsAdmin = req.dbUser?.role === "admin" || req.dbUser?.role === "super_admin" || req.dbUser?.role === "moderator";
+    const { title, description, category, eventDateLabel, location, batchYear, coverUrl } = req.body;
+    const updates = {};
+    if (typeof title === "string") {
+      const cleanTitle = title.trim();
+      if (cleanTitle.length < 2 || cleanTitle.length > 250) {
+        return res.status(400).json({ error: "Album title must be between 2 and 250 characters." });
+      }
+      updates.title = cleanTitle;
+    }
+    if (typeof description === "string") {
+      updates.description = description.trim() || null;
+    }
+    if (typeof category === "string") {
+      const normCat = category.toLowerCase();
+      if (ALLOWED_GALLERY_CATEGORIES.has(normCat)) {
+        updates.category = normCat;
+      }
+    }
+    if (typeof eventDateLabel === "string" && eventDateLabel.trim()) {
+      updates.event_date_label = eventDateLabel.trim().slice(0, 64);
+    }
+    if (typeof location === "string") {
+      updates.location = location.trim() || null;
+    }
+    if (batchYear !== void 0) {
+      updates.batch_year = normalizeGalleryBatchYear(batchYear);
+    }
+    if (typeof coverUrl === "string" && coverUrl.trim()) {
+      const validCover = sanitizeGalleryUrl(coverUrl);
+      if (!validCover) {
+        return res.status(400).json({ error: "Invalid cover photo URL format." });
+      }
+      updates.cover_url = validCover;
+      updates.cover_photo_url = validCover;
+    }
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ error: "No valid album fields provided to update." });
+    }
+    if (isSupabaseServerConfigured) {
+      const { data: existingAlbum } = await supabaseServer.from("gallery_albums").select("id, created_by_id").eq("id", albumId).maybeSingle();
+      if (existingAlbum) {
+        const isOwner = requesterUserId > 0 && Number(existingAlbum.created_by_id) === requesterUserId;
+        if (!requesterIsAdmin && !isOwner) {
+          return res.status(403).json({
+            error: "Access denied: You can only edit your own albums, or an administrator can edit any album."
+          });
+        }
+        const writeCtx = getSupabaseWriteClient(req.supabaseAccessToken || extractBearerToken2(req));
+        const dbClient = writeCtx?.client || supabaseServer;
+        const { error: upErr } = await dbClient.from("gallery_albums").update(updates).eq("id", albumId);
+        if (upErr) {
+          return res.status(500).json({
+            error: upErr.message || "Failed to update album in Supabase."
+          });
+        }
+      }
+    }
+    const memAlbum = memoryGalleryAlbums.find((a) => Number(a.id) === albumId);
+    if (memAlbum) {
+      if (updates.title) memAlbum.title = updates.title;
+      if (updates.description !== void 0) memAlbum.description = updates.description || "";
+      if (updates.category) memAlbum.category = updates.category;
+      if (updates.event_date_label) memAlbum.date = updates.event_date_label;
+      if (updates.location !== void 0) memAlbum.location = updates.location || "";
+      if (updates.batch_year !== void 0) memAlbum.batchYear = updates.batch_year || 0;
+      if (updates.cover_url) memAlbum.coverUrl = updates.cover_url;
+    }
+    broadcastFeedEvent({
+      type: "GALLERY_UPDATED",
+      action: "ALBUM_UPDATED",
+      albumId,
+      timestamp: Date.now()
+    });
+    return res.json({ success: true, albumId, updates });
+  } catch (err) {
+    return res.status(500).json({ error: err?.message || "Failed to update album." });
+  }
+});
 var handleGalleryAlbumDelete = async (req, res) => {
   try {
     const albumId = Number(req.params.id);
-    if (!albumId) {
-      return res.status(400).json({ error: "Album ID is required" });
+    if (!Number.isInteger(albumId) || albumId <= 0) {
+      return res.status(400).json({ error: "Valid Album ID is required." });
     }
     const requesterUserId = Number(req.dbUser?.id || 0);
     const requesterIsAdmin = req.dbUser?.role === "admin" || req.dbUser?.role === "super_admin" || req.dbUser?.role === "moderator";
     if (isSupabaseServerConfigured) {
-      try {
-        const { data: album } = await supabaseServer.from("gallery_albums").select("id, created_by_id").eq("id", albumId).maybeSingle();
-        if (album) {
-          const isOwner = requesterUserId > 0 && Number(album.created_by_id) === requesterUserId;
-          if (!requesterIsAdmin && !isOwner) {
-            return res.status(403).json({ error: "Access denied: You can only delete your own albums, or an administrator can delete any album." });
-          }
-          await supabaseServer.from("gallery_photos").delete().eq("album_id", albumId);
-          await supabaseServer.from("gallery_albums").delete().eq("id", albumId);
+      const writeCtx = getSupabaseWriteClient(req.supabaseAccessToken || extractBearerToken2(req));
+      const dbClient = writeCtx?.client || supabaseServer;
+      const { data: album } = await supabaseServer.from("gallery_albums").select("id, created_by_id").eq("id", albumId).maybeSingle();
+      if (album) {
+        const isOwner = requesterUserId > 0 && Number(album.created_by_id) === requesterUserId;
+        if (!requesterIsAdmin && !isOwner) {
+          return res.status(403).json({
+            error: "Access denied: You can only delete your own albums, or an administrator can delete any album."
+          });
         }
-      } catch (err) {
-        console.warn("Supabase delete gallery album notice:", err);
+        const { error: photosDelErr } = await dbClient.from("gallery_photos").delete().eq("album_id", albumId);
+        if (photosDelErr) {
+          console.warn("[Server] Delete album photos error:", photosDelErr.message);
+        }
+        const { error: albumDelErr } = await dbClient.from("gallery_albums").delete().eq("id", albumId);
+        if (albumDelErr) {
+          return res.status(500).json({
+            error: albumDelErr.message || "Failed to delete album from Supabase."
+          });
+        }
       }
     }
-    const memIdx = memoryGalleryAlbums.findIndex((a) => a.id === albumId);
+    const memIdx = memoryGalleryAlbums.findIndex((a) => Number(a.id) === albumId);
     if (memIdx >= 0) {
       memoryGalleryAlbums.splice(memIdx, 1);
     }
+    broadcastFeedEvent({
+      type: "GALLERY_UPDATED",
+      action: "ALBUM_DELETED",
+      albumId,
+      timestamp: Date.now()
+    });
     return res.json({ success: true, message: "Album deleted successfully" });
   } catch (err) {
     console.error("Failed to delete gallery album:", err);
@@ -4785,36 +5568,50 @@ app.delete("/api/gallery/albums/:id", rateLimitGuard(40, 6e4), requireAuth, hand
 app.post("/api/gallery/albums/:id/delete", rateLimitGuard(40, 6e4), requireAuth, handleGalleryAlbumDelete);
 var handleGalleryPhotoDelete = async (req, res) => {
   try {
-    const photoId = String(req.params.id);
-    const albumId = req.body.albumId || req.query.albumId ? Number(req.body.albumId || req.query.albumId) : null;
+    const photoId = String(req.params.id || "").trim();
+    if (!photoId) {
+      return res.status(400).json({ error: "Photo ID is required." });
+    }
+    const bodyAlbumId = req.body?.albumId || req.query?.albumId;
+    let targetAlbumId = bodyAlbumId ? Number(bodyAlbumId) : null;
     const requesterUserId = Number(req.dbUser?.id || 0);
     const requesterIsAdmin = req.dbUser?.role === "admin" || req.dbUser?.role === "super_admin" || req.dbUser?.role === "moderator";
     if (isSupabaseServerConfigured) {
-      try {
-        const { data: photo } = await supabaseServer.from("gallery_photos").select("id, album_id, uploader_id").eq("id", photoId).maybeSingle();
-        if (photo) {
-          let isOwner = requesterUserId > 0 && Number(photo.uploader_id) === requesterUserId;
-          if (!isOwner && photo.album_id) {
-            const { data: parentAlbum } = await supabaseServer.from("gallery_albums").select("id, created_by_id").eq("id", photo.album_id).maybeSingle();
-            if (parentAlbum && Number(parentAlbum.created_by_id) === requesterUserId) {
-              isOwner = true;
-            }
-          }
-          if (!requesterIsAdmin && !isOwner) {
-            return res.status(403).json({ error: "Access denied: You can only delete your own photos, or an administrator can delete any photo." });
-          }
-          await supabaseServer.from("gallery_photos").delete().eq("id", photoId);
-          const targetAlbumId = photo.album_id || albumId;
-          if (targetAlbumId) {
-            const { count } = await supabaseServer.from("gallery_photos").select("id", { count: "exact", head: true }).eq("album_id", targetAlbumId);
-            const remainingCount = typeof count === "number" ? count : 0;
-            await supabaseServer.from("gallery_albums").update({ photos_count: remainingCount, photo_count: remainingCount }).eq("id", targetAlbumId);
+      const writeCtx = getSupabaseWriteClient(extractBearerToken2(req));
+      const dbClient = writeCtx?.client || supabaseServer;
+      const { data: photo } = await supabaseServer.from("gallery_photos").select("id, album_id, uploader_id").eq("id", photoId).maybeSingle();
+      if (photo) {
+        let isOwner = requesterUserId > 0 && Number(photo.uploader_id) === requesterUserId;
+        if (!isOwner && photo.album_id) {
+          const { data: parentAlbum } = await supabaseServer.from("gallery_albums").select("id, created_by_id").eq("id", photo.album_id).maybeSingle();
+          if (parentAlbum && Number(parentAlbum.created_by_id) === requesterUserId) {
+            isOwner = true;
           }
         }
-      } catch (err) {
-        console.warn("Supabase delete photo notice:", err);
+        if (!requesterIsAdmin && !isOwner) {
+          return res.status(403).json({
+            error: "Access denied: You can only delete your own photos, or an administrator can delete any photo."
+          });
+        }
+        const { error: delErr } = await dbClient.from("gallery_photos").delete().eq("id", photoId);
+        if (delErr) {
+          return res.status(500).json({
+            error: delErr.message || "Failed to delete photo from Supabase."
+          });
+        }
+        targetAlbumId = Number(photo.album_id) || targetAlbumId;
+        if (targetAlbumId) {
+          try {
+            const { count } = await dbClient.from("gallery_photos").select("id", { count: "exact", head: true }).eq("album_id", targetAlbumId);
+            const remainingCount = typeof count === "number" ? count : 0;
+            await dbClient.from("gallery_albums").update({ photos_count: remainingCount, photo_count: remainingCount }).eq("id", targetAlbumId);
+          } catch {
+          }
+        }
       }
     }
+    memoryGalleryPhotoLikes.delete(photoId);
+    memoryGalleryLikeCounts.delete(photoId);
     for (const alb of memoryGalleryAlbums) {
       if (Array.isArray(alb.photos)) {
         const pIdx = alb.photos.findIndex((p) => String(p.id) === photoId);
@@ -4825,6 +5622,13 @@ var handleGalleryPhotoDelete = async (req, res) => {
         }
       }
     }
+    broadcastFeedEvent({
+      type: "GALLERY_UPDATED",
+      action: "PHOTO_DELETED",
+      albumId: targetAlbumId,
+      photoId,
+      timestamp: Date.now()
+    });
     return res.json({ success: true, message: "Photo deleted successfully" });
   } catch (err) {
     console.error("Failed to delete photo:", err);
@@ -6139,17 +6943,17 @@ app.post(
         userUid: isAdminCaller ? req.body.userUid || user?.uid || user?.id : user?.uid || user?.id,
         fullName: req.body.fullName,
         avatarUrl: req.body.avatarUrl,
-        batchYear: Number(req.body.batchYear) || 68,
+        batchYear: Number(req.body.batchYear) || 25,
         session: req.body.session,
         collegeRoll: req.body.collegeRoll,
-        academicStream: req.body.academicStream || req.body.group || "Science",
+        academicStream: req.body.academicStream || req.body.group || "MBBS",
         academicGroup: req.body.academicGroup || null,
-        section: req.body.section,
+        section: req.body.section || "MBBS",
         profession: req.body.profession,
         position: req.body.position,
         institution: req.body.institution,
         specialty: Array.isArray(req.body.specialty) ? req.body.specialty : [],
-        degree: Array.isArray(req.body.degree) ? req.body.degree : ["HSC"],
+        degree: Array.isArray(req.body.degree) ? req.body.degree : ["MBBS"],
         city: req.body.city,
         country: req.body.country,
         phone: req.body.phone,
@@ -6210,6 +7014,12 @@ app.post(
       if (req.body.specialtyOther) updates.specialtyOther = req.body.specialtyOther;
       if (req.body.bloodGroup) updates.bloodGroup = req.body.bloodGroup;
       if (req.body.isPublic !== void 0) updates.isPublic = req.body.isPublic;
+      if (req.body.showContactToVerified !== void 0) {
+        updates.showContactToVerified = Boolean(req.body.showContactToVerified);
+      }
+      if (req.body.userPreferences && typeof req.body.userPreferences === "object") {
+        updates.userPreferences = req.body.userPreferences;
+      }
       const updated = await updateAlumniProfileRecord(targetProfileId, updates);
       return res.json({ success: true, profile: updated });
     } catch (error) {
@@ -6455,41 +7265,7 @@ app.get(
     }
   }
 );
-app.get([
-  "/download/szmc-alumni-dist.zip",
-  "/szmc-alumni-dist.zip",
-  "/download/dist.zip",
-  "/dist.zip",
-  "/api/download-dist",
-  "/download-dist"
-], requireSuperAdmin, (_req, res) => {
-  const candidates = [
-    path2.resolve(__dirname2, "public", "szmc-alumni-dist.zip"),
-    path2.resolve(__dirname2, "szmc-alumni-dist.zip"),
-    path2.resolve(__dirname2, "public", "dist.zip"),
-    path2.resolve(__dirname2, "dist.zip"),
-    path2.resolve(__dirname2, "public", "szmc-alumni-dist.tar.gz"),
-    path2.resolve(__dirname2, "szmc-alumni-dist.tar.gz")
-  ];
-  for (const c of candidates) {
-    if (existsSync2(c)) {
-      return res.download(c, "szmc-alumni-portal-dist.zip");
-    }
-  }
-  return res.status(404).send("Production dist archive not found. Please build first.");
-});
-app.get(["/download/szmc-alumni-dist.tar.gz", "/szmc-alumni-dist.tar.gz"], requireSuperAdmin, (_req, res) => {
-  const candidates = [
-    path2.resolve(__dirname2, "public", "szmc-alumni-dist.tar.gz"),
-    path2.resolve(__dirname2, "szmc-alumni-dist.tar.gz")
-  ];
-  for (const c of candidates) {
-    if (existsSync2(c)) {
-      return res.download(c, "szmc-alumni-dist.tar.gz");
-    }
-  }
-  return res.status(404).send("Production dist tar.gz archive not found.");
-});
+app.use(createDistDownloadRouter(__dirname2));
 var ALLOWED_VIDEO_EXTENSIONS = /* @__PURE__ */ new Set(["mp4", "webm", "mov", "ogg"]);
 app.post(
   "/api/upload-video",
@@ -6501,7 +7277,7 @@ app.post(
       const rawExt = String(req.headers["x-file-ext"] || "mp4").replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
       const extHeader = ALLOWED_VIDEO_EXTENSIONS.has(rawExt) ? rawExt : "mp4";
       const userIdHeader = String(req.dbUser?.id || "alumni").replace(/[^a-zA-Z0-9_-]/g, "");
-      const fileName = `video_${userIdHeader}_${Date.now()}_${crypto3.randomBytes(4).toString("hex")}.${extHeader}`;
+      const fileName = `video_${userIdHeader}_${Date.now()}_${crypto5.randomBytes(4).toString("hex")}.${extHeader}`;
       let buffer = null;
       if (Buffer.isBuffer(req.body) && req.body.length > 0) {
         buffer = req.body;
@@ -6533,12 +7309,12 @@ app.post(
           console.warn("[Server] Supabase storage video upload fallback:", supaErr);
         }
       }
-      const uploadsDir = path2.resolve(__dirname2, "public", "uploads", "videos");
-      if (!existsSync2(uploadsDir)) {
-        const { mkdirSync } = await import("fs");
-        mkdirSync(uploadsDir, { recursive: true });
+      const uploadsDir = path3.resolve(__dirname2, "public", "uploads", "videos");
+      if (!existsSync3(uploadsDir)) {
+        const { mkdirSync: mkdirSync2 } = await import("fs");
+        mkdirSync2(uploadsDir, { recursive: true });
       }
-      const filePath = path2.join(uploadsDir, fileName);
+      const filePath = path3.join(uploadsDir, fileName);
       writeFileSync2(filePath, buffer);
       return res.json({
         url: `/uploads/videos/${fileName}`
@@ -6549,18 +7325,44 @@ app.post(
     }
   }
 );
+app.get("/api/health", (_req, res) => {
+  res.status(200).json({ status: "ok", timestamp: Date.now() });
+});
 async function startServer() {
   const httpServer = createHttpServer(app);
+  let listenRetries = 0;
+  const MAX_LISTEN_RETRIES = 15;
+  let viteInstance = null;
+  const bindPort = () => {
+    if (typeof PORT === "number") {
+      httpServer.listen(PORT, "0.0.0.0", () => {
+        console.log(`SZMC Alumni Server running on http://0.0.0.0:${PORT}`);
+      });
+    } else {
+      httpServer.listen(PORT, () => {
+        console.log(`SZMC Alumni Server running on cPanel socket ${PORT}`);
+      });
+    }
+  };
   httpServer.on("error", (err) => {
+    if (err.code === "EADDRINUSE" && listenRetries < MAX_LISTEN_RETRIES) {
+      listenRetries += 1;
+      console.warn(
+        `[Server] Port ${PORT} busy (EADDRINUSE), retrying (${listenRetries}/${MAX_LISTEN_RETRIES})...`
+      );
+      setTimeout(() => {
+        try {
+          httpServer.close();
+        } catch {
+        }
+        bindPort();
+      }, 400);
+      return;
+    }
     console.error("[Server] HTTP Server socket error:", err.message);
   });
-  try {
-    await hydrateServerSiteConfigFromSupabase();
-    console.log("[Server] Successfully hydrated site configuration and Hall of Fame from Supabase.");
-  } catch (hydErr) {
-    console.warn("[Server] Notice during initial Supabase site config hydration:", hydErr?.message || hydErr);
-  }
-  const publicPath = path2.resolve(__dirname2, "public");
+  loadServerSiteConfig();
+  const publicPath = path3.resolve(__dirname2, "public");
   app.use(express.static(publicPath, {
     maxAge: "7d",
     etag: true
@@ -6572,22 +7374,35 @@ async function startServer() {
         middlewareMode: true,
         allowedHosts: true,
         hmr: false,
+        ws: false,
         watch: null
       },
+      plugins: [
+        {
+          name: "szmc-disable-vite-ws-and-watch",
+          config(cfg) {
+            cfg.server = cfg.server || {};
+            cfg.server.hmr = false;
+            cfg.server.ws = false;
+            cfg.server.watch = null;
+          }
+        }
+      ],
       appType: "custom"
     });
+    viteInstance = vite;
     app.use(vite.middlewares);
     app.use("*", async (req, res, next) => {
       if (req.originalUrl.startsWith("/api/")) {
         return res.status(404).json({ error: "Endpoint not found" });
       }
       const cleanPath = req.originalUrl.split("?")[0];
-      if (path2.extname(cleanPath) && !cleanPath.endsWith(".html")) {
+      if (path3.extname(cleanPath) && !cleanPath.endsWith(".html")) {
         return res.status(404).type("text/plain").send("File not found");
       }
       const url = req.originalUrl;
       try {
-        let template = await readFile(path2.resolve(__dirname2, "index.html"), "utf-8");
+        let template = await readFile(path3.resolve(__dirname2, "index.html"), "utf-8");
         template = await vite.transformIndexHtml(url, template);
         res.status(200).set({
           "Content-Type": "text/html",
@@ -6599,7 +7414,7 @@ async function startServer() {
       }
     });
   } else {
-    const distPath = path2.resolve(__dirname2, "dist");
+    const distPath = path3.resolve(__dirname2, "dist");
     app.use(express.static(distPath, {
       maxAge: "1y",
       etag: true,
@@ -6612,7 +7427,7 @@ async function startServer() {
     }));
     app.get("*", (_req, res) => {
       res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-      res.sendFile(path2.join(distPath, "index.html"));
+      res.sendFile(path3.join(distPath, "index.html"));
     });
   }
   app.use((err, _req, res, _next) => {
@@ -6621,15 +7436,29 @@ async function startServer() {
       res.status(500).json({ error: err?.message || "Internal Server Error" });
     }
   });
-  if (typeof PORT === "number") {
-    httpServer.listen(PORT, "0.0.0.0", () => {
-      console.log(`SZMC Alumni Server running on http://0.0.0.0:${PORT}`);
-    });
-  } else {
-    httpServer.listen(PORT, () => {
-      console.log(`SZMC Alumni Server running on cPanel socket ${PORT}`);
-    });
-  }
+  bindPort();
+  Promise.race([
+    hydrateServerSiteConfigFromSupabase(),
+    new Promise(
+      (_, reject) => setTimeout(() => reject(new Error("Supabase config hydration timeout (8s)")), 8e3)
+    )
+  ]).then(() => {
+    console.log("[Server] Successfully hydrated site configuration and Hall of Fame from Supabase.");
+  }).catch((hydErr) => {
+    console.warn("[Server] Notice during initial Supabase site config hydration:", hydErr?.message || hydErr);
+  });
+  const gracefulShutdown = async () => {
+    try {
+      httpServer.close();
+      if (viteInstance) {
+        await viteInstance.close();
+      }
+    } catch {
+    }
+    process.exit(0);
+  };
+  process.once("SIGTERM", gracefulShutdown);
+  process.once("SIGINT", gracefulShutdown);
 }
 startServer().catch((err) => {
   console.error("[Server] Fatal startup error:", err);

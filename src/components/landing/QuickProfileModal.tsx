@@ -14,6 +14,7 @@ import {
 import { AlumniProfile } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import { FrostedProfileCardModal } from '../FrostedProfileCardModal';
+import { VerifiedAvatar } from '../verification/VerifiedAvatar';
 
 interface QuickProfileModalProps {
   profile: AlumniProfile | null;
@@ -84,26 +85,34 @@ export const QuickProfileModal: React.FC<QuickProfileModalProps> = ({
         <div className="overflow-y-auto p-6 space-y-5 flex-1">
           {/* Avatar and Basic Header */}
           <div className="flex flex-col sm:flex-row sm:items-end gap-4 -mt-16 sm:-mt-20 relative z-10">
-            <div className="relative">
-              <img
-                src={profile.avatarUrl}
-                alt={profile.fullName}
-                className="w-24 h-24 sm:w-28 sm:h-28 rounded-2xl object-cover border-4 border-white dark:border-slate-900 shadow-xl bg-slate-100 dark:bg-slate-800"
-              />
-              <span
-                className="absolute bottom-1 right-1 w-5 h-5 rounded-full bg-emerald-500 border-2 border-white dark:border-slate-900 shadow-xs"
-                title="Verified Active Alumnus"
-              />
-            </div>
+            <VerifiedAvatar
+              src={profile.avatarUrl}
+              alt={profile.fullName}
+              verificationStatus={profile.verificationStatus}
+              profile={profile}
+              size="2xl"
+              imgClassName="w-24 h-24 sm:w-28 sm:h-28"
+              unverifiedClassName="rounded-2xl border-4 border-white dark:border-slate-900 shadow-xl bg-slate-100 dark:bg-slate-800"
+              statusDot={
+                <span
+                  className={`absolute z-20 ${
+                    profile.verificationStatus === 'verified' ? 'top-1 right-1' : 'bottom-1 right-1'
+                  } w-5 h-5 rounded-full bg-emerald-500 border-2 border-white dark:border-slate-900 shadow-xs`}
+                  title={profile.verificationStatus === 'verified' ? 'Verified Active Alumnus' : 'Active Alumnus'}
+                />
+              }
+            />
 
             <div className="flex-1">
               <div className="flex items-center gap-2">
                 <h3 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white tracking-tight">
                   {profile.fullName}
                 </h3>
-                <span title="Verified SZMC Doctor / Alumnus">
-                  <ShieldCheck className="w-5 h-5 text-blue-600 dark:text-blue-400 flex-shrink-0" />
-                </span>
+                {profile.verificationStatus === 'verified' && (
+                  <span title="Verified SZMC Doctor / Alumnus">
+                    <ShieldCheck className="w-5 h-5 text-blue-600 dark:text-blue-400 flex-shrink-0" />
+                  </span>
+                )}
               </div>
 
               <p className="text-sm font-semibold text-blue-600 dark:text-blue-400">

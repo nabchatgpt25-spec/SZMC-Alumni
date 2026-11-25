@@ -260,6 +260,10 @@ class ActivityTrackerEngine {
 
   private flushTimer: ReturnType<typeof setInterval> | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private persistTimer: ReturnType<typeof setTimeout> | null = null;
+  private scrollRafId: number | null = null;
+  private lastScrollCheckMs: number = 0;
+  private cachedEnvInfo: ReturnType<typeof detectEnvironmentInfo> | null = null;
   private initialized: boolean = false;
   private lastClickAtMs: number = 0;
 
@@ -305,27 +309,32 @@ class ActivityTrackerEngine {
     });
 
     this.boundClickHandler = (e: MouseEvent) => this.handleDocumentClick(e);
-    this.boundScrollHandler = () => this.handleScroll();
+    this.boundScrollHandler = () => this.scheduleScrollCheck();
     this.boundPointerActivityHandler = () => {
-      this.lastUserInteractionMs = Date.now();
+      const now = Date.now();
+      if (now - this.lastUserInteractionMs > 2000) {
+        this.lastUserInteractionMs = now;
+      }
     };
     this.boundVisibilityHandler = () => this.handleVisibilityChange();
     this.boundUnloadHandler = () => this.handleUnload();
 
     document.addEventListener('click', this.boundClickHandler, { capture: true, passive: true });
     window.addEventListener('scroll', this.boundScrollHandler, { passive: true });
-    window.addEventListener('mousemove', this.boundPointerActivityHandler, { passive: true });
-    window.addEventListener('touchstart', this.boundPointerActivityHandler, { passive: true });
+    window.addEventListener('pointerdown', this.boundPointerActivityHandler, { passive: true });
+    window.addEventListener('keydown', this.boundPointerActivityHandler, { passive: true });
     document.addEventListener('visibilitychange', this.boundVisibilityHandler);
     window.addEventListener('pagehide', this.boundUnloadHandler);
 
     this.flushTimer = setInterval(() => {
-      void this.flush(false);
-    }, 4500);
+      if (this.queue.length > 0) {
+        void this.flush(false);
+      }
+    }, 15000);
 
     this.heartbeatTimer = setInterval(() => {
       this.emitActiveHeartbeat();
-    }, 25000);
+    }, 30000);
   }
 
   /**
@@ -387,11 +396,27 @@ class ActivityTrackerEngine {
     }
   }
 
-  private persistRawHistory() {
-    try {
-      sessionStorage.setItem(RAW_EVENTS_STORAGE_KEY, JSON.stringify(this.rawHistory.slice(-MAX_RAW_HISTORY)));
-    } catch {
-      // ignore storage quota errors
+  private persistRawHistory(immediate = false) {
+    const writeNow = () => {
+      this.persistTimer = null;
+      try {
+        sessionStorage.setItem(RAW_EVENTS_STORAGE_KEY, JSON.stringify(this.rawHistory.slice(-MAX_RAW_HISTORY)));
+      } catch {
+        // ignore storage quota errors
+      }
+    };
+
+    if (immediate) {
+      if (this.persistTimer) {
+        clearTimeout(this.persistTimer);
+        this.persistTimer = null;
+      }
+      writeNow();
+      return;
+    }
+
+    if (!this.persistTimer) {
+      this.persistTimer = setTimeout(writeNow, 3000);
     }
   }
 
@@ -528,6 +553,7 @@ class ActivityTrackerEngine {
           createdAt: new Date().toISOString(),
         });
       }
+      this.persistRawHistory(true);
       void this.flush(true);
     } else {
       this.isTabVisible = true;
@@ -549,11 +575,22 @@ class ActivityTrackerEngine {
         createdAt: new Date().toISOString(),
       });
     }
+    this.persistRawHistory(true);
     void this.flush(true);
   }
 
+  private scheduleScrollCheck() {
+    const now = Date.now();
+    this.lastUserInteractionMs = now;
+    if (this.scrollRafId !== null || now - this.lastScrollCheckMs < 250) return;
+    this.scrollRafId = requestAnimationFrame(() => {
+      this.scrollRafId = null;
+      this.lastScrollCheckMs = Date.now();
+      this.handleScroll();
+    });
+  }
+
   private handleScroll() {
-    this.lastUserInteractionMs = Date.now();
     const doc = document.documentElement;
     const scrollable = Math.max(1, doc.scrollHeight - window.innerHeight);
     const pct = Math.min(100, Math.max(0, Math.round((window.scrollY / scrollable) * 100)));
@@ -700,7 +737,14 @@ class ActivityTrackerEngine {
   public async flush(useKeepalive = false) {
     if (!this.initialized || this.queue.length === 0) return;
     const batch = this.queue.splice(0, 45);
-    const env = detectEnvironmentInfo();
+    if (!this.cachedEnvInfo) {
+      this.cachedEnvInfo = detectEnvironmentInfo();
+    }
+    const env = this.cachedEnvInfo;
+    const colorScheme =
+      typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
+        ? 'dark'
+        : 'light';
 
     const payload = {
       session: {
@@ -724,7 +768,7 @@ class ActivityTrackerEngine {
         utmSource: env.utmSource,
         utmMedium: env.utmMedium,
         utmCampaign: env.utmCampaign,
-        colorScheme: env.colorScheme,
+        colorScheme,
         currentRoute: this.currentRoute,
       },
       events: batch,
@@ -752,14 +796,22 @@ class ActivityTrackerEngine {
       window.removeEventListener('scroll', this.boundScrollHandler);
     }
     if (this.boundPointerActivityHandler) {
-      window.removeEventListener('mousemove', this.boundPointerActivityHandler);
-      window.removeEventListener('touchstart', this.boundPointerActivityHandler);
+      window.removeEventListener('pointerdown', this.boundPointerActivityHandler);
+      window.removeEventListener('keydown', this.boundPointerActivityHandler);
     }
     if (this.boundVisibilityHandler) {
       document.removeEventListener('visibilitychange', this.boundVisibilityHandler);
     }
     if (this.boundUnloadHandler) {
       window.removeEventListener('pagehide', this.boundUnloadHandler);
+    }
+    if (this.scrollRafId !== null) {
+      cancelAnimationFrame(this.scrollRafId);
+      this.scrollRafId = null;
+    }
+    if (this.persistTimer) {
+      clearTimeout(this.persistTimer);
+      this.persistTimer = null;
     }
     if (this.flushTimer) clearInterval(this.flushTimer);
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);

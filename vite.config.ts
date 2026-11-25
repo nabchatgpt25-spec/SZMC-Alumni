@@ -82,6 +82,9 @@ export default defineConfig(() => {
             if (id.includes('node_modules/hls.js')) {
               return 'vendor-video';
             }
+            if (id.includes('node_modules/konva') || id.includes('node_modules/react-konva')) {
+              return 'vendor-annotator';
+            }
           },
         },
       },

@@ -17,6 +17,7 @@ import {
   respondToConnectionRequest,
   removeConnection,
   toggleFollowUser,
+  subscribeSocialGraphChanges,
   type SocialGraphSnapshot,
   type ConnectionRecord,
   type FollowProfileSummary,
@@ -54,7 +55,13 @@ export const SocialGraphActions: React.FC<SocialGraphActionsProps> = ({
 
   useEffect(() => {
     void loadSnapshot();
-  }, [loadSnapshot]);
+    const unsubscribe = subscribeSocialGraphChanges((detail) => {
+      if (detail.targetUserId === targetUserId || detail.actorUserId === targetUserId) {
+        void loadSnapshot();
+      }
+    });
+    return unsubscribe;
+  }, [loadSnapshot, targetUserId]);
 
   if (!isLoggedIn || !myUserId || myUserId === targetUserId) {
     return null;
@@ -273,7 +280,13 @@ export const MyNetworkPanel: React.FC<MyNetworkPanelProps> = ({
 
   useEffect(() => {
     void refresh();
-  }, [refresh]);
+    const unsubscribe = subscribeSocialGraphChanges((detail) => {
+      if (detail.actorUserId === myUserId || detail.targetUserId === myUserId) {
+        void refresh();
+      }
+    });
+    return unsubscribe;
+  }, [refresh, myUserId]);
 
   const handleDecision = async (req: ConnectionRecord, decision: 'accepted' | 'rejected') => {
     await respondToConnectionRequest(req.id, decision, myUserId, req.userId, myFullName);

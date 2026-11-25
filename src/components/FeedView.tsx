@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import {
   Heart,
   MessageCircle,
@@ -48,17 +48,17 @@ import {
 } from 'lucide-react';
 import { PostItem, PostComment, ReactionType } from '../types';
 import { CreatePostModal } from './CreatePostModal';
-import { PostCard } from './PostCard';
 import { LinkPreview } from './LinkPreview';
 import { PostMediaCarousel } from './PostMediaCarousel';
 import { useAuth } from '../context/AuthContext';
 import { playSound } from '../utils/audio';
 import { PostLightboxModal } from './PostLightboxModal';
+import { VerifiedAvatar } from './verification/VerifiedAvatar';
+import { isProfileFullyCompleted } from '../utils/profileCompletion';
 import { compressImageFileToDataUrl } from '../utils/mediaStorage';
 import { uploadVideoToStorage, validateVideoFile } from '../services/videoUploadService';
 import {
   extractUrlsFromText,
-  normalizeUrlInput,
   renderTextWithClickableLinks,
   SharedEmbedCard
 } from './SmartPostMediaAndEmbeds';
@@ -75,9 +75,6 @@ import {
 import { BloodNeededNowSection } from './landing/BloodNeededNowSection';
 import {
   fetchFeedPostsFromDb,
-  createFeedPostInDb,
-  togglePostLikeInDb,
-  reactToPostInDb,
   addPostCommentInDb,
   toggleSavePostInDb,
   editFeedPostInDb,
@@ -103,7 +100,7 @@ import {
   type QuadPostCategory,
   type QuadPostsSummary,
 } from './community/quadConstants';
-import { fetchFollowedUserIds } from '../services/socialGraphService';
+import { fetchFollowedUserIds, subscribeSocialGraphChanges } from '../services/socialGraphService';
 import { upsertPostReaction } from '../services/richInteractionsService';
 import { buildCommentTree } from '../services/richInteractionsUtils';
 import { ReactionPickerButton } from './community/ReactionPickerButton';
@@ -113,28 +110,7 @@ import { RepostModal } from './community/RepostModal';
 import { ReportContentModal } from './community/SafetyActionModal';
 import { blockUser, fetchBlockedUserIds } from '../services/communitySafetyService';
 import { filterBlockedPosts } from '../services/communitySafetyUtils';
-
-function formatFacebookRelativeTime(raw?: string): string {
-  if (!raw || raw === 'Just now') return 'Just now';
-  const parsed = new Date(raw);
-  if (Number.isNaN(parsed.getTime())) return raw;
-  const diffSec = Math.max(0, Math.floor((Date.now() - parsed.getTime()) / 1000));
-  if (diffSec < 60) return 'Just now';
-  const diffMin = Math.floor(diffSec / 60);
-  if (diffMin < 60) return `${diffMin}m`;
-  const diffHr = Math.floor(diffMin / 60);
-  if (diffHr < 24) return `${diffHr}h`;
-  const diffDays = Math.floor(diffHr / 24);
-  if (diffDays === 1) {
-    return `Yesterday at ${parsed.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`;
-  }
-  if (diffDays < 7) return `${diffDays}d`;
-  const nowYear = new Date().getFullYear();
-  if (parsed.getFullYear() === nowYear) {
-    return `${parsed.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} at ${parsed.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`;
-  }
-  return parsed.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-}
+import { formatFacebookTime as formatFacebookRelativeTime } from '../utils/facebookTime';
 
 interface FeedViewProps {
   onViewProfile?: (userId: number) => void;
@@ -148,6 +124,37 @@ interface FeedViewProps {
 }
 
 type PostCategory = 'General Update' | 'Tech & Innovation' | 'Professional Insights' | 'Reunion' | 'Achievement';
+
+const FEED_SESSION_CACHE_KEY = 'szmc_quad_feed_cache_v1';
+let memoryFeedCache: PostItem[] | null = null;
+
+function readCachedFeedPosts(): PostItem[] {
+  if (memoryFeedCache && memoryFeedCache.length > 0) return memoryFeedCache;
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = sessionStorage.getItem(FEED_SESSION_CACHE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      memoryFeedCache = parsed;
+      return parsed;
+    }
+  } catch {
+    // ignore storage errors
+  }
+  return [];
+}
+
+function writeCachedFeedPosts(items: PostItem[]): void {
+  const snapshot = items.slice(0, 20);
+  memoryFeedCache = snapshot;
+  if (typeof window === 'undefined') return;
+  try {
+    sessionStorage.setItem(FEED_SESSION_CACHE_KEY, JSON.stringify(snapshot));
+  } catch {
+    // ignore quota errors
+  }
+}
 
 const CATEGORIES: { label: PostCategory; icon: typeof MessageSquare; color: string; bg: string }[] = [
   { label: 'General Update', icon: MessageSquare, color: 'text-slate-600 dark:text-slate-300', bg: 'bg-slate-100 dark:bg-slate-800' },
@@ -189,10 +196,11 @@ export const FeedView: React.FC<FeedViewProps> = ({
     return () => window.removeEventListener('storage', syncVouches);
   }, [currentUser]);
 
-  const [posts, setPosts] = useState<PostItem[]>([]);
-  const [isLoadingPosts, setIsLoadingPosts] = useState<boolean>(true);
+  const [posts, setPosts] = useState<PostItem[]>(() => readCachedFeedPosts());
+  const [isLoadingPosts, setIsLoadingPosts] = useState<boolean>(() => readCachedFeedPosts().length === 0);
   const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
   const [hasMorePosts, setHasMorePosts] = useState<boolean>(false);
+  const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
   const [feedCursor, setFeedCursor] = useState<FeedCursor | null>(null);
   const [fallbackOffset, setFallbackOffset] = useState<number>(0);
   const [rankingWeights, setRankingWeights] = useState<FeedRankingWeights>(
@@ -209,7 +217,6 @@ export const FeedView: React.FC<FeedViewProps> = ({
     batchYear?: number;
     profession?: string;
   } | null>(null);
-  const [isSubmittingPost, setIsSubmittingPost] = useState<boolean>(false);
 
   // Load configurable For You ranking weights, followed Official Pages, followed alumni & blocked accounts
   useEffect(() => {
@@ -223,11 +230,15 @@ export const FeedView: React.FC<FeedViewProps> = ({
         if (mounted) setBlockedUserIds(new Set(ids));
       });
     };
-    if (currentUser.id) {
-      loadBlocks();
+    const loadFollows = () => {
+      if (!currentUser.id) return;
       void fetchFollowedUserIds(currentUser.id).then((ids) => {
         if (mounted) setFollowedUserIds(new Set(ids));
       });
+    };
+    if (currentUser.id) {
+      loadBlocks();
+      loadFollows();
       supabase
         .from('official_page_followers')
         .select('page_id')
@@ -239,9 +250,15 @@ export const FeedView: React.FC<FeedViewProps> = ({
         });
     }
     window.addEventListener('szmc_blocks_updated', loadBlocks);
+    const unsubscribeSocialGraph = subscribeSocialGraphChanges((detail) => {
+      if (detail.type === 'follow' && detail.actorUserId === currentUser.id) {
+        loadFollows();
+      }
+    });
     return () => {
       mounted = false;
       window.removeEventListener('szmc_blocks_updated', loadBlocks);
+      unsubscribeSocialGraph();
     };
   }, [currentUser.id]);
 
@@ -329,10 +346,33 @@ export const FeedView: React.FC<FeedViewProps> = ({
     }
   };
 
-  // Supabase is the ONLY source of truth: load initial cursor page on mount
+  const handleLoadMoreRef = useRef(handleLoadMorePosts);
+  handleLoadMoreRef.current = handleLoadMorePosts;
+
+  // Facebook-style automatic infinite scroll: pre-load next page 600px before reaching bottom
+  useEffect(() => {
+    const sentinel = loadMoreSentinelRef.current;
+    if (!sentinel || !hasMorePosts || isLoadingPosts || isLoadingMore) return;
+    if (typeof IntersectionObserver === 'undefined') return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          void handleLoadMoreRef.current();
+        }
+      },
+      { rootMargin: '600px 0px' }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [hasMorePosts, isLoadingPosts, isLoadingMore]);
+
+  // Stale-While-Revalidate: show cached posts on frame 1 (0ms) and refresh live from Supabase
   useEffect(() => {
     let isMounted = true;
-    setIsLoadingPosts(true);
+    if (readCachedFeedPosts().length === 0) {
+      setIsLoadingPosts(true);
+    }
     const myBatchNum = normalizeToBatchNumber(currentUser.batchYear);
     const isStaff = Boolean(
       isAdminUser ||
@@ -353,7 +393,9 @@ export const FeedView: React.FC<FeedViewProps> = ({
     })
       .then((page) => {
         if (isMounted) {
-          setPosts(page.posts || []);
+          const nextPosts = page.posts || [];
+          setPosts(nextPosts);
+          if (nextPosts.length > 0) writeCachedFeedPosts(nextPosts);
           setFeedCursor(page.nextCursor);
           setHasMorePosts(page.hasMore);
           setFallbackOffset(PAGE_SIZE);
@@ -375,14 +417,9 @@ export const FeedView: React.FC<FeedViewProps> = ({
         if (event.eventType === 'INSERT') {
           const newPostRow = event.newRecord;
           if (newPostRow && Number(newPostRow.author_id) !== currentUser.id) {
-            // Re-fetch fresh posts in background to populate rich author info & comments
-            fetchFeedPostsFromDb(50, currentUser.id).then((freshPosts) => {
-              if (isMounted && freshPosts && freshPosts.length > 0) {
-                setPosts(freshPosts);
-                setHasNewPosts(true);
-                showToast('✨ New post published by batchmate in real-time!');
-              }
-            });
+            // Buffer remote post notifications instead of wiping scroll/pagination with a background re-fetch
+            setPendingNewPostsCount((prev) => prev + 1);
+            setHasNewPosts(true);
           }
         } else if (event.eventType === 'DELETE') {
           const deletedId = Number(event.oldRecord?.id);
@@ -558,16 +595,8 @@ export const FeedView: React.FC<FeedViewProps> = ({
     }
   };
 
-  const [postContent, setPostContent] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState<PostCategory>('General Update');
-  const [attachedImages, setAttachedImages] = useState<string[]>([]);
-  const [attachedVideos, setAttachedVideos] = useState<string[]>([]);
-  const [showVideoUrlInput, setShowVideoUrlInput] = useState(false);
-  const [videoUrlInput, setVideoUrlInput] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const videoInputRef = useRef<HTMLInputElement>(null);
-  const cameraInputRef = useRef<HTMLInputElement>(null);
-  const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
   const [activeFilterCategory, setActiveFilterCategory] = useState<string>('All');
   const [isFilterDropdownOpen, setIsFilterDropdownOpen] = useState<boolean>(false);
   const filterDropdownRef = useRef<HTMLDivElement>(null);
@@ -578,17 +607,10 @@ export const FeedView: React.FC<FeedViewProps> = ({
   const [composerInitialTab, setComposerInitialTab] = useState<'text' | 'photo' | 'video' | 'link'>('text');
   const [composerInitialImages, setComposerInitialImages] = useState<string[]>([]);
   const [composerInitialVideos, setComposerInitialVideos] = useState<string[]>([]);
-  const [postBackground, setPostBackground] = useState<string>('default');
-  const [showBgPicker, setShowBgPicker] = useState(false);
-  const [postFeeling, setPostFeeling] = useState<string | null>(null);
-  const [showFeelingPicker, setShowFeelingPicker] = useState(false);
-  const [postLocation, setPostLocation] = useState<string | null>(null);
-  const [showLocationPicker, setShowLocationPicker] = useState(false);
-  const [showPhotoDropzone, setShowPhotoDropzone] = useState(false);
-  const [isDraggingOver, setIsDraggingOver] = useState(false);
 
   // New Posts indicator state
   const [hasNewPosts, setHasNewPosts] = useState(false);
+  const [pendingNewPostsCount, setPendingNewPostsCount] = useState(0);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   // Comments state
@@ -675,6 +697,8 @@ export const FeedView: React.FC<FeedViewProps> = ({
       avatarUrl: string;
       batchYear?: number;
       createdAt?: string;
+      verified?: boolean;
+      profileCompleted?: boolean;
     };
     postCaption?: string;
   }>({
@@ -819,180 +843,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
     });
   };
 
-  // Helper to convert YouTube watch/share links into embed URLs
-  const getYouTubeEmbedUrl = (url: string): string | null => {
-    try {
-      const trimmed = url.trim();
-      const shortMatch = trimmed.match(/^https?:\/\/(?:www\.)?youtu\.be\/([a-zA-Z0-9_-]{6,})/);
-      if (shortMatch) return `https://www.youtube.com/embed/${shortMatch[1]}`;
-      const watchMatch = trimmed.match(/^https?:\/\/(?:www\.)?youtube\.com\/watch\?.*v=([a-zA-Z0-9_-]{6,})/);
-      if (watchMatch) return `https://www.youtube.com/embed/${watchMatch[1]}`;
-      const shortsMatch = trimmed.match(/^https?:\/\/(?:www\.)?youtube\.com\/shorts\/([a-zA-Z0-9_-]{6,})/);
-      if (shortsMatch) return `https://www.youtube.com/embed/${shortsMatch[1]}`;
-      const embedMatch = trimmed.match(/^https?:\/\/(?:www\.)?youtube\.com\/embed\/([a-zA-Z0-9_-]{6,})/);
-      if (embedMatch) return `https://www.youtube.com/embed/${embedMatch[1]}`;
-    } catch {
-      return null;
-    }
-    return null;
-  };
 
-  // Process uploaded files (photos and videos) from input, drag-and-drop, or clipboard paste
-  const processUploadedFiles = (files: FileList | File[]) => {
-    const fileArray = Array.from(files);
-    if (fileArray.length === 0) return;
-
-    let addedPhotos = 0;
-    let addedVideos = 0;
-
-    fileArray.forEach((file: File) => {
-      const isImage =
-        file.type.startsWith('image/') ||
-        ['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(file.type) ||
-        /\.(jpe?g|png|webp|gif|svg|avif|heic)$/i.test(file.name);
-      const isVideo =
-        file.type.startsWith('video/') ||
-        ['video/mp4', 'video/webm', 'video/ogg', 'video/quicktime'].includes(file.type) ||
-        /\.(mp4|webm|ogg|mov|m4v|mkv)$/i.test(file.name);
-
-      if (isImage) {
-        if (file.size > 15 * 1024 * 1024) {
-          showToast('Each photo must be smaller than 15 MB.');
-          return;
-        }
-        addedPhotos += 1;
-        compressImageFileToDataUrl(file)
-          .then((result) => {
-            if (result) {
-              setAttachedImages((prev) => [...prev, result]);
-            }
-          })
-          .catch(() => {
-            const reader = new FileReader();
-            reader.onload = (uploadEvent) => {
-              const result = uploadEvent.target?.result as string;
-              if (result) {
-                setAttachedImages((prev) => [...prev, result]);
-              }
-            };
-            reader.readAsDataURL(file);
-          });
-      } else if (isVideo) {
-        const validation = validateVideoFile(file);
-        if (!validation.isValid) {
-          showToast(validation.error || 'Each video must be smaller than 100 MB.');
-          return;
-        }
-        addedVideos += 1;
-        uploadVideoToStorage(file, String(currentUser.id))
-          .then((uploaded) => {
-            setAttachedVideos((prev) => [...prev, uploaded.videoUrl]);
-          })
-          .catch(() => {
-            const objectUrl = URL.createObjectURL(file);
-            setAttachedVideos((prev) => [...prev, objectUrl]);
-          });
-      } else {
-        showToast('Supported formats: JPG, PNG, WEBP, GIF photos and MP4, WEBM, MOV videos.');
-      }
-    });
-
-    if (addedPhotos > 0 && addedVideos > 0) {
-      showToast(`Added ${addedPhotos} photo(s) and ${addedVideos} video(s) to your post!`);
-    } else if (addedPhotos > 0) {
-      showToast(`${addedPhotos} photo${addedPhotos > 1 ? 's' : ''} added to your post!`);
-    } else if (addedVideos > 0) {
-      showToast(`${addedVideos} video${addedVideos > 1 ? 's' : ''} added to your post!`);
-    }
-  };
-
-  // Handle image upload from file picker
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      processUploadedFiles(e.target.files);
-    }
-    e.target.value = '';
-  };
-
-  // Handle video upload from file picker
-  const handleVideoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      processUploadedFiles(e.target.files);
-    }
-    e.target.value = '';
-  };
-
-  // Handle adding a video or social post via URL (YouTube, Facebook, Instagram, LinkedIn, or direct video link)
-  const handleAddVideoUrl = () => {
-    const normalized = normalizeUrlInput(videoUrlInput);
-    if (!normalized || !/^https?:\/\//i.test(normalized)) {
-      showToast('Please enter a valid link (e.g. Facebook, YouTube, Instagram, LinkedIn, or video URL)');
-      return;
-    }
-    setAttachedVideos((prev) => Array.from(new Set([...prev, normalized])));
-    setVideoUrlInput('');
-    setShowVideoUrlInput(false);
-    showToast('Link attached to your post!');
-  };
-
-  // Remove attached video before posting
-  const handleRemoveAttachedVideo = (indexToRemove: number) => {
-    setAttachedVideos((prev) => prev.filter((_, idx) => idx !== indexToRemove));
-  };
-
-  // Handle drag and drop of photos into composer
-  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (!isDraggingOver) setIsDraggingOver(true);
-  };
-
-  const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDraggingOver(false);
-  };
-
-  const handleDropPhotos = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDraggingOver(false);
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      processUploadedFiles(e.dataTransfer.files);
-    }
-  };
-
-  // Handle pasting images directly from clipboard into textarea
-  const handlePasteClipboard = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-    const items = e.clipboardData?.items;
-    if (!items) return;
-    const imageFiles: File[] = [];
-    for (let i = 0; i < items.length; i += 1) {
-      if (items[i].type.startsWith('image/')) {
-        const file = items[i].getAsFile();
-        if (file) imageFiles.push(file);
-      }
-    }
-    if (imageFiles.length > 0) {
-      processUploadedFiles(imageFiles);
-    }
-  };
-
-  // Remove attached image before posting
-  const handleRemoveAttachedImage = (indexToRemove: number) => {
-    setAttachedImages((prev) => prev.filter((_, idx) => idx !== indexToRemove));
-  };
-
-  // Promote an uploaded photo to be the cover (first) photo
-  const handleMakeCoverImage = (indexToPromote: number) => {
-    setAttachedImages((prev) => {
-      if (indexToPromote <= 0 || indexToPromote >= prev.length) return prev;
-      const chosen = prev[indexToPromote];
-      const remaining = prev.filter((_, idx) => idx !== indexToPromote);
-      return [chosen, ...remaining];
-    });
-    showToast('Updated cover photo for your post!');
-  };
 
   // Edit image upload
   const handleEditImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1107,115 +958,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
     });
   };
 
-  // Create Post
-  const handleCreatePost = async (e?: React.FormEvent | React.MouseEvent) => {
-    if (e) e.preventDefault();
-    if (isSubmittingPost) return;
 
-    const pendingVideoOrSocialLink = normalizeUrlInput(videoUrlInput);
-    const finalVideos = Array.from(
-      new Set([
-        ...attachedVideos,
-        ...(pendingVideoOrSocialLink && /^https?:\/\//i.test(pendingVideoOrSocialLink)
-          ? [pendingVideoOrSocialLink]
-          : []),
-      ])
-    );
-
-    if (!postContent.trim() && attachedImages.length === 0 && finalVideos.length === 0) return;
-
-    const metaPrefix = [
-      postFeeling ? `✨ ${postFeeling}` : null,
-      postLocation ? `📍 ${postLocation}` : null,
-    ]
-      .filter(Boolean)
-      .join(' · ');
-
-    const defaultCaption = attachedImages.length > 0
-      ? (attachedImages.length > 1 ? `Shared ${attachedImages.length} photos` : 'Shared a photo')
-      : (finalVideos.length > 0 ? 'Shared a video' : 'Shared an update');
-
-    const rawContent = postContent.trim() || defaultCaption;
-
-    const finalContent = metaPrefix
-      ? `${metaPrefix}\n\n${rawContent}`
-      : rawContent;
-
-    setIsSubmittingPost(true);
-    const tempPostId = -Date.now();
-    const optimisticPost: PostItem = {
-      id: tempPostId,
-      userId: currentUser.id,
-      fullName: currentUser.fullName || 'SZMC Alumnus',
-      avatarUrl: currentUser.avatarUrl || '/assets/aistudio/images__1__2778177d.png',
-      batchYear: currentUser.batchYear || 20,
-      content: finalContent,
-      images: attachedImages,
-      videos: finalVideos,
-      likesCount: 0,
-      commentsCount: 0,
-      createdAt: 'Just now',
-      likedByMe: false,
-      comments: [],
-      category: selectedCategory,
-      isEdited: false,
-      pinned: false,
-      author: currentUser.fullName || 'SZMC Alumnus',
-      authorAvatar: currentUser.avatarUrl || '/assets/aistudio/images__1__2778177d.png',
-      authorBatch: currentUser.batchYear || 20,
-      authorRole: 'Alumnus',
-      verified: currentUser.verificationStatus === 'verified',
-      timestamp: 'Just now',
-      likes: 0,
-      liked: false,
-      commentsList: [],
-      shares: 0,
-    } as unknown as PostItem;
-
-    // Show optimistic post immediately for instant responsiveness
-    setPosts((prev) => [optimisticPost, ...prev]);
-
-    try {
-      // Persist directly to Supabase Database (Single Source of Truth)
-      const res = await createFeedPostInDb({
-        authorId: currentUser.id,
-        content: finalContent,
-        category: selectedCategory,
-        images: attachedImages,
-        videos: finalVideos,
-      });
-
-      if (!res.success || !res.post) {
-        // Rollback optimistic post immediately when database insert fails
-        setPosts((prev) => prev.filter((p) => p.id !== tempPostId));
-        showToast(res.error || 'Failed to publish post to Supabase database.');
-        return;
-      }
-
-      // Prepend the real database-persisted post with its assigned ID and clear temp
-      setPosts((prev) => [res.post!, ...prev.filter((p) => p.id !== tempPostId && p.id !== res.post!.id)]);
-      setPostContent('');
-      setAttachedImages([]);
-      setAttachedVideos([]);
-      setVideoUrlInput('');
-      setShowVideoUrlInput(false);
-      setSelectedCategory('General Update');
-      setPostBackground('default');
-      setPostFeeling(null);
-      setPostLocation(null);
-      setShowPhotoDropzone(false);
-      setIsCreateModalOpen(false);
-      playSound('post');
-      showToast('Post published successfully to the alumni feed!');
-    } catch (err: any) {
-      // Rollback optimistic post on unexpected network or database error
-      setPosts((prev) => prev.filter((p) => p.id !== tempPostId));
-      console.error('Error creating feed post in Supabase:', err);
-      showToast(err.message || 'Error publishing post');
-    } finally {
-      setIsSubmittingPost(false);
-    }
-  };
 
   // Open Edit Post
   const handleStartEdit = (post: PostItem) => {
@@ -1318,6 +1061,11 @@ export const FeedView: React.FC<FeedViewProps> = ({
         avatarUrl: post.avatarUrl,
         batchYear: post.batchYear,
         createdAt: post.createdAt,
+        verified: Boolean(post.verified),
+        profileCompleted:
+          post.userId === currentUser.id
+            ? isProfileFullyCompleted(currentUser)
+            : Boolean(post.profileCompleted),
       },
       postCaption: post.content,
     });
@@ -1326,6 +1074,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
   // Refresh Feed directly from Supabase
   const handleRefreshFeed = async () => {
     setHasNewPosts(false);
+    setPendingNewPostsCount(0);
     setIsLoadingPosts(true);
     try {
       const dbPosts = await fetchFeedPostsFromDb(50, currentUser.id);
@@ -1418,10 +1167,39 @@ export const FeedView: React.FC<FeedViewProps> = ({
               };
             })
           );
+        } else {
+          setPosts((prev) =>
+            prev.map((p) => {
+              if (p.id !== postId) return p;
+              const rolledBack = (p.comments || []).filter((c) => c.id !== tempCommentId);
+              return {
+                ...p,
+                comments: rolledBack,
+                commentsList: rolledBack,
+                commentsCount: Math.max(0, rolledBack.length),
+              };
+            })
+          );
+          setCommentInputs((prev) => ({ ...prev, [postId]: prev[postId] || text }));
+          showToast('Could not save your comment right now. Please try again.');
         }
       })
       .catch((err) => {
         console.warn('addPostCommentInDb error:', err);
+        setPosts((prev) =>
+          prev.map((p) => {
+            if (p.id !== postId) return p;
+            const rolledBack = (p.comments || []).filter((c) => c.id !== tempCommentId);
+            return {
+              ...p,
+              comments: rolledBack,
+              commentsList: rolledBack,
+              commentsCount: Math.max(0, rolledBack.length),
+            };
+          })
+        );
+        setCommentInputs((prev) => ({ ...prev, [postId]: prev[postId] || text }));
+        showToast('Could not save your comment right now. Please try again.');
       });
   };
 
@@ -1500,10 +1278,90 @@ export const FeedView: React.FC<FeedViewProps> = ({
               return { ...p, comments: updatedComments };
             })
           );
+        } else {
+          setPosts((prev) =>
+            prev.map((p) => {
+              if (p.id !== postId) return p;
+              const updatedComments = (p.comments || []).map((c) => {
+                if (c.id !== parentCommentId) return c;
+                return {
+                  ...c,
+                  replies: (c.replies || []).filter((r) => r.id !== tempReplyId),
+                };
+              });
+              return {
+                ...p,
+                commentsCount: Math.max(0, (p.commentsCount || 1) - 1),
+                comments: updatedComments,
+              };
+            })
+          );
+          setReplyInputs((prev) => ({ ...prev, [parentCommentId]: prev[parentCommentId] || text }));
+          showToast('Could not save your reply right now. Please try again.');
         }
       })
-      .catch(() => {});
+      .catch(() => {
+        setPosts((prev) =>
+          prev.map((p) => {
+            if (p.id !== postId) return p;
+            const updatedComments = (p.comments || []).map((c) => {
+              if (c.id !== parentCommentId) return c;
+              return {
+                ...c,
+                replies: (c.replies || []).filter((r) => r.id !== tempReplyId),
+              };
+            });
+            return {
+              ...p,
+              commentsCount: Math.max(0, (p.commentsCount || 1) - 1),
+              comments: updatedComments,
+            };
+          })
+        );
+        setReplyInputs((prev) => ({ ...prev, [parentCommentId]: prev[parentCommentId] || text }));
+        showToast('Could not save your reply right now. Please try again.');
+      });
   };
+
+  const displayedPosts = useMemo(() => {
+    const myBatchNum = normalizeToBatchNumber(currentUser.batchYear);
+    const isStaffUser = Boolean(
+      isAdminUser ||
+        currentUser.role === 'admin' ||
+        currentUser.role === 'moderator' ||
+        (currentUser as any).role === 'super_admin'
+    );
+    const safetyFilteredPosts = filterBlockedPosts(posts, blockedUserIds);
+
+    return embeddedInQuad
+      ? dedupeAndRankFeedPosts(safetyFilteredPosts, {
+          feedTab: quadFeedTab,
+          category: quadCategoryFilter,
+          myUserId: currentUser.id,
+          myBatchYear: myBatchNum,
+          isStaff: isStaffUser,
+          followedUserIds,
+          followedPageIds,
+          weights: rankingWeights,
+        })
+      : activeFilterCategory !== 'All'
+      ? safetyFilteredPosts.filter((p) => p.category === activeFilterCategory)
+      : safetyFilteredPosts;
+  }, [
+    posts,
+    blockedUserIds,
+    embeddedInQuad,
+    quadFeedTab,
+    quadCategoryFilter,
+    currentUser.id,
+    currentUser.batchYear,
+    currentUser.role,
+    isAdminUser,
+    followedUserIds,
+    followedPageIds,
+    rankingWeights,
+    activeFilterCategory,
+  ]);
 
   return (
     <div className={embeddedInQuad ? 'w-full space-y-5' : 'max-w-6xl mx-auto space-y-6'}>
@@ -1523,8 +1381,12 @@ export const FeedView: React.FC<FeedViewProps> = ({
             onClick={handleRefreshFeed}
             className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-full shadow-lg shadow-blue-600/30 border border-blue-400/40 transition-all cursor-pointer hover:scale-105"
           >
-            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-            <span>New posts available · Click to refresh view</span>
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>
+              {pendingNewPostsCount > 1
+                ? `${pendingNewPostsCount} new posts available · Click to refresh`
+                : 'New post available · Click to refresh view'}
+            </span>
           </button>
         </div>
       )}
@@ -1677,10 +1539,14 @@ export const FeedView: React.FC<FeedViewProps> = ({
       >
         {/* Selector 3: div:nth-of-type(1) -> Avatar + Rounded Input Trigger */}
         <div className="flex items-center gap-2.5 sm:gap-3">
-          <img
+          <VerifiedAvatar
             src={currentUser.avatarUrl || '/assets/aistudio/images__1__2778177d.png'}
             alt={currentUser.fullName}
-            className="w-10 h-10 sm:w-11 sm:h-11 rounded-full object-cover ring-2 ring-blue-500/20 shrink-0"
+            verificationStatus={currentUser.verificationStatus}
+            profile={currentUser}
+            size="md"
+            imgClassName="w-10 h-10 sm:w-11 sm:h-11"
+            unverifiedClassName="rounded-full ring-2 ring-blue-500/20"
           />
 
           <button
@@ -1705,7 +1571,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="flex-1 flex items-center justify-center gap-1.5 sm:gap-2 py-2 px-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-emerald-50 hover:text-emerald-700 dark:hover:bg-emerald-950/40 dark:hover:text-emerald-300 transition-all cursor-pointer active:scale-95"
+            className="flex-1 min-h-[44px] flex items-center justify-center gap-1.5 sm:gap-2 py-2 px-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-emerald-50 hover:text-emerald-700 dark:hover:bg-emerald-950/40 dark:hover:text-emerald-300 transition-all cursor-pointer active:scale-95"
             title="Upload photo from computer storage"
           >
             <ImageIcon className="w-5 h-5 text-emerald-500 shrink-0" />
@@ -1716,7 +1582,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
           <button
             type="button"
             onClick={() => videoInputRef.current?.click()}
-            className="flex-1 flex items-center justify-center gap-1.5 sm:gap-2 py-2 px-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-rose-50 hover:text-rose-700 dark:hover:bg-rose-950/40 dark:hover:text-rose-300 transition-all cursor-pointer active:scale-95"
+            className="flex-1 min-h-[44px] flex items-center justify-center gap-1.5 sm:gap-2 py-2 px-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-rose-50 hover:text-rose-700 dark:hover:bg-rose-950/40 dark:hover:text-rose-300 transition-all cursor-pointer active:scale-95"
             title="Upload downloaded video from computer storage"
           >
             <Video className="w-5 h-5 text-rose-500 shrink-0" />
@@ -1730,7 +1596,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
               setComposerInitialTab('link');
               setIsCreateModalOpen(true);
             }}
-            className="flex-1 flex items-center justify-center gap-1.5 sm:gap-2 py-2 px-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-blue-50 hover:text-blue-700 dark:hover:bg-blue-950/40 dark:hover:text-blue-300 transition-all cursor-pointer active:scale-95"
+            className="flex-1 min-h-[44px] flex items-center justify-center gap-1.5 sm:gap-2 py-2 px-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-blue-50 hover:text-blue-700 dark:hover:bg-blue-950/40 dark:hover:text-blue-300 transition-all cursor-pointer active:scale-95"
             title="Share web link"
           >
             <Link2 className="w-5 h-5 text-blue-500 shrink-0" />
@@ -1780,18 +1646,24 @@ export const FeedView: React.FC<FeedViewProps> = ({
               setComposerInitialTab('video');
               setIsCreateModalOpen(true);
               const uploadedUrls: string[] = [];
+              let failedCount = 0;
               for (const f of files) {
                 try {
                   const res = await uploadVideoToStorage(f, String(currentUser.id || currentUser.userId || 'alumni'));
                   if (res.videoUrl) {
                     uploadedUrls.push(res.videoUrl);
+                  } else {
+                    failedCount += 1;
                   }
                 } catch {
-                  // Ignore failed individual file
+                  failedCount += 1;
                 }
               }
               if (uploadedUrls.length > 0) {
                 setComposerInitialVideos(uploadedUrls);
+              }
+              if (failedCount > 0) {
+                showToast('Could not upload selected video. Please check file size/format and try again.');
               }
             }
           }}
@@ -1810,6 +1682,8 @@ export const FeedView: React.FC<FeedViewProps> = ({
         authorId={currentUser.id}
         authorName={currentUser.fullName}
         authorAvatar={currentUser.avatarUrl}
+        authorVerified={currentUser.verificationStatus === 'verified'}
+        authorProfileCompleted={isProfileFullyCompleted(currentUser)}
         authorBatchYear={normalizeToBatchNumber(currentUser.batchYear) || undefined}
         canMarkEditorial={Boolean(
           isAdminUser ||
@@ -1983,37 +1857,35 @@ export const FeedView: React.FC<FeedViewProps> = ({
         {(() => {
           if (isLoadingPosts) {
             return (
-              <div className="bg-white dark:bg-slate-900 rounded-3xl p-10 border border-slate-200/80 dark:border-slate-800 text-center shadow-xs">
-                <RefreshCw className="w-6 h-6 mx-auto text-blue-500 animate-spin mb-3" />
-                <p className="text-xs text-slate-500 dark:text-slate-400">Loading live feed from Supabase...</p>
+              <div className="space-y-4" aria-label="Loading posts">
+                {[0, 1, 2].map((idx) => (
+                  <div
+                    key={idx}
+                    className="bg-white dark:bg-slate-900 rounded-2xl sm:rounded-3xl p-4 sm:p-6 border border-slate-200/80 dark:border-slate-800 space-y-4"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="w-11 h-11 rounded-full fb-shimmer shrink-0" />
+                      <div className="space-y-2 flex-1">
+                        <div className="h-3.5 w-40 rounded-md fb-shimmer" />
+                        <div className="h-2.5 w-28 rounded-md fb-shimmer" />
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <div className="h-3 w-full rounded-md fb-shimmer" />
+                      <div className="h-3 w-11/12 rounded-md fb-shimmer" />
+                      <div className="h-3 w-2/3 rounded-md fb-shimmer" />
+                    </div>
+                    {idx === 0 && <div className="h-52 w-full rounded-2xl fb-shimmer" />}
+                    <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-4">
+                      <div className="h-7 flex-1 rounded-xl fb-shimmer" />
+                      <div className="h-7 flex-1 rounded-xl fb-shimmer" />
+                      <div className="h-7 flex-1 rounded-xl fb-shimmer" />
+                    </div>
+                  </div>
+                ))}
               </div>
             );
           }
-
-          const myBatchNum = normalizeToBatchNumber(currentUser.batchYear);
-          const isStaffUser = Boolean(
-            isAdminUser ||
-              currentUser.role === 'admin' ||
-              currentUser.role === 'moderator' ||
-              (currentUser as any).role === 'super_admin'
-          );
-
-          const safetyFilteredPosts = filterBlockedPosts(posts, blockedUserIds);
-
-          let displayedPosts = embeddedInQuad
-            ? dedupeAndRankFeedPosts(safetyFilteredPosts, {
-                feedTab: quadFeedTab,
-                category: quadCategoryFilter,
-                myUserId: currentUser.id,
-                myBatchYear: myBatchNum,
-                isStaff: isStaffUser,
-                followedUserIds,
-                followedPageIds,
-                weights: rankingWeights,
-              })
-            : activeFilterCategory !== 'All'
-            ? safetyFilteredPosts.filter((p) => p.category === activeFilterCategory)
-            : [...safetyFilteredPosts];
 
           if (displayedPosts.length === 0) {
             const hasActiveQuadFilter =
@@ -2078,7 +1950,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
               <article
                 key={post.id}
                 id={`post-${post.id}`}
-                className={`bg-white dark:bg-slate-900 rounded-2xl sm:rounded-3xl p-3.5 sm:p-6 border shadow-xs transition-all hover:shadow-sm ${
+                className={`feed-card-cv bg-white dark:bg-slate-900 rounded-2xl sm:rounded-3xl p-3.5 sm:p-6 border shadow-xs transition-shadow hover:shadow-sm ${
                   highlightedPostId === post.id
                     ? 'border-blue-500 ring-2 ring-blue-500/30 dark:border-blue-400'
                     : 'border-slate-200/80 dark:border-slate-800/80'
@@ -2158,17 +2030,27 @@ export const FeedView: React.FC<FeedViewProps> = ({
                     className="flex items-center gap-2.5 sm:gap-3 cursor-pointer group min-w-0"
                     onClick={() => onViewProfile && onViewProfile(post.userId)}
                   >
-                    <img
+                    <VerifiedAvatar
                       src={post.avatarUrl}
                       alt={post.fullName}
-                      className="w-9 h-9 sm:w-10 sm:h-10 rounded-full object-cover ring-2 ring-slate-100 dark:ring-slate-800 group-hover:ring-blue-500 transition-all shrink-0"
+                      verified={Boolean(post.verified)}
+                      profileCompleted={
+                        post.userId === currentUser.id
+                          ? isProfileFullyCompleted(currentUser)
+                          : Boolean(post.profileCompleted)
+                      }
+                      size="md"
+                      imgClassName="w-9 h-9 sm:w-10 sm:h-10"
+                      unverifiedClassName="rounded-full ring-2 ring-slate-100 dark:ring-slate-800 group-hover:ring-blue-500 transition-all"
                     />
                     <div className="min-w-0">
                       <div className="flex items-center gap-1.5 flex-wrap">
                         <span className="font-bold text-xs sm:text-sm text-slate-900 dark:text-slate-100 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors truncate">
                           {post.fullName}
                         </span>
-                        <ShieldCheck className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-blue-600 dark:text-blue-400 shrink-0" />
+                        {post.verified && (
+                          <ShieldCheck className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-blue-600 dark:text-blue-400 shrink-0" />
+                        )}
                         {post.isEdited && (
                           <span className="text-[10px] text-slate-400 dark:text-slate-500 font-medium">
                             (edited)
@@ -2463,7 +2345,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
                     }
                     aria-label="Comments"
                     title="Comments"
-                    className={`flex-1 sm:flex-initial min-h-[38px] flex items-center justify-center gap-1.5 py-2 px-2.5 sm:px-3.5 rounded-xl text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                    className={`flex-1 sm:flex-initial min-h-[44px] sm:min-h-[38px] flex items-center justify-center gap-1.5 py-2 px-2.5 sm:px-3.5 rounded-xl text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
                       activeCommentPostId === post.id
                         ? 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/40 ring-1 ring-blue-200 dark:ring-blue-900/50'
                         : 'text-slate-600 dark:text-slate-400 hover:text-blue-600 hover:bg-slate-100 dark:hover:bg-slate-800/80'
@@ -2483,7 +2365,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
                     onClick={() => setRepostTarget(post)}
                     aria-label="Repost"
                     title="Repost to The Quad"
-                    className="flex-1 sm:flex-initial min-h-[38px] flex items-center justify-center gap-1.5 py-2 px-2.5 sm:px-3.5 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-400 hover:text-emerald-600 hover:bg-slate-100 dark:hover:bg-slate-800/80 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                    className="flex-1 sm:flex-initial min-h-[44px] sm:min-h-[38px] flex items-center justify-center gap-1.5 py-2 px-2.5 sm:px-3.5 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-400 hover:text-emerald-600 hover:bg-slate-100 dark:hover:bg-slate-800/80 transition-colors cursor-pointer whitespace-nowrap shrink-0 active:scale-95"
                   >
                     <Repeat2 className="w-4 h-4 shrink-0" />
                     {(post.repostCount || 0) > 0 && (
@@ -2499,7 +2381,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
                     onClick={() => handleToggleSave(post)}
                     aria-label={isPostSaved(post.id) || post.isSaved ? 'Remove from saved' : 'Save post'}
                     title={isPostSaved(post.id) || post.isSaved ? 'Saved' : 'Save'}
-                    className={`flex-1 sm:flex-initial flex items-center justify-center py-2 px-2.5 sm:px-3.5 rounded-xl sm:rounded-full text-xs font-bold transition-all active:scale-90 cursor-pointer ${
+                    className={`flex-1 sm:flex-initial min-h-[44px] sm:min-h-[38px] flex items-center justify-center py-2 px-2.5 sm:px-3.5 rounded-xl sm:rounded-full text-xs font-bold transition-all active:scale-90 cursor-pointer ${
                       isPostSaved(post.id) || post.isSaved
                         ? 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/40 ring-1 ring-blue-200 dark:ring-blue-900/50 shadow-xs'
                         : 'text-slate-600 dark:text-slate-400 hover:text-blue-600 hover:bg-slate-100 dark:hover:bg-slate-800/80'
@@ -2518,7 +2400,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
                     onClick={() => handleSharePost(post.id)}
                     aria-label="Share post"
                     title={copiedPostId === post.id ? 'Copied link' : 'Share'}
-                    className={`flex-1 sm:flex-initial flex items-center justify-center py-2 px-2.5 sm:px-3.5 rounded-xl sm:rounded-full text-xs font-bold transition-all active:scale-90 cursor-pointer ${
+                    className={`flex-1 sm:flex-initial min-h-[44px] sm:min-h-[38px] flex items-center justify-center py-2 px-2.5 sm:px-3.5 rounded-xl sm:rounded-full text-xs font-bold transition-all active:scale-90 cursor-pointer ${
                       copiedPostId === post.id
                         ? 'text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 ring-1 ring-emerald-200 dark:ring-emerald-900/50 shadow-xs'
                         : 'text-slate-600 dark:text-slate-400 hover:text-emerald-600 hover:bg-slate-100 dark:hover:bg-slate-800/80'
@@ -2606,14 +2488,15 @@ export const FeedView: React.FC<FeedViewProps> = ({
                                     handleAddReply(post.id, comment.id);
                                   }
                                 }}
-                                className="flex-1 px-3 py-1.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-full focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                className="flex-1 min-h-[40px] px-3.5 py-2 text-xs sm:text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-full focus:outline-none focus:ring-1 focus:ring-blue-500"
                               />
                               <button
                                 type="button"
                                 onClick={() => handleAddReply(post.id, comment.id)}
-                                className="p-1.5 bg-blue-600 text-white rounded-full text-xs font-bold cursor-pointer"
+                                aria-label="Send reply"
+                                className="w-9 h-9 flex items-center justify-center bg-blue-600 hover:bg-blue-700 text-white rounded-full text-xs font-bold cursor-pointer shrink-0 active:scale-95 transition-transform"
                               >
-                                <Send className="w-3 h-3" />
+                                <Send className="w-3.5 h-3.5" />
                               </button>
                             </div>
                           )}
@@ -2624,14 +2507,20 @@ export const FeedView: React.FC<FeedViewProps> = ({
 
                   {/* Add Comment Input */}
                   <div className="flex items-center gap-2 pt-2">
-                    <img
+                    <VerifiedAvatar
                       src={currentUser.avatarUrl}
                       alt={currentUser.fullName}
-                      className="w-7 h-7 sm:w-8 sm:h-8 rounded-full object-cover shrink-0 ring-1 ring-slate-200 dark:ring-slate-700"
+                      verificationStatus={currentUser.verificationStatus}
+                      profile={currentUser}
+                      size="sm"
+                      showBadge={false}
+                      imgClassName="w-8 h-8"
+                      unverifiedClassName="rounded-full ring-1 ring-slate-200 dark:ring-slate-700"
                     />
                     <div className="relative flex-1">
                       <input
                         type="text"
+                        enterKeyHint="send"
                         value={commentInputs[post.id] || ''}
                         onChange={(e) =>
                           setCommentInputs({
@@ -2643,14 +2532,15 @@ export const FeedView: React.FC<FeedViewProps> = ({
                           if (e.key === 'Enter') handleAddComment(post.id);
                         }}
                         placeholder="Write a comment..."
-                        className="w-full pl-4 pr-10 py-2 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700/80 rounded-full text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+                        className="w-full min-h-[44px] sm:min-h-[38px] pl-4 pr-12 py-2.5 sm:py-2 text-sm sm:text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700/80 rounded-full text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
                       />
                       <button
                         type="button"
                         onClick={() => handleAddComment(post.id)}
-                        className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-full transition-colors cursor-pointer"
+                        aria-label="Send comment"
+                        className="absolute right-1.5 top-1/2 -translate-y-1/2 w-9 h-9 sm:w-7 sm:h-7 flex items-center justify-center bg-blue-600 hover:bg-blue-700 text-white rounded-full transition-all cursor-pointer active:scale-95"
                       >
-                        <Send className="w-3 h-3" />
+                        <Send className="w-3.5 h-3.5 sm:w-3 sm:h-3" />
                       </button>
                     </div>
                   </div>
@@ -2660,9 +2550,9 @@ export const FeedView: React.FC<FeedViewProps> = ({
           });
         })()}
 
-        {/* Cursor-Based Pagination Control */}
+        {/* Facebook-style Automatic Infinite Scroll Sentinel + Manual Fallback */}
         {!isLoadingPosts && hasMorePosts && (
-          <div className="pt-2 flex justify-center">
+          <div ref={loadMoreSentinelRef} className="pt-2 flex justify-center">
             <button
               type="button"
               disabled={isLoadingMore}

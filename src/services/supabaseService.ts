@@ -22,10 +22,34 @@ import {
   BATCH_LIST,
   loadStoredAlumniProfiles,
 } from '../data/mockData';
+import { compressImageFileToDataUrl, isVideoFile } from '../utils/mediaStorage';
+import { isPublicRowProfileCompleted } from '../utils/profileCompletion';
 
 // =============================================================================
-// 1. ALUMNI DIRECTORY & BATCHES
+// 1. ALUMNI DIRECTORY & BATCHES (with in-memory TTL + in-flight deduplication)
 // =============================================================================
+
+const DIRECTORY_CACHE_TTL_MS = 45_000;
+const PROFILE_CACHE_TTL_MS = 45_000;
+const BATCHES_CACHE_TTL_MS = 120_000;
+
+let cachedDirectoryAll: { data: AlumniProfile[]; ts: number } | null = null;
+let inFlightDirectoryAll: Promise<AlumniProfile[]> | null = null;
+
+const profileByIdCache = new Map<number, { data: AlumniProfile; ts: number }>();
+const inFlightProfileById = new Map<number, Promise<AlumniProfile | null>>();
+
+let cachedBatches: { data: BatchSummary[]; ts: number } | null = null;
+let inFlightBatches: Promise<BatchSummary[]> | null = null;
+
+export function invalidateAlumniDirectoryCache(profileId?: number): void {
+  cachedDirectoryAll = null;
+  if (typeof profileId === 'number') {
+    profileByIdCache.delete(profileId);
+  } else {
+    profileByIdCache.clear();
+  }
+}
 
 export async function fetchAlumniProfilesFromDb(params?: {
   search?: string;
@@ -33,84 +57,136 @@ export async function fetchAlumniProfilesFromDb(params?: {
   academicStream?: string;
   limit?: number;
   offset?: number;
+  forceRefresh?: boolean;
 }): Promise<AlumniProfile[]> {
   if (!isSupabaseConfigured) {
     return loadStoredAlumniProfiles();
   }
 
-  try {
-    let query = supabase
-      .from('alumni_profiles')
-      .select(ALUMNI_PUBLIC_COLUMNS)
-      .eq('is_public', true)
-      .order('batch_year', { ascending: false });
+  const isDefaultAllQuery =
+    !params ||
+    (!params.search?.trim() &&
+      !params.batchYear &&
+      !params.academicStream &&
+      !params.limit &&
+      !params.offset);
 
-    if (params?.batchYear) {
-      query = query.eq('batch_year', params.batchYear);
+  if (isDefaultAllQuery && !params?.forceRefresh) {
+    if (cachedDirectoryAll && Date.now() - cachedDirectoryAll.ts < DIRECTORY_CACHE_TTL_MS) {
+      return cachedDirectoryAll.data;
     }
-    if (params?.academicStream) {
-      query = query.eq('academic_stream', params.academicStream);
+    if (inFlightDirectoryAll) {
+      return inFlightDirectoryAll;
     }
-    if (params?.search?.trim()) {
-      const s = params.search.trim();
-      query = query.or(
-        `full_name.ilike.%${s}%,institution.ilike.%${s}%,profession.ilike.%${s}%,city.ilike.%${s}%`
-      );
-    }
-    if (params?.limit) {
-      query = query.limit(params.limit);
-    }
-    if (params?.offset) {
-      query = query.range(params.offset, params.offset + (params.limit || 20) - 1);
-    }
+  }
 
-    const { data, error } = await query;
-    if (error) {
-      console.warn('Supabase fetchAlumniProfiles error:', error.message);
+  const runQuery = async (): Promise<AlumniProfile[]> => {
+    try {
+      let query = supabase
+        .from('alumni_profiles')
+        .select(ALUMNI_PUBLIC_COLUMNS)
+        .eq('is_public', true)
+        .order('batch_year', { ascending: false });
+
+      if (params?.batchYear) {
+        query = query.eq('batch_year', params.batchYear);
+      }
+      if (params?.academicStream) {
+        query = query.eq('academic_stream', params.academicStream);
+      }
+      if (params?.search?.trim()) {
+        const s = params.search.trim();
+        query = query.or(
+          `full_name.ilike.%${s}%,institution.ilike.%${s}%,profession.ilike.%${s}%,city.ilike.%${s}%`
+        );
+      }
+      const boundedLimit = Math.min(1000, Math.max(1, params?.limit ?? (params?.search?.trim() || params?.batchYear || params?.academicStream ? 200 : 500)));
+      if (params?.offset !== undefined) {
+        query = query.range(params.offset, params.offset + boundedLimit - 1);
+      } else {
+        query = query.limit(boundedLimit);
+      }
+
+      const { data, error } = await query;
+      if (error) {
+        console.warn('Supabase fetchAlumniProfiles error:', error.message);
+        return loadStoredAlumniProfiles();
+      }
+      if (!data || data.length === 0) {
+        return [];
+      }
+
+      const mapped = data.map((row: any) => mapSupabaseRowToAlumniProfile(row));
+      if (isDefaultAllQuery) {
+        cachedDirectoryAll = { data: mapped, ts: Date.now() };
+      }
+      return mapped;
+    } catch (err) {
+      console.warn('Supabase fetchAlumniProfiles fallback:', err);
       return loadStoredAlumniProfiles();
     }
-    if (!data || data.length === 0) {
-      return [];
-    }
+  };
 
-    return data.map((row: any) => mapSupabaseRowToAlumniProfile(row));
-  } catch (err) {
-    console.warn('Supabase fetchAlumniProfiles fallback:', err);
-    return loadStoredAlumniProfiles();
+  if (isDefaultAllQuery) {
+    const p = runQuery().finally(() => {
+      inFlightDirectoryAll = null;
+    });
+    inFlightDirectoryAll = p;
+    return p;
   }
+
+  return runQuery();
 }
 
 export async function fetchAlumniProfileByIdFromDb(profileId: number): Promise<AlumniProfile | null> {
   if (!isSupabaseConfigured || !profileId) return null;
 
-  try {
-    const { data, error } = await supabase
-      .from('alumni_profiles')
-      .select(ALUMNI_PUBLIC_COLUMNS)
-      .eq('id', profileId)
-      .maybeSingle();
+  const cached = profileByIdCache.get(profileId);
+  if (cached && Date.now() - cached.ts < PROFILE_CACHE_TTL_MS) {
+    return cached.data;
+  }
 
-    if (error || !data) {
-      return null;
-    }
+  const inFlight = inFlightProfileById.get(profileId);
+  if (inFlight) return inFlight;
 
-    // Enrich with permitted contact details via authorized SECURITY DEFINER RPC
+  const p = (async () => {
     try {
-      const { data: contacts } = await supabase.rpc('get_alumni_contact_details', {
-        p_profile_id: profileId,
-      });
+      const [profileRes, contactRes] = await Promise.all([
+        supabase
+          .from('alumni_profiles')
+          .select(ALUMNI_PUBLIC_COLUMNS)
+          .eq('id', profileId)
+          .maybeSingle(),
+        Promise.resolve(
+          supabase.rpc('get_alumni_contact_details', {
+            p_profile_id: profileId,
+          })
+        ).catch(() => ({ data: null })),
+      ]);
+
+      const { data, error } = profileRes;
+      if (error || !data) {
+        return null;
+      }
+
+      const contacts = (contactRes as any)?.data;
       if (contacts && contacts[0]) {
         Object.assign(data, contacts[0]);
       }
-    } catch {
-      // Graceful fallback if unauthenticated or privacy denied
-    }
 
-    return mapSupabaseRowToAlumniProfile(data);
-  } catch (err) {
-    console.warn('Error fetching alumni profile by id:', err);
-    return null;
-  }
+      const mapped = mapSupabaseRowToAlumniProfile(data);
+      profileByIdCache.set(profileId, { data: mapped, ts: Date.now() });
+      return mapped;
+    } catch (err) {
+      console.warn('Error fetching alumni profile by id:', err);
+      return null;
+    }
+  })().finally(() => {
+    inFlightProfileById.delete(profileId);
+  });
+
+  inFlightProfileById.set(profileId, p);
+  return p;
 }
 
 export async function fetchBatchesFromDb(): Promise<BatchSummary[]> {
@@ -118,52 +194,57 @@ export async function fetchBatchesFromDb(): Promise<BatchSummary[]> {
     return BATCH_LIST;
   }
 
-  try {
-    // Proactively clean up any legacy batches outside SZMC's 35 MBBS batches (e.g. 1949 to 2035 or > 35)
-    try {
-      await supabase
-        .from('batches')
-        .delete()
-        .or('batch_year.lt.1,batch_year.gt.35');
-    } catch {
-      // Ignore if RLS blocks delete
-    }
-
-    const { data, error } = await supabase
-      .from('batches')
-      .select('*')
-      .gte('batch_year', 1)
-      .lte('batch_year', 35)
-      .order('batch_year', { ascending: true });
-
-    if (error || !data || data.length === 0) {
-      return BATCH_LIST;
-    }
-
-    // Map strictly only valid SZMC batches 1 to 35
-    const validRows = data.filter((b) => Number(b.batch_year) >= 1 && Number(b.batch_year) <= 35);
-    if (validRows.length === 0) {
-      return BATCH_LIST;
-    }
-
-    const dbBatchMap = new Map<number, any>();
-    validRows.forEach((b) => dbBatchMap.set(Number(b.batch_year), b));
-
-    // Combine canonical 35 SZMC batches with database updates
-    return BATCH_LIST.map((canonical) => {
-      const dbRow = dbBatchMap.get(canonical.batchYear);
-      if (!dbRow) return canonical;
-      return {
-        ...canonical,
-        total: Number(dbRow.registered_count ?? canonical.total ?? 0),
-        representative: dbRow.representative_name || canonical.representative,
-        specialNote: dbRow.special_note || canonical.specialNote,
-      };
-    });
-  } catch (err) {
-    console.warn('Supabase fetchBatches error:', err);
-    return BATCH_LIST;
+  if (cachedBatches && Date.now() - cachedBatches.ts < BATCHES_CACHE_TTL_MS) {
+    return cachedBatches.data;
   }
+  if (inFlightBatches) {
+    return inFlightBatches;
+  }
+
+  const p = (async () => {
+    try {
+      const { data, error } = await supabase
+        .from('batches')
+        .select('*')
+        .gte('batch_year', 1)
+        .lte('batch_year', 35)
+        .order('batch_year', { ascending: true });
+
+      if (error || !data || data.length === 0) {
+        return BATCH_LIST;
+      }
+
+      const validRows = data.filter((b) => Number(b.batch_year) >= 1 && Number(b.batch_year) <= 35);
+      if (validRows.length === 0) {
+        return BATCH_LIST;
+      }
+
+      const dbBatchMap = new Map<number, any>();
+      validRows.forEach((b) => dbBatchMap.set(Number(b.batch_year), b));
+
+      const merged = BATCH_LIST.map((canonical) => {
+        const dbRow = dbBatchMap.get(canonical.batchYear);
+        if (!dbRow) return canonical;
+        return {
+          ...canonical,
+          total: Number(dbRow.registered_count ?? canonical.total ?? 0),
+          representative: dbRow.representative_name || canonical.representative,
+          specialNote: dbRow.special_note || canonical.specialNote,
+        };
+      });
+
+      cachedBatches = { data: merged, ts: Date.now() };
+      return merged;
+    } catch (err) {
+      console.warn('Supabase fetchBatches error:', err);
+      return BATCH_LIST;
+    }
+  })().finally(() => {
+    inFlightBatches = null;
+  });
+
+  inFlightBatches = p;
+  return p;
 }
 
 export async function fetchBatchAlumniProfilesFromDb(batchYear: number): Promise<AlumniProfile[]> {
@@ -260,6 +341,7 @@ function mapRowToFeedPost(row: any, currentUserId?: number): PostItem {
     authorBatch: author.batch_year || 25,
     authorRole: 'Alumnus',
     verified: author.verification_status === 'verified',
+    profileCompleted: isPublicRowProfileCompleted(author),
     timestamp: new Date(row.created_at).toLocaleDateString(),
     likes: Number(row.likes_count) || (row.post_likes?.length ?? 0),
     liked: isLiked,
@@ -368,7 +450,7 @@ export async function createFeedPostInDb(params: {
     const fallbackId = Date.now();
     const fallbackPost: PostItem = {
       id: fallbackId,
-      userId: params.authorId || 1,
+      userId: params.authorId || 0,
       fullName: 'SZMC Alumnus',
       avatarUrl: '/assets/aistudio/images__1__2778177d.png',
       batchYear: 25,
@@ -470,26 +552,18 @@ export async function createFeedPostInDb(params: {
             .maybeSingle();
           if (directProf?.id) {
             profileRow = directProf;
-            try {
-              await supabase
-                .from('alumni_profiles')
-                .update({
-                  verification_status: 'verified',
-                  verification_method: 'admin_instant',
-                })
-                .eq('id', directProf.id);
-            } catch {}
           }
         } catch {}
       }
     }
 
-    // Check if profile exists by authorId (only when not overriding an authenticated caller's own ID)
-    if (!profileRow?.id && params.authorId && params.authorId > 0) {
+    // Verify params.authorId belongs to the signed-in caller if still unresolved
+    if (!profileRow?.id && authUser?.id && params.authorId && params.authorId > 0) {
       const { data: profileById } = await supabase
         .from('alumni_profiles')
         .select('id, full_name, avatar_url, batch_year, verification_status, profession, institution')
         .eq('id', params.authorId)
+        .eq('auth_user_id', authUser.id)
         .maybeSingle();
 
       if (profileById?.id) {
@@ -498,14 +572,9 @@ export async function createFeedPostInDb(params: {
     }
 
     if (!profileRow?.id || Number(profileRow.id) <= 0) {
-      profileRow = {
-        id: params.authorId || 10021,
-        full_name: 'Dr. Nurul Anam Bashir',
-        avatar_url: '/assets/aistudio/images__1__2778177d.png',
-        batch_year: 25,
-        verification_status: 'verified',
-        profession: 'Medical Doctor / Physician',
-        institution: 'Shaheed Ziaur Rahman Medical College Hospital',
+      return {
+        success: false,
+        error: 'Please sign in with an active alumni profile to publish a post.',
       };
     }
 
@@ -569,7 +638,7 @@ export async function createFeedPostInDb(params: {
       videos: uploadedVideos,
       link_metadata: {
         originalAuthorId: realAuthorId,
-        authorName: profileRow.full_name || 'Dr. Nurul Anam Bashir',
+        authorName: profileRow.full_name || 'SZMC Alumnus',
         authorAvatar: profileRow.avatar_url || '/assets/aistudio/images__1__2778177d.png',
         authorBatch: profileRow.batch_year || 25,
       },
@@ -603,9 +672,10 @@ export async function createFeedPostInDb(params: {
       insertError = e;
     }
 
-    // 7. Verify direct Supabase insert with resilient fallback
+    // 7. Verify direct Supabase insert with server fallback (never fabricate local-only success)
     if (insertError || !insertedRow) {
       console.warn('Direct Supabase insert failed, attempting /api/posts fallback:', insertError?.message);
+      let serverErrorMessage = insertError?.message || 'Failed to publish post to database.';
       try {
         const authHeaders = await getClientAuthHeaders();
         const apiRes = await fetch('/api/posts', {
@@ -613,41 +683,21 @@ export async function createFeedPostInDb(params: {
           headers: authHeaders,
           body: JSON.stringify(insertPayload),
         });
-        const apiJson = await apiRes.json();
+        const apiJson = await apiRes.json().catch(() => ({}));
         const serverPost = apiJson?.post || (apiJson?.id ? apiJson : null);
         if (apiRes.ok && serverPost?.id) {
           const postItem = mapRowToFeedPost({ ...serverPost, author: profileRow }, realAuthorId);
-          // Broadcast real-time to all connected alumni
-          void fetch('/api/feed/broadcast', {
-            method: 'POST',
-            headers: authHeaders,
-            body: JSON.stringify({ type: 'POST_CREATED', post: postItem, newRecord: serverPost }),
-          }).catch(() => {});
           return { success: true, post: postItem };
         }
-      } catch (fallbackErr) {
+        if (apiJson?.error) {
+          serverErrorMessage = String(apiJson.error);
+        }
+      } catch (fallbackErr: any) {
         console.warn('Fallback /api/posts notice:', fallbackErr);
+        if (fallbackErr?.message) serverErrorMessage = String(fallbackErr.message);
       }
 
-      // If RLS blocked client insert, construct local resilient post so feed never errors
-      const fallbackPost = mapRowToFeedPost(
-        {
-          id: Date.now(),
-          author_id: realAuthorId,
-          content: safeContent,
-          category: safeCategory,
-          images: uploadedImages,
-          videos: uploadedVideos,
-          likes_count: 0,
-          comments_count: 0,
-          is_pinned: false,
-          is_edited: false,
-          created_at: new Date().toISOString(),
-          author: profileRow,
-        },
-        realAuthorId
-      );
-      return { success: true, post: fallbackPost };
+      return { success: false, error: serverErrorMessage };
     }
 
     const postItem = mapRowToFeedPost({ ...insertedRow, author: profileRow }, realAuthorId);
@@ -810,7 +860,8 @@ export async function addPostCommentInDb(params: {
         }
       }
 
-      // Verify commentAuthorId exists in alumni_profiles to satisfy post_comments_user_id_fkey
+      // Verify commentAuthorId matches an active alumni_profiles row (never impersonate another user)
+      let profileExists = false;
       if (commentAuthorId > 0) {
         const { data: existingProf } = await supabase
           .from('alumni_profiles')
@@ -818,71 +869,48 @@ export async function addPostCommentInDb(params: {
           .eq('id', commentAuthorId)
           .maybeSingle();
         if (existingProf?.id) {
+          profileExists = true;
           if (!params.fullName && existingProf.full_name) resolvedName = existingProf.full_name;
           if (!params.avatarUrl && existingProf.avatar_url) resolvedAvatar = existingProf.avatar_url;
-        } else {
-          // Fallback to verified admin profile 10002 or earliest profile if local ID (e.g. 1) is not in alumni_profiles
-          const { data: fallbackProf } = await supabase
-            .from('alumni_profiles')
-            .select('id')
-            .order('id', { ascending: true })
-            .limit(1)
-            .maybeSingle();
-          commentAuthorId = fallbackProf?.id ? Number(fallbackProf.id) : 10002;
         }
       }
 
-      const insertPayload: any = {
-        post_id: params.postId,
-        user_id: commentAuthorId,
-        content: cleanContent,
-      };
-      if (params.parentCommentId) {
-        insertPayload.parent_comment_id = params.parentCommentId;
-      }
+      if (profileExists) {
+        const insertPayload: any = {
+          post_id: params.postId,
+          user_id: commentAuthorId,
+          content: cleanContent,
+        };
+        if (params.parentCommentId) {
+          insertPayload.parent_comment_id = params.parentCommentId;
+        }
 
-      let { data, error } = await supabase
-        .from('post_comments')
-        .insert(insertPayload)
-        .select('id, post_id, user_id, content, likes_count, created_at')
-        .single();
-
-      // Retry without parent_comment_id if migration 024 is not yet applied remotely
-      if (error && params.parentCommentId && String(error.message || '').includes('parent_comment_id')) {
-        const retryNoParent = await supabase
+        let { data, error } = await supabase
           .from('post_comments')
-          .insert({
-            post_id: params.postId,
-            user_id: commentAuthorId,
-            content: cleanContent,
-          })
+          .insert(insertPayload)
           .select('id, post_id, user_id, content, likes_count, created_at')
           .single();
-        if (!retryNoParent.error && retryNoParent.data) {
-          data = retryNoParent.data;
-          error = null;
-        }
-      }
 
-      // Retry with verified profile 10002 if foreign key constraint was triggered
-      if (error && (error.code === '23503' || String(error.message || '').includes('foreign key'))) {
-        const retryRes = await supabase
-          .from('post_comments')
-          .insert({
-            post_id: params.postId,
-            user_id: 10002,
-            content: cleanContent,
-          })
-          .select('id, post_id, user_id, content, likes_count, created_at')
-          .single();
-        if (!retryRes.error && retryRes.data) {
-          data = retryRes.data;
-          error = null;
+        // Retry without parent_comment_id if migration 024 is not yet applied remotely
+        if (error && params.parentCommentId && String(error.message || '').includes('parent_comment_id')) {
+          const retryNoParent = await supabase
+            .from('post_comments')
+            .insert({
+              post_id: params.postId,
+              user_id: commentAuthorId,
+              content: cleanContent,
+            })
+            .select('id, post_id, user_id, content, likes_count, created_at')
+            .single();
+          if (!retryNoParent.error && retryNoParent.data) {
+            data = retryNoParent.data;
+            error = null;
+          }
         }
-      }
 
-      if (!error && data) {
-        insertedRow = data;
+        if (!error && data) {
+          insertedRow = data;
+        }
       }
     } catch (err) {
       console.warn('Direct Supabase post_comments insert notice:', err);
@@ -922,10 +950,14 @@ export async function addPostCommentInDb(params: {
     console.warn('Server comment broadcast notice:', err);
   }
 
+  if (!insertedRow) {
+    return { success: false };
+  }
+
   const finalComment: PostComment = {
-    id: Number(insertedRow?.id) || Date.now(),
+    id: Number(insertedRow.id),
     postId: params.postId,
-    userId: commentAuthorId,
+    userId: Number(insertedRow.user_id || insertedRow.userId || commentAuthorId),
     fullName: resolvedName,
     avatarUrl: resolvedAvatar,
     content: cleanContent,
@@ -1029,7 +1061,7 @@ export async function fetchBloodRequestsFromDb(): Promise<BloodEmergencyRequest[
       emergencyLevel: r.emergency_level,
       contactMethod: r.contact_method,
       description: r.description,
-      requesterId: Number(r.requester_profile_id || r.requester?.id || 1),
+      requesterId: Number(r.requester_profile_id || r.requester?.id || 0),
       requesterName: r.requester?.full_name || 'SZMC Alumnus',
       requesterAvatar: r.requester?.avatar_url || '/assets/aistudio/images__1__2778177d.png',
       requesterBatch: r.requester?.batch_year || 25,
@@ -1109,8 +1141,16 @@ export async function fetchBloodDonorsFromDb(): Promise<BloodDonorProfile[]> {
           batch_year,
           avatar_url,
           verification_status,
+          profession,
+          position,
+          institution,
+          cadre,
+          specialty,
+          degree,
           city,
-          country
+          country,
+          bio,
+          career_history
         )
       `
       )
@@ -1125,7 +1165,8 @@ export async function fetchBloodDonorsFromDb(): Promise<BloodDonorProfile[]> {
       fullName: d.alumnus?.full_name || 'SZMC Donor',
       avatarUrl: d.alumnus?.avatar_url || '/assets/aistudio/images__1__2778177d.png',
       batchYear: d.alumnus?.batch_year || 25,
-      verificationStatus: d.alumnus?.verification_status || 'verified',
+      verificationStatus: d.alumnus?.verification_status || 'unverified',
+      profileCompleted: isPublicRowProfileCompleted(d.alumnus),
       bloodGroup: d.blood_group,
       isRegisteredDonor: d.is_registered_donor,
       availability: d.availability,
@@ -1589,56 +1630,288 @@ export async function fetchOfficialNoticesFromDb(): Promise<OfficialNotice[]> {
   }
 }
 
-export async function fetchGalleryAlbumsFromDb(): Promise<GalleryAlbum[]> {
-  if (!isSupabaseConfigured) return [];
+const GALLERY_LIKED_STORAGE_PREFIX = 'szmc_gallery_liked_photos_v1_';
+const VALID_GALLERY_CATEGORIES = new Set([
+  'reunion',
+  'academic',
+  'campus',
+  'convocation',
+  'sports',
+  'cultural',
+  'all',
+]);
+
+function normalizeGalleryBatchYearClient(batchYear?: number): number | null {
+  if (typeof batchYear !== 'number' || !Number.isInteger(batchYear)) return null;
+  if (batchYear < 1 || batchYear > 38) return null;
+  return batchYear;
+}
+
+export function getLocallyLikedGalleryPhotoIds(userId?: number): Set<string> {
+  if (typeof window === 'undefined') return new Set();
+  try {
+    const key = `${GALLERY_LIKED_STORAGE_PREFIX}${userId || 'guest'}`;
+    const raw = localStorage.getItem(key);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? new Set(parsed.map(String)) : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+export function setLocallyLikedGalleryPhotoId(
+  photoId: string,
+  liked: boolean,
+  userId?: number
+): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const key = `${GALLERY_LIKED_STORAGE_PREFIX}${userId || 'guest'}`;
+    const set = getLocallyLikedGalleryPhotoIds(userId);
+    if (liked) set.add(String(photoId));
+    else set.delete(String(photoId));
+    localStorage.setItem(key, JSON.stringify(Array.from(set)));
+  } catch {
+    // ignore storage quota errors
+  }
+}
+
+function mapRawGalleryAlbums(
+  rawAlbums: any[],
+  currentUserId?: number,
+  dbLikedPhotoIds?: Set<string>
+): GalleryAlbum[] {
+  const localLikes = dbLikedPhotoIds ?? getLocallyLikedGalleryPhotoIds(currentUserId);
+
+  return rawAlbums.map((a: any) => {
+    const rawPhotos = Array.isArray(a.gallery_photos)
+      ? [...a.gallery_photos]
+      : Array.isArray(a.photos)
+      ? [...a.photos]
+      : [];
+
+    rawPhotos.sort((p1: any, p2: any) => {
+      const t1 = p1.uploaded_at || p1.uploadedAt ? new Date(p1.uploaded_at || p1.uploadedAt).getTime() : 0;
+      const t2 = p2.uploaded_at || p2.uploadedAt ? new Date(p2.uploaded_at || p2.uploadedAt).getTime() : 0;
+      return t2 - t1;
+    });
+
+    const photos: GalleryPhoto[] = rawPhotos
+      .filter((p: any) => p.is_approved !== false)
+      .map((p: any) => {
+        const photoId = String(p.id);
+        const uploaderRel = Array.isArray(p.uploader) ? p.uploader[0] : p.uploader;
+        const likedByMe =
+          typeof p.likedByMe === 'boolean'
+            ? p.likedByMe
+            : typeof p.liked === 'boolean'
+            ? p.liked
+            : localLikes.has(photoId);
+        const likesCount = Math.max(0, Number(p.likesCount ?? p.likes_count ?? p.likes ?? 0) || 0);
+
+        return {
+          id: photoId,
+          albumId: Number(a.id),
+          url: p.url || p.photo_url || a.cover_url || a.coverUrl,
+          caption: p.caption || '',
+          batchYear: p.batchYear ?? p.batch_year ?? a.batchYear ?? a.batch_year ?? undefined,
+          uploaderName:
+            p.uploaderName ||
+            uploaderRel?.full_name ||
+            p.uploader_name ||
+            'SZMC Alumnus',
+          uploaderAvatar: p.uploaderAvatar || uploaderRel?.avatar_url || undefined,
+          uploaderId: p.uploaderId
+            ? Number(p.uploaderId)
+            : p.uploader_id
+            ? Number(p.uploader_id)
+            : undefined,
+          uploadedAt: p.uploadedAt || p.uploaded_at || undefined,
+          likesCount,
+          likedByMe,
+          tags: Array.isArray(p.tags) ? p.tags : [],
+          mediaType: (p.mediaType || p.media_type) === 'video' ? 'video' : 'image',
+          fileSize: p.fileSize || p.file_size || '1.2 MB',
+        };
+      });
+
+    const creatorRel = Array.isArray(a.creator) ? a.creator[0] : a.creator;
+    return {
+      id: Number(a.id),
+      title: a.title,
+      description: a.description || '',
+      category: a.category,
+      date: a.date || a.event_date_label || '2026',
+      location: a.location || 'SZMC Campus, Silimpur, Bogura',
+      batchYear: a.batchYear ?? a.batch_year ?? undefined,
+      photosCount: photos.length,
+      coverUrl:
+        a.coverUrl ||
+        a.cover_url ||
+        a.cover_photo_url ||
+        (photos[0]?.url ?? '/assets/aistudio/images__1__2778177d.png'),
+      createdBy: a.createdBy || creatorRel?.full_name || a.created_by || 'SZMC Alumni',
+      createdById: a.createdById
+        ? Number(a.createdById)
+        : a.created_by_id
+        ? Number(a.created_by_id)
+        : undefined,
+      createdDate: a.createdDate || a.created_at || undefined,
+      photos,
+    };
+  });
+}
+
+export async function fetchGalleryAlbumsFromDb(options?: {
+  currentUserId?: number;
+}): Promise<GalleryAlbum[] | null> {
+  const currentUserId = options?.currentUserId;
+
+  // 1. Primary: Resilient backend proxy backed by live Supabase + authoritative like counts
+  try {
+    const authHeaders = await getClientAuthHeaders();
+    const resp = await fetch('/api/gallery/albums', {
+      method: 'GET',
+      headers: authHeaders,
+      cache: 'no-store',
+    });
+    if (resp.ok) {
+      const body = await resp.json();
+      if (Array.isArray(body?.albums) && (body.source === 'supabase' || !isSupabaseConfigured)) {
+        return mapRawGalleryAlbums(body.albums, currentUserId);
+      }
+    }
+  } catch {
+    // Fall through to direct Supabase query
+  }
+
+  // 2. Fallback: Direct Supabase client query
+  if (!isSupabaseConfigured) return null;
 
   try {
-    const { data, error } = await supabase
+    let data: any[] | null = null;
+    let queryError: any = null;
+
+    const richRes = await supabase
       .from('gallery_albums')
-      .select('*, gallery_photos(*)')
+      .select(
+        '*, creator:alumni_profiles!gallery_albums_created_by_id_fkey(id, full_name, avatar_url), gallery_photos(*, uploader:alumni_profiles!gallery_photos_uploader_id_fkey(id, full_name, avatar_url))'
+      )
       .eq('is_published', true)
       .order('created_at', { ascending: false });
 
-    if (error || !data || data.length === 0) {
-      return [];
+    if (!richRes.error && Array.isArray(richRes.data)) {
+      data = richRes.data;
+    } else {
+      const basicRes = await supabase
+        .from('gallery_albums')
+        .select('*, gallery_photos(*)')
+        .eq('is_published', true)
+        .order('created_at', { ascending: false });
+      data = basicRes.data;
+      queryError = basicRes.error;
     }
 
-    return data.map((a: any) => {
-      const photos: GalleryPhoto[] = (a.gallery_photos || []).map((p: any) => ({
-        id: String(p.id),
-        albumId: Number(a.id),
-        url: p.url,
-        caption: p.caption || '',
-        category: a.category,
-        batchYear: p.batch_year || a.batch_year,
-        year: String(a.batch_year || 2026),
-        uploaderName: p.uploader_name || 'SZMC Alumnus',
-        uploaderId: p.uploader_id ? Number(p.uploader_id) : undefined,
-        likes: Number(p.likes_count) || 0,
-        liked: false,
-        tags: p.tags || [],
-        mediaType: p.media_type || 'image',
-        fileSize: p.file_size || '1.2 MB',
-      }));
+    if (queryError || !Array.isArray(data)) {
+      return null;
+    }
 
-      return {
-        id: Number(a.id),
-        title: a.title,
-        description: a.description || '',
-        category: a.category,
-        date: a.event_date_label || '2026',
-        location: a.location || 'SZMC Silimpur Campus',
-        batchYear: a.batch_year || undefined,
-        photosCount: photos.length,
-        coverUrl: a.cover_url || (photos[0]?.url ?? '/assets/aistudio/images__1__2778177d.png'),
-        createdBy: a.created_by || 'SZMC Alumni',
-        createdById: a.created_by_id ? Number(a.created_by_id) : undefined,
-        photos,
-      };
-    });
+    let dbLikedIds: Set<string> | undefined;
+    if (currentUserId && currentUserId > 0) {
+      try {
+        const { data: userLikes } = await supabase
+          .from('gallery_photo_likes')
+          .select('photo_id')
+          .eq('user_id', currentUserId);
+        if (Array.isArray(userLikes)) {
+          dbLikedIds = new Set(userLikes.map((row: any) => String(row.photo_id)));
+        }
+      } catch {}
+    }
+
+    return mapRawGalleryAlbums(data, currentUserId, dbLikedIds);
   } catch {
-    return [];
+    return null;
   }
+}
+
+/**
+ * Uploads an image or video file to persistent Supabase Storage ('gallery' for images,
+ * 'post-media' for videos) with automatic backend proxy fallback so ALL users across
+ * devices can view the media — never returning transient local-only blob: URLs.
+ */
+export async function uploadGalleryMediaFile(
+  file: File,
+  albumId?: number
+): Promise<{ url: string; storagePath?: string } | null> {
+  const isVideo = isVideoFile(file);
+  const folder = albumId ? `albums/${albumId}` : 'albums/general';
+
+  // Determine clean extension
+  let ext = isVideo ? 'mp4' : 'jpg';
+  if (file.type) {
+    if (file.type.includes('png')) ext = 'png';
+    else if (file.type.includes('webp')) ext = 'webp';
+    else if (file.type.includes('gif')) ext = 'gif';
+    else if (file.type.includes('webm')) ext = 'webm';
+    else if (file.type.includes('quicktime') || file.type.includes('mov')) ext = 'mov';
+    else if (file.type.includes('ogg')) ext = 'ogg';
+  } else if (file.name && file.name.includes('.')) {
+    ext = file.name.split('.').pop()!.toLowerCase().replace(/[^a-z0-9]/g, '') || ext;
+  }
+
+  // 1. Direct Supabase Storage upload (fastest when user has an active Supabase Auth session)
+  if (isSupabaseConfigured) {
+    try {
+      const bucket = isVideo ? 'post-media' : 'gallery';
+      const uploaded = await uploadMediaToSupabaseStorage(file, bucket, folder);
+      if (uploaded?.publicUrl) {
+        return { url: uploaded.publicUrl, storagePath: uploaded.storagePath };
+      }
+    } catch (err) {
+      console.warn('Direct Supabase gallery storage upload notice, trying server upload:', err);
+    }
+  }
+
+  // 2. Authenticated Express upload proxy -> Supabase Storage / server-hosted persistent storage
+  try {
+    const authHeaders = await getClientAuthHeaders();
+    const uploadHeaders: Record<string, string> = {};
+    if (authHeaders.Authorization) uploadHeaders.Authorization = authHeaders.Authorization;
+    uploadHeaders['Content-Type'] = file.type || 'application/octet-stream';
+    uploadHeaders['X-File-Ext'] = ext;
+    if (albumId) uploadHeaders['X-Album-Id'] = String(albumId);
+
+    const endpoint = isVideo ? '/api/upload-video' : '/api/gallery/upload';
+    const resp = await fetch(endpoint, {
+      method: 'POST',
+      headers: uploadHeaders,
+      body: file,
+    });
+    if (resp.ok) {
+      const data = await resp.json();
+      if (typeof data?.url === 'string' && data.url.trim()) {
+        return { url: data.url.trim(), storagePath: data.storagePath };
+      }
+    }
+  } catch (err) {
+    console.warn('Server gallery media upload notice:', err);
+  }
+
+  // 3. Resilient fallback for images only: compressed Data URL (persistent across all devices)
+  if (!isVideo) {
+    try {
+      const compressedDataUrl = await compressImageFileToDataUrl(file, 1400, 0.84);
+      if (compressedDataUrl && compressedDataUrl.startsWith('data:image/')) {
+        return { url: compressedDataUrl };
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  return null;
 }
 
 export async function createGalleryAlbumInDb(params: {
@@ -1651,66 +1924,99 @@ export async function createGalleryAlbumInDb(params: {
   coverUrl: string;
   createdById?: number;
   createdBy?: string;
-}): Promise<number | null> {
-  const validCategories = ['reunion', 'academic', 'campus', 'convocation', 'sports', 'cultural', 'all', 'milestone'];
+}): Promise<{ albumId: number; coverPhotoId?: string } | null> {
   const normalizedCategory = (params.category || 'campus').toLowerCase();
-  const category = validCategories.includes(normalizedCategory) ? normalizedCategory : 'campus';
+  const category = VALID_GALLERY_CATEGORIES.has(normalizedCategory)
+    ? normalizedCategory
+    : 'campus';
+  const safeBatchYear = normalizeGalleryBatchYearClient(params.batchYear);
 
-  const payload: any = {
+  const dbPayload: Record<string, any> = {
     title: params.title.trim(),
-    description: params.description || null,
-    category: category,
-    event_date_label: params.eventDateLabel || 'Recent',
-    location: params.location || null,
-    batch_year: params.batchYear || null,
+    description: params.description?.trim() || null,
+    category,
+    event_date_label: (params.eventDateLabel || 'Recent').trim().slice(0, 64),
+    location: params.location?.trim() || null,
+    batch_year: safeBatchYear,
     cover_url: params.coverUrl,
     cover_photo_url: params.coverUrl,
     is_published: true,
     photos_count: 1,
+    photo_count: 1,
   };
-  if (params.createdById) payload.created_by_id = params.createdById;
-  if (params.createdBy) payload.created_by = params.createdBy;
+  if (params.createdById) dbPayload.created_by_id = params.createdById;
+  if (params.createdBy) dbPayload.created_by = params.createdBy;
 
+  // 1. Direct Supabase insert
   if (isSupabaseConfigured) {
     try {
       const { data, error } = await supabase
         .from('gallery_albums')
-        .insert(payload)
+        .insert(dbPayload)
         .select('id')
         .single();
 
       if (!error && data?.id) {
         const newAlbumId = Number(data.id);
-        // Automatically save initial cover photo in gallery_photos
+        let coverPhotoId: string | undefined;
         try {
-          await supabase.from('gallery_photos').insert({
-            album_id: newAlbumId,
-            url: params.coverUrl,
-            photo_url: params.coverUrl,
-            caption: `${params.title.trim()} - Cover Photo`,
-            uploader_id: params.createdById || null,
-            uploader_name: params.createdBy || 'SZMC Alumnus',
-            is_approved: true,
-          });
+          const { data: coverData } = await supabase
+            .from('gallery_photos')
+            .insert({
+              album_id: newAlbumId,
+              url: params.coverUrl,
+              photo_url: params.coverUrl,
+              caption: `${params.title.trim()} - Cover Photo`,
+              batch_year: safeBatchYear,
+              tags: ['Cover', category],
+              media_type: 'image',
+              uploader_id: params.createdById || null,
+              uploader_name: params.createdBy || 'SZMC Alumnus',
+              is_approved: true,
+            })
+            .select('id')
+            .single();
+          if (coverData?.id) coverPhotoId = String(coverData.id);
         } catch {}
-        return newAlbumId;
+
+        void realtimeManager.broadcastGalleryUpdate('ALBUM_CREATED', { albumId: newAlbumId });
+        return { albumId: newAlbumId, coverPhotoId };
+      }
+      if (error) {
+        console.warn('Direct client createGalleryAlbum error, trying backend proxy:', error.message);
       }
     } catch (err) {
       console.warn('Direct client createGalleryAlbum notice, using backend proxy:', err);
     }
   }
 
-  // Resilient backend fallback
+  // 2. Resilient backend proxy (also broadcasts GALLERY_UPDATED over SSE)
   try {
     const authHeaders = await getClientAuthHeaders();
     const resp = await fetch('/api/gallery/albums', {
       method: 'POST',
       headers: authHeaders,
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        title: params.title.trim(),
+        description: params.description,
+        category,
+        eventDateLabel: params.eventDateLabel || 'Recent',
+        location: params.location,
+        batchYear: safeBatchYear,
+        coverUrl: params.coverUrl,
+        createdBy: params.createdBy,
+      }),
     });
     if (resp.ok) {
       const body = await resp.json();
-      if (body.album?.id) return Number(body.album.id);
+      if (body.album?.id) {
+        const albumId = Number(body.album.id);
+        void realtimeManager.broadcastGalleryUpdate('ALBUM_CREATED', { albumId });
+        return {
+          albumId,
+          coverPhotoId: body.coverPhotoId || body.album?.photos?.[0]?.id,
+        };
+      }
     }
   } catch (proxyErr) {
     console.warn('Backend proxy createGalleryAlbum failed:', proxyErr);
@@ -1722,53 +2028,96 @@ export async function createGalleryAlbumInDb(params: {
 export async function addPhotoToGalleryAlbumInDb(params: {
   albumId: number;
   url: string;
+  storagePath?: string;
   caption?: string;
   batchYear?: number;
   tags?: string[];
-  mediaType?: string;
+  mediaType?: 'image' | 'video';
   fileSize?: string;
   uploaderId?: number;
   uploaderName?: string;
+  skipBroadcast?: boolean;
 }): Promise<string | null> {
-  const payload: any = {
+  if (!params.url || params.url.startsWith('blob:')) {
+    console.warn('Refusing to persist transient blob: URL to Supabase gallery.');
+    return null;
+  }
+
+  const safeBatchYear = normalizeGalleryBatchYearClient(params.batchYear);
+  const safeMediaType = params.mediaType === 'video' ? 'video' : 'image';
+
+  const dbPayload: Record<string, any> = {
     album_id: params.albumId,
     url: params.url,
     photo_url: params.url,
-    caption: params.caption || null,
-    batch_year: params.batchYear || null,
-    tags: params.tags || [],
-    media_type: params.mediaType || 'image',
+    storage_object_path: params.storagePath || null,
+    caption: params.caption?.trim() || null,
+    batch_year: safeBatchYear,
+    tags: Array.isArray(params.tags) ? params.tags : [],
+    media_type: safeMediaType,
     file_size: params.fileSize || null,
     is_approved: true,
   };
-  if (params.uploaderId) payload.uploader_id = params.uploaderId;
-  if (params.uploaderName) payload.uploader_name = params.uploaderName;
+  if (params.uploaderId) dbPayload.uploader_id = params.uploaderId;
+  if (params.uploaderName) dbPayload.uploader_name = params.uploaderName;
 
+  // 1. Direct Supabase insert
   if (isSupabaseConfigured) {
     try {
       const { data, error } = await supabase
         .from('gallery_photos')
-        .insert(payload)
+        .insert(dbPayload)
         .select('id')
         .single();
 
-      if (!error && data?.id) return String(data.id);
+      if (!error && data?.id) {
+        const photoId = String(data.id);
+        if (!params.skipBroadcast) {
+          void realtimeManager.broadcastGalleryUpdate('PHOTO_ADDED', {
+            albumId: params.albumId,
+            photoId,
+          });
+        }
+        return photoId;
+      }
+      if (error) {
+        console.warn('Direct client addPhotoToGalleryAlbum error, trying backend proxy:', error.message);
+      }
     } catch (err) {
       console.warn('Direct client addPhotoToGalleryAlbum notice, using backend proxy:', err);
     }
   }
 
-  // Resilient backend fallback
+  // 2. Resilient backend proxy
   try {
     const authHeaders = await getClientAuthHeaders();
     const resp = await fetch('/api/gallery/photos', {
       method: 'POST',
       headers: authHeaders,
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        albumId: params.albumId,
+        url: params.url,
+        storagePath: params.storagePath,
+        caption: params.caption,
+        batchYear: safeBatchYear,
+        tags: params.tags || [],
+        mediaType: safeMediaType,
+        fileSize: params.fileSize,
+        uploaderName: params.uploaderName,
+      }),
     });
     if (resp.ok) {
       const body = await resp.json();
-      if (body.photo?.id) return String(body.photo.id);
+      if (body.photo?.id) {
+        const photoId = String(body.photo.id);
+        if (!params.skipBroadcast) {
+          void realtimeManager.broadcastGalleryUpdate('PHOTO_ADDED', {
+            albumId: params.albumId,
+            photoId,
+          });
+        }
+        return photoId;
+      }
     }
   } catch (proxyErr) {
     console.warn('Backend proxy addPhotoToGalleryAlbum failed:', proxyErr);
@@ -1777,25 +2126,147 @@ export async function addPhotoToGalleryAlbumInDb(params: {
   return null;
 }
 
+export async function toggleGalleryPhotoLikeInDb(params: {
+  photoId: string;
+  albumId?: number;
+  liked: boolean;
+  userId?: number;
+}): Promise<{ success: boolean; likesCount?: number; likedByMe?: boolean; error?: string }> {
+  setLocallyLikedGalleryPhotoId(params.photoId, params.liked, params.userId);
+
+  try {
+    const authHeaders = await getClientAuthHeaders();
+    const resp = await fetch(`/api/gallery/photos/${encodeURIComponent(params.photoId)}/like`, {
+      method: 'POST',
+      headers: authHeaders,
+      body: JSON.stringify({
+        albumId: params.albumId,
+        liked: params.liked,
+      }),
+    });
+    if (resp.ok) {
+      const data = await resp.json();
+      void realtimeManager.broadcastGalleryUpdate('PHOTO_LIKED', {
+        albumId: data.albumId ?? params.albumId,
+        photoId: params.photoId,
+        likesCount: data.likesCount,
+      });
+      return {
+        success: true,
+        likesCount: typeof data.likesCount === 'number' ? data.likesCount : undefined,
+        likedByMe: typeof data.likedByMe === 'boolean' ? data.likedByMe : params.liked,
+      };
+    }
+    const errBody = await resp.json().catch(() => ({}));
+    return { success: false, error: errBody.error || 'Could not save like.' };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Network error while saving like.' };
+  }
+}
+
+export async function updateGalleryAlbumInDb(
+  albumId: number,
+  updates: {
+    title?: string;
+    description?: string;
+    category?: string;
+    eventDateLabel?: string;
+    location?: string;
+    batchYear?: number;
+    coverUrl?: string;
+  }
+): Promise<{ success: boolean; error?: string }> {
+  const dbUpdates: Record<string, any> = {};
+  if (typeof updates.title === 'string' && updates.title.trim()) {
+    dbUpdates.title = updates.title.trim();
+  }
+  if (typeof updates.description === 'string') {
+    dbUpdates.description = updates.description.trim() || null;
+  }
+  if (typeof updates.category === 'string') {
+    const normCat = updates.category.toLowerCase();
+    if (VALID_GALLERY_CATEGORIES.has(normCat)) dbUpdates.category = normCat;
+  }
+  if (typeof updates.eventDateLabel === 'string' && updates.eventDateLabel.trim()) {
+    dbUpdates.event_date_label = updates.eventDateLabel.trim().slice(0, 64);
+  }
+  if (typeof updates.location === 'string') {
+    dbUpdates.location = updates.location.trim() || null;
+  }
+  if (updates.batchYear !== undefined) {
+    dbUpdates.batch_year = normalizeGalleryBatchYearClient(updates.batchYear);
+  }
+  if (typeof updates.coverUrl === 'string' && updates.coverUrl.trim()) {
+    dbUpdates.cover_url = updates.coverUrl.trim();
+    dbUpdates.cover_photo_url = updates.coverUrl.trim();
+  }
+
+  let directUpdated = false;
+  if (isSupabaseConfigured && Object.keys(dbUpdates).length > 0) {
+    try {
+      const { error } = await supabase
+        .from('gallery_albums')
+        .update(dbUpdates)
+        .eq('id', albumId);
+      if (!error) {
+        directUpdated = true;
+      } else {
+        console.warn('Supabase direct update album error, trying server API:', error.message);
+      }
+    } catch (err) {
+      console.warn('Supabase direct update album notice:', err);
+    }
+  }
+
+  try {
+    const authHeaders = await getClientAuthHeaders();
+    const resp = await fetch(`/api/gallery/albums/${albumId}`, {
+      method: 'PATCH',
+      headers: authHeaders,
+      body: JSON.stringify(updates),
+    });
+    if (resp.ok) {
+      void realtimeManager.broadcastGalleryUpdate('ALBUM_UPDATED', { albumId });
+      return { success: true };
+    }
+    if (directUpdated) {
+      void realtimeManager.broadcastGalleryUpdate('ALBUM_UPDATED', { albumId });
+      return { success: true };
+    }
+    const errBody = await resp.json().catch(() => ({}));
+    return { success: false, error: errBody.error || 'Failed to update album.' };
+  } catch (err: any) {
+    if (directUpdated) {
+      void realtimeManager.broadcastGalleryUpdate('ALBUM_UPDATED', { albumId });
+      return { success: true };
+    }
+    return { success: false, error: err?.message || 'Failed to update album.' };
+  }
+}
+
 export async function deleteGalleryAlbumInDb(
   albumId: number,
   userId?: number,
   isAdmin?: boolean
 ): Promise<{ success: boolean; error?: string }> {
+  let directDeleted = false;
+
   // 1. Direct Supabase deletion if configured
   if (isSupabaseConfigured) {
     try {
       await supabase.from('gallery_photos').delete().eq('album_id', albumId);
       const { error } = await supabase.from('gallery_albums').delete().eq('id', albumId);
-      if (error) {
-        console.warn('Supabase delete album error, falling back to server API:', error.message);
+      if (!error) {
+        directDeleted = true;
+      } else {
+        console.warn('Supabase direct delete album error, trying server API:', error.message);
       }
     } catch (err) {
       console.warn('Supabase direct album delete notice:', err);
     }
   }
 
-  // 2. Server API route
+  // 2. Server API route (authoritative deletion + SSE broadcast)
   try {
     const authHeaders = await getClientAuthHeaders();
     const resp = await fetch(`/api/gallery/albums/${albumId}`, {
@@ -1804,13 +2275,22 @@ export async function deleteGalleryAlbumInDb(
       body: JSON.stringify({ userId, isAdmin }),
     });
     if (resp.ok) {
+      void realtimeManager.broadcastGalleryUpdate('ALBUM_DELETED', { albumId });
+      return { success: true };
+    }
+    if (directDeleted) {
+      void realtimeManager.broadcastGalleryUpdate('ALBUM_DELETED', { albumId });
       return { success: true };
     }
     const errBody = await resp.json().catch(() => ({}));
-    return { success: resp.ok, error: errBody.error };
+    return { success: false, error: errBody.error || 'Failed to delete album.' };
   } catch (err: any) {
     console.warn('Backend proxy deleteGalleryAlbum error:', err);
-    return { success: true };
+    if (directDeleted) {
+      void realtimeManager.broadcastGalleryUpdate('ALBUM_DELETED', { albumId });
+      return { success: true };
+    }
+    return { success: false, error: err?.message || 'Failed to delete album.' };
   }
 }
 
@@ -1820,24 +2300,34 @@ export async function deleteGalleryPhotoInDb(
   userId?: number,
   isAdmin?: boolean
 ): Promise<{ success: boolean; error?: string }> {
+  let directDeleted = false;
+
   // 1. Direct Supabase deletion if configured
   if (isSupabaseConfigured) {
     try {
-      await supabase.from('gallery_photos').delete().eq('id', photoId);
-      if (albumId) {
-        const { count } = await supabase
-          .from('gallery_photos')
-          .select('id', { count: 'exact', head: true })
-          .eq('album_id', albumId);
-        const rem = typeof count === 'number' ? count : 0;
-        await supabase.from('gallery_albums').update({ photos_count: rem, photo_count: rem }).eq('id', albumId);
+      const { error } = await supabase.from('gallery_photos').delete().eq('id', photoId);
+      if (!error) {
+        directDeleted = true;
+        if (albumId) {
+          const { count } = await supabase
+            .from('gallery_photos')
+            .select('id', { count: 'exact', head: true })
+            .eq('album_id', albumId);
+          const rem = typeof count === 'number' ? count : 0;
+          await supabase
+            .from('gallery_albums')
+            .update({ photos_count: rem, photo_count: rem })
+            .eq('id', albumId);
+        }
+      } else {
+        console.warn('Supabase direct delete photo error, trying server API:', error.message);
       }
     } catch (err) {
       console.warn('Supabase direct photo delete notice:', err);
     }
   }
 
-  // 2. Server API route
+  // 2. Server API route (authoritative deletion + SSE broadcast)
   try {
     const authHeaders = await getClientAuthHeaders();
     const resp = await fetch(`/api/gallery/photos/${encodeURIComponent(photoId)}`, {
@@ -1846,13 +2336,22 @@ export async function deleteGalleryPhotoInDb(
       body: JSON.stringify({ albumId, userId, isAdmin }),
     });
     if (resp.ok) {
+      void realtimeManager.broadcastGalleryUpdate('PHOTO_DELETED', { albumId, photoId });
+      return { success: true };
+    }
+    if (directDeleted) {
+      void realtimeManager.broadcastGalleryUpdate('PHOTO_DELETED', { albumId, photoId });
       return { success: true };
     }
     const errBody = await resp.json().catch(() => ({}));
-    return { success: resp.ok, error: errBody.error };
+    return { success: false, error: errBody.error || 'Failed to delete photo.' };
   } catch (err: any) {
     console.warn('Backend proxy deleteGalleryPhoto error:', err);
-    return { success: true };
+    if (directDeleted) {
+      void realtimeManager.broadcastGalleryUpdate('PHOTO_DELETED', { albumId, photoId });
+      return { success: true };
+    }
+    return { success: false, error: err?.message || 'Failed to delete photo.' };
   }
 }
 

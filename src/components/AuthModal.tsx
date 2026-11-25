@@ -52,51 +52,6 @@ const AVATAR_PRESETS = [
   'https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=200&auto=format&fit=crop&q=80',
 ];
 
-const SPECIALTY_OPTIONS = [
-  'Computer Science & Software',
-  'Artificial Intelligence & Data',
-  'Electrical & Electronic Engineering',
-  'Civil & Structural Engineering',
-  'Mechanical & Robotics',
-  'Biotechnology & Genetic Engineering',
-  'Supply Chain & Operations',
-  'Business Administration & Management',
-  'Finance, Banking & Investment',
-  'Chartered Accountancy & Audit',
-  'Entrepreneurship & Startups',
-  'Physics & Physical Sciences',
-  'Mathematics & Statistics',
-  'Civil Service & Administration (BCS)',
-  'Foreign Affairs & Diplomacy',
-  'Law & Jurisprudence',
-  'Architecture & Design',
-  'Higher Education & Research',
-];
-
-const COMMON_DEGREES = [
-  'HSC',
-  'BSc Engineering',
-  'BSc',
-  'BBA',
-  'MBA',
-  'MSc',
-  'PhD',
-  'B.Arch',
-  'LLB',
-  'LLM',
-  'BA',
-  'MA',
-  'CA / ACA',
-  'CFA',
-  'BCS',
-];
-
-const SCIENCE_GROUPS = Array.from({ length: 17 }, (_, i) =>
-  i + 1 < 10 ? `0${i + 1}` : `${i + 1}`
-);
-const HUMANITIES_GROUPS = ['G', 'H', 'L', 'W'];
-const BUSINESS_GROUPS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
-
 const REGISTRATION_DRAFT_STORAGE_KEY = 'szmc_registration_form_draft_v1';
 
 interface RegistrationFormDraft {
@@ -135,8 +90,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 }) => {
   const {
     login,
-    loginWithPhoneOtp,
-    verifyPhoneOtp,
     loginWithGoogle,
     register,
     requestPasswordReset,
@@ -145,25 +98,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [mode, setMode] = useState<'login' | 'register' | 'forgot'>(initialMode);
 
   // Login State
-  const [loginTab, setLoginTab] = useState<'email' | 'phone'>('email');
-  const [phoneLoginMode, setPhoneLoginMode] = useState<'otp' | 'password'>('otp');
   const [loginIdentifier, setLoginIdentifier] = useState('');
-  const [loginPhone, setLoginPhone] = useState('');
-  const [loginPhoneOtp, setLoginPhoneOtp] = useState('');
-  const [phoneOtpSent, setPhoneOtpSent] = useState(false);
-  const [phoneCountdown, setPhoneCountdown] = useState(0);
   const [providerNotice, setProviderNotice] = useState<string | null>(null);
   const [loginPassword, setLoginPassword] = useState('');
   const [rememberMe, setRememberMe] = useState(true);
   const [showLoginPassword, setShowLoginPassword] = useState(false);
-
-  // Countdown timer for phone OTP resend
-  React.useEffect(() => {
-    if (phoneCountdown > 0) {
-      const timer = setTimeout(() => setPhoneCountdown((c) => c - 1), 1000);
-      return () => clearTimeout(timer);
-    }
-  }, [phoneCountdown]);
 
   // Register Form State (14 fields) initialized from localStorage draft
   const [initialDraft] = useState<RegistrationFormDraft>(() => loadRegistrationDraft());
@@ -345,66 +284,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
   };
 
-  // Handle Phone OTP Request (Send SMS code via Supabase Auth)
-  const handleRequestPhoneOtp = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setErrorMessage('');
-    setSuccessMessage('');
-    setProviderNotice(null);
-
-    if (!loginPhone.trim()) {
-      setErrorMessage('Please enter your mobile number.');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      await loginWithPhoneOtp(loginPhone.trim());
-      setPhoneOtpSent(true);
-      setPhoneCountdown(60);
-      setSuccessMessage('A 6-digit SMS verification code has been sent to your mobile number.');
-    } catch (err: unknown) {
-      const error = err as Error;
-      const msg = error.message || '';
-      if (
-        msg.toLowerCase().includes('phone provider is disabled') ||
-        msg.toLowerCase().includes('unsupported phone provider')
-      ) {
-        setProviderNotice(
-          'Supabase Phone Provider is not enabled on this project. In the Supabase Dashboard, navigate to Authentication > Providers > Phone, toggle it ON, and configure an SMS provider (Twilio, MessageBird, Vonage, or AWS SNS). In the meantime, you can sign in directly using your registered Email & Password.'
-        );
-      } else {
-        setErrorMessage(msg || 'Unable to send SMS verification code.');
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Handle Phone OTP Verification (Verify SMS code via Supabase Auth)
-  const handleVerifyPhoneOtp = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setErrorMessage('');
-    setSuccessMessage('');
-
-    if (!loginPhone.trim() || !loginPhoneOtp.trim()) {
-      setErrorMessage('Please enter both your mobile number and the 6-digit verification code.');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      await verifyPhoneOtp(loginPhone.trim(), loginPhoneOtp.trim());
-      onClose();
-      if (onSuccess) onSuccess('login');
-    } catch (err: unknown) {
-      const error = err as Error;
-      setErrorMessage(error.message || 'Invalid or expired SMS code. Please try again.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   // Handle Register Submit
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -458,7 +337,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       const cleanWhatsapp = whatsapp.trim() ? formatToE164Phone(whatsapp) : '';
 
       const autoVerify = isInstantAutoVerificationActive();
-      await register({
+      const autoLoggedIn = await register({
         fullName: fullName.trim(),
         avatarUrl: selectedAvatar,
         batchYear: parsedBatchNum,
@@ -486,6 +365,19 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         bio: '',
         password,
       });
+
+      if (!autoLoggedIn) {
+        if (typeof window !== 'undefined') {
+          try {
+            localStorage.removeItem(REGISTRATION_DRAFT_STORAGE_KEY);
+          } catch {}
+        }
+        setSuccessMessage(
+          'Registration successful! Please check your email inbox and click the confirmation link before signing in.'
+        );
+        setMode('login');
+        return;
+      }
 
       // Securely upload ID document to private storage and record in admin_doc_submissions
       if (verificationMethod === 'id_card_upload' && idProofFile) {
@@ -611,12 +503,17 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       )}
       <div
         onClick={onClose}
-        className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 md:p-6 overflow-y-auto bg-slate-900/40 dark:bg-slate-950/60 backdrop-blur-md animate-in fade-in duration-200"
+        className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 md:p-6 overflow-y-auto bg-slate-900/40 dark:bg-slate-950/60 backdrop-blur-md animate-in fade-in duration-200"
       >
       <div
-        className="relative w-full max-w-2xl my-auto bg-white/40 dark:bg-slate-900/50 backdrop-blur-2xl backdrop-saturate-180 rounded-2xl sm:rounded-3xl shadow-[0_24px_64px_-12px_rgba(15,23,42,0.35),inset_0_1px_1px_rgba(255,255,255,0.75)] dark:shadow-[0_24px_64px_-12px_rgba(0,0,0,0.65),inset_0_1px_1px_rgba(255,255,255,0.2)] border border-white/60 dark:border-white/15 ring-1 ring-white/35 dark:ring-white/10 overflow-hidden flex flex-col max-h-[94vh] sm:max-h-[92vh]"
+        className="relative w-full max-w-2xl sm:my-auto bg-white/85 dark:bg-slate-900/90 sm:bg-white/40 sm:dark:bg-slate-900/50 backdrop-blur-2xl backdrop-saturate-180 rounded-t-3xl sm:rounded-3xl shadow-[0_24px_64px_-12px_rgba(15,23,42,0.35),inset_0_1px_1px_rgba(255,255,255,0.75)] dark:shadow-[0_24px_64px_-12px_rgba(0,0,0,0.65),inset_0_1px_1px_rgba(255,255,255,0.2)] border-t sm:border border-white/60 dark:border-white/15 ring-1 ring-white/35 dark:ring-white/10 overflow-hidden flex flex-col max-h-[94dvh] sm:max-h-[92vh] pb-safe sm:pb-0"
         onClick={(e) => e.stopPropagation()}
       >
+        {/* Mobile Sheet Grab Handle */}
+        <div className="sm:hidden pt-2.5 pb-0.5 flex justify-center shrink-0 relative z-10">
+          <div className="w-10 h-1.5 rounded-full bg-slate-400/50 dark:bg-slate-600" />
+        </div>
+
         {/* Subtle Liquid Glass Refractive Highlights */}
         <div className="pointer-events-none absolute -top-24 -left-24 w-72 h-72 rounded-full bg-blue-400/20 dark:bg-blue-500/15 blur-3xl" />
         <div className="pointer-events-none absolute -bottom-24 -right-24 w-72 h-72 rounded-full bg-indigo-400/20 dark:bg-amber-500/10 blur-3xl" />

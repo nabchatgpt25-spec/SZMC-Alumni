@@ -7,6 +7,7 @@ export interface ChatPerson {
   batchYear: number;
   profession: string;
   verificationStatus?: string;
+  profileCompleted?: boolean;
   /** Last recorded activity timestamp from public.profiles.last_seen_at */
   lastSeenAt?: string | null;
 }

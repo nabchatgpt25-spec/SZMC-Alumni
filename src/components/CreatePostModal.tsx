@@ -31,6 +31,7 @@ import { POST_AUDIENCE_OPTIONS } from '../services/feedRankingService';
 import { QUAD_POST_CATEGORIES } from './community/quadConstants';
 import { searchAlumniForMention } from '../services/richInteractionsService';
 import type { MentionCandidate } from '../services/richInteractionsUtils';
+import { VerifiedAvatar } from './verification/VerifiedAvatar';
 
 interface CreatePostModalProps {
   isOpen: boolean;
@@ -38,6 +39,8 @@ interface CreatePostModalProps {
   authorId: number;
   authorName?: string;
   authorAvatar?: string;
+  authorVerified?: boolean;
+  authorProfileCompleted?: boolean;
   authorBatchYear?: number;
   canMarkEditorial?: boolean;
   initialTab?: 'text' | 'photo' | 'video' | 'link';
@@ -54,6 +57,8 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
   authorId,
   authorName = 'SZMC Alumnus',
   authorAvatar = '/assets/aistudio/images__1__2778177d.png',
+  authorVerified = false,
+  authorProfileCompleted = false,
   authorBatchYear,
   canMarkEditorial = false,
   initialTab = 'text',
@@ -342,25 +347,34 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/70 backdrop-blur-xs animate-in fade-in duration-200"
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-xs animate-in fade-in duration-200"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col max-h-[92vh]">
+      <div className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-t-3xl sm:rounded-3xl shadow-2xl border-t sm:border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col max-h-[94dvh] sm:max-h-[92vh]">
+        {/* Mobile Sheet Grab Handle */}
+        <div className="sm:hidden pt-2.5 pb-0.5 flex justify-center shrink-0">
+          <div className="w-10 h-1.5 rounded-full bg-slate-300 dark:bg-slate-700" />
+        </div>
+
         {/* Header */}
-        <div className="px-5 py-3.5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <img
+        <div className="px-4 sm:px-5 py-2.5 sm:py-3.5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <VerifiedAvatar
               src={authorAvatar}
               alt={authorName}
-              className="w-9 h-9 rounded-full object-cover ring-2 ring-blue-500/20"
+              verified={authorVerified}
+              profileCompleted={authorProfileCompleted}
+              size="sm"
+              imgClassName="w-9 h-9"
+              unverifiedClassName="rounded-full ring-2 ring-blue-500/20"
             />
-            <div>
-              <h3 className="font-bold text-slate-900 dark:text-white text-sm">Create Post</h3>
-              <p className="text-[11px] text-slate-400 flex items-center gap-1">
-                <Globe className="w-3 h-3 text-blue-500" />
-                <span>
+            <div className="min-w-0">
+              <h3 className="font-bold text-slate-900 dark:text-white text-sm truncate">Create Post</h3>
+              <p className="text-[11px] text-slate-400 flex items-center gap-1 truncate">
+                <Globe className="w-3 h-3 text-blue-500 shrink-0" />
+                <span className="truncate">
                   {POST_AUDIENCE_OPTIONS.find((a) => a.id === audience)?.label || 'Public (The Quad)'}
                 </span>
               </p>
@@ -368,11 +382,11 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
           </div>
 
           {/* Mode Switcher (Editor vs Live Preview) */}
-          <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl">
+          <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl shrink-0">
             <button
               type="button"
               onClick={() => setActiveViewMode('editor')}
-              className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+              className={`min-h-[34px] px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
                 activeViewMode === 'editor'
                   ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-xs'
                   : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
@@ -383,7 +397,7 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
             <button
               type="button"
               onClick={() => setActiveViewMode('preview')}
-              className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1 ${
+              className={`min-h-[34px] px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1 ${
                 activeViewMode === 'preview'
                   ? 'bg-white dark:bg-slate-700 text-blue-600 dark:text-blue-400 shadow-xs'
                   : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
@@ -395,8 +409,10 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
           </div>
 
           <button
+            type="button"
             onClick={onClose}
-            className="p-1.5 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 cursor-pointer transition-colors"
+            aria-label="Close composer"
+            className="min-w-[44px] min-h-[44px] -mr-1.5 flex items-center justify-center rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 cursor-pointer transition-colors shrink-0 active:scale-95"
           >
             <X className="w-5 h-5" />
           </button>
@@ -914,13 +930,13 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
         />
 
         {/* Footer: Facebook-style Photo, Video, Link action triggers */}
-        <div className="px-4 sm:px-5 py-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between bg-slate-50/70 dark:bg-slate-900/60">
+        <div className="px-3.5 sm:px-5 pt-2.5 pb-safe sm:py-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-2 bg-slate-50/70 dark:bg-slate-900/60 shrink-0">
           <div className="flex items-center gap-1 sm:gap-2">
             {/* Photo Button */}
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-slate-700 dark:text-slate-300 hover:bg-emerald-50 hover:text-emerald-700 dark:hover:bg-emerald-950/40 dark:hover:text-emerald-300 text-xs font-bold transition-colors cursor-pointer"
+              className="min-h-[44px] inline-flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-xl text-slate-700 dark:text-slate-300 hover:bg-emerald-50 hover:text-emerald-700 dark:hover:bg-emerald-950/40 dark:hover:text-emerald-300 text-xs font-bold transition-colors cursor-pointer active:scale-95"
               title="Add Photos from Computer Storage"
             >
               <ImageIcon className="w-4 h-4 text-emerald-500 shrink-0" />
@@ -934,7 +950,7 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
                 setShowVideoUploadPicker(true);
                 videoFileInputRef.current?.click();
               }}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-slate-700 dark:text-slate-300 hover:bg-rose-50 hover:text-rose-700 dark:hover:bg-rose-950/40 dark:hover:text-rose-300 text-xs font-bold transition-colors cursor-pointer"
+              className="min-h-[44px] inline-flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-xl text-slate-700 dark:text-slate-300 hover:bg-rose-50 hover:text-rose-700 dark:hover:bg-rose-950/40 dark:hover:text-rose-300 text-xs font-bold transition-colors cursor-pointer active:scale-95"
               title="Upload Video from Computer Storage"
             >
               <VideoIcon className="w-4 h-4 text-rose-500 shrink-0" />
@@ -945,8 +961,9 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
             <button
               type="button"
               onClick={() => setShowVideoInputDrawer(true)}
-              className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-slate-700 dark:text-slate-300 hover:bg-blue-50 hover:text-blue-700 dark:hover:bg-blue-950/40 dark:hover:text-blue-300 text-xs font-bold transition-colors cursor-pointer"
+              className="min-w-[44px] min-h-[44px] inline-flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-xl text-slate-700 dark:text-slate-300 hover:bg-blue-50 hover:text-blue-700 dark:hover:bg-blue-950/40 dark:hover:text-blue-300 text-xs font-bold transition-colors cursor-pointer active:scale-95"
               title="Attach Link"
+              aria-label="Attach Link"
             >
               <LinkIcon className="w-4 h-4 text-blue-500 shrink-0" />
               <span className="hidden sm:inline">Link</span>
@@ -956,12 +973,13 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
             <button
               type="button"
               onClick={() => setShowPollBuilder((prev) => !prev)}
-              className={`inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-bold transition-colors cursor-pointer ${
+              className={`min-w-[44px] min-h-[44px] inline-flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-2 rounded-xl text-xs font-bold transition-colors cursor-pointer active:scale-95 ${
                 showPollBuilder
                   ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300'
                   : 'text-slate-700 dark:text-slate-300 hover:bg-indigo-50 hover:text-indigo-700 dark:hover:bg-indigo-950/40 dark:hover:text-indigo-300'
               }`}
               title="Attach a Community Poll"
+              aria-label="Attach a Community Poll"
             >
               <BarChart3 className="w-4 h-4 text-indigo-500 shrink-0" />
               <span className="hidden sm:inline">Poll</span>
@@ -975,7 +993,7 @@ export const CreatePostModal: React.FC<CreatePostModalProps> = ({
               isProcessingMedia ||
               (!content.trim() && totalMediaCount === 0 && !detectedUrl && !hasValidPoll)
             }
-            className="px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-sm active:scale-95"
+            className="min-h-[44px] px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-sm active:scale-95 whitespace-nowrap shrink-0"
           >
             {isSubmitting ? (
               <>

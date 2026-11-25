@@ -7,6 +7,7 @@ import {
   formatStructuredPreview,
   parseStructuredChatMessage,
 } from '../utils/structuredChat';
+import { isPublicRowProfileCompleted } from '../utils/profileCompletion';
 import {
   decodeSilentMessageBody,
   encodeSilentMessageBody,
@@ -125,6 +126,7 @@ interface ProfileLite {
   profession?: string;
   batch_year?: number | null;
   verification_status?: string | null;
+  profile_completed?: boolean;
 }
 
 function toChatPerson(profile: ProfileLite | undefined, fallbackId: number): ChatPerson {
@@ -144,6 +146,7 @@ function toChatPerson(profile: ProfileLite | undefined, fallbackId: number): Cha
     batchYear: Number(profile.batch_year ?? profile.batch) || 20,
     profession: profile.profession || 'Physician',
     verificationStatus: profile.verification_status ?? (profile.is_verified ? 'verified' : 'unverified'),
+    profileCompleted: Boolean(profile.profile_completed),
     lastSeenAt: profile.last_seen_at ?? null,
   };
 }
@@ -439,6 +442,7 @@ async function loadPeople(profileIds: number[]): Promise<Map<number, ProfileLite
         profession: row.profession || existing?.profession,
         batch_year: row.batch_year ?? existing?.batch_year ?? null,
         verification_status: row.verification_status ?? existing?.verification_status ?? null,
+        profile_completed: isPublicRowProfileCompleted(row),
       });
     });
 
@@ -460,6 +464,7 @@ async function loadPeople(profileIds: number[]): Promise<Map<number, ProfileLite
               profession: person.profession || row.profession,
               batch_year: person.batch_year ?? row.batch_year ?? null,
               verification_status: person.verification_status ?? row.verification_status ?? null,
+              profile_completed: person.profile_completed || isPublicRowProfileCompleted(row),
             });
           }
         });
@@ -978,6 +983,60 @@ export async function addGroupMember(conversationId: string, memberProfileId: nu
 // ---------------------------------------------------------------------------
 // 2C. CHAT PHOTO UPLOAD (Supabase Storage 'chat-media' with compressed fallback)
 // ---------------------------------------------------------------------------
+const CHAT_MEDIA_SIGNED_TTL_SECONDS = 60 * 60 * 24 * 7;
+
+function extractChatMediaObjectPath(urlOrPath: string | null | undefined): string | null {
+  if (!urlOrPath || typeof urlOrPath !== 'string') return null;
+  if (urlOrPath.startsWith('storage://chat-media/')) {
+    return urlOrPath.slice('storage://chat-media/'.length).split('?')[0];
+  }
+  const match = urlOrPath.match(/\/storage\/v1\/object\/(?:public|sign|authenticated)\/chat-media\/([^?#]+)/i);
+  if (match?.[1]) {
+    try {
+      return decodeURIComponent(match[1]);
+    } catch {
+      return match[1];
+    }
+  }
+  return null;
+}
+
+export async function resolveChatMediaUrls(messages: ChatMessage[]): Promise<ChatMessage[]> {
+  if (!isSupabaseConfigured || messages.length === 0) return messages;
+  const targets: Array<{ idx: number; path: string }> = [];
+  messages.forEach((m, idx) => {
+    const path = extractChatMediaObjectPath(m.mediaUrl);
+    if (path) targets.push({ idx, path });
+  });
+  if (targets.length === 0) return messages;
+
+  try {
+    const uniquePaths = Array.from(new Set(targets.map((t) => t.path)));
+    const { data, error } = await supabase.storage
+      .from('chat-media')
+      .createSignedUrls(uniquePaths, CHAT_MEDIA_SIGNED_TTL_SECONDS);
+
+    if (error || !Array.isArray(data)) return messages;
+
+    const urlByPath = new Map<string, string>();
+    data.forEach((entry: any) => {
+      if (entry?.path && entry?.signedUrl) {
+        urlByPath.set(entry.path, entry.signedUrl);
+      }
+    });
+    if (urlByPath.size === 0) return messages;
+
+    return messages.map((m, idx) => {
+      const target = targets.find((t) => t.idx === idx);
+      if (!target) return m;
+      const freshUrl = urlByPath.get(target.path);
+      return freshUrl ? { ...m, mediaUrl: freshUrl } : m;
+    });
+  } catch {
+    return messages;
+  }
+}
+
 export async function uploadChatImage(file: File, conversationId: string): Promise<string> {
   if (!file.type || !file.type.startsWith('image/')) {
     throw new MessagingError('Please select a valid image file (JPG, PNG, WebP, or GIF).');
@@ -986,7 +1045,7 @@ export async function uploadChatImage(file: File, conversationId: string): Promi
     throw new MessagingError('Image must be smaller than 8 MB.');
   }
 
-  // Try Supabase Storage first for lightweight DB rows & CDN delivery
+  // Try Supabase Storage first for lightweight DB rows & private participant-scoped access
   if (isSupabaseConfigured && conversationId) {
     try {
       const ext = (file.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '') || 'jpg';
@@ -996,6 +1055,11 @@ export async function uploadChatImage(file: File, conversationId: string): Promi
         .upload(path, file, { contentType: file.type, upsert: false });
 
       if (!uploadErr) {
+        const { data: signed } = await supabase.storage
+          .from('chat-media')
+          .createSignedUrl(path, CHAT_MEDIA_SIGNED_TTL_SECONDS);
+        if (signed?.signedUrl) return signed.signedUrl;
+
         const { data: pub } = supabase.storage.from('chat-media').getPublicUrl(path);
         if (pub?.publicUrl) return pub.publicUrl;
       }
@@ -1054,8 +1118,9 @@ export async function listMessagesPage(
   const rows = data ?? [];
   const hasMore = rows.length > pageSize;
   const pageRows = hasMore ? rows.slice(0, pageSize) : rows;
+  const mappedMessages = await resolveChatMediaUrls(pageRows.map(toChatMessage).reverse());
   return {
-    messages: pageRows.map(toChatMessage).reverse(),
+    messages: mappedMessages,
     hasMore,
   };
 }

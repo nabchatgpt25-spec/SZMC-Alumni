@@ -13,6 +13,26 @@ import {
   fetchPostPollsMap,
   notifyMentionedUsers,
 } from './richInteractionsService';
+import { isPublicRowProfileCompleted } from '../utils/profileCompletion';
+
+const POST_AUTHOR_PUBLIC_COLS =
+  'id, full_name, avatar_url, batch_year, verification_status, profession, position, institution, cadre, specialty, degree, city, country, bio, career_history';
+
+async function fetchAuthorCompletionMap(authorIds: number[]): Promise<Map<number, boolean>> {
+  const map = new Map<number, boolean>();
+  const unique = Array.from(new Set(authorIds.filter((id) => Number.isFinite(id) && id > 0)));
+  if (unique.length === 0) return map;
+  try {
+    const { data } = await supabase
+      .from('alumni_profiles')
+      .select(POST_AUTHOR_PUBLIC_COLS)
+      .in('id', unique);
+    (data || []).forEach((row: any) => {
+      map.set(Number(row.id), isPublicRowProfileCompleted(row));
+    });
+  } catch {}
+  return map;
+}
 
 /**
  * Fetch feed posts via Supabase get_feed RPC.
@@ -34,6 +54,10 @@ export async function fetchFeedPosts(limit = 25, offset = 0, currentUserId?: num
     });
 
     if (!rpcErr && Array.isArray(rpcData)) {
+      const rpcAuthorIds = Array.from(
+        new Set(rpcData.map((r: any) => Number(r.user_id || r.author_id)).filter(Boolean))
+      );
+      const completionMap = await fetchAuthorCompletionMap(rpcAuthorIds);
       return rpcData.map((row: any) => {
         const rawComments = Array.isArray(row.comments) ? row.comments : [];
         const formattedComments: PostComment[] = rawComments.map((c: any) => ({
@@ -59,13 +83,15 @@ export async function fetchFeedPosts(limit = 25, offset = 0, currentUserId?: num
           ? (() => { try { return JSON.parse(row.videos); } catch { return []; } })()
           : [];
 
+        const uid = Number(row.user_id || row.author_id);
         return {
           id: Number(row.id),
-          userId: Number(row.user_id || row.author_id),
+          userId: uid,
           fullName: row.full_name || 'SZMC Alumnus',
           avatarUrl: row.avatar_url || '/assets/aistudio/images__1__2778177d.png',
           batchYear: row.batch_year ? Number(row.batch_year) : undefined,
           verified: Boolean(row.verified),
+          profileCompleted: completionMap.get(uid) ?? false,
           profession: row.profession || 'Doctor / Medical Professional',
           institution: row.institution || undefined,
           content: row.content || '',
@@ -145,7 +171,7 @@ export async function fetchFeedPosts(limit = 25, offset = 0, currentUserId?: num
         ? Promise.resolve(
             supabase
               .from('alumni_profiles')
-              .select('id, full_name, avatar_url, batch_year, verification_status, profession, institution')
+              .select(POST_AUTHOR_PUBLIC_COLS)
               .in('id', authorIds)
           )
         : Promise.resolve({ data: [] }),
@@ -250,10 +276,9 @@ export async function fetchFeedPosts(limit = 25, offset = 0, currentUserId?: num
     const supabaseMapped = rankedPosts.map((row: any) => {
       const author = authorMap.get(Number(row.author_id)) || {};
       const meta = typeof row.link_metadata === 'object' && row.link_metadata ? row.link_metadata : {};
-      const isDocNurul = Number(row.author_id) === 1 || Number(row.author_id) === 10002 || String(meta.authorName || '').includes('Nurul');
-      const authorName = author.full_name || meta.authorName || (isDocNurul ? 'Dr. Nurul Anam Bashir' : 'SZMC Alumnus');
+      const authorName = author.full_name || meta.authorName || 'SZMC Alumnus';
       const authorAvatar = author.avatar_url || meta.authorAvatar || '/assets/aistudio/images__1__2778177d.png';
-      const authorBatch = author.batch_year ? Number(author.batch_year) : (meta.authorBatch ? Number(meta.authorBatch) : (isDocNurul ? 25 : 20));
+      const authorBatch = author.batch_year ? Number(author.batch_year) : (meta.authorBatch ? Number(meta.authorBatch) : 20);
 
       const isBatchmate = Boolean(
         myBatchYear && authorBatch === myBatchYear && Number(row.author_id) !== currentUserId
@@ -268,7 +293,8 @@ export async function fetchFeedPosts(limit = 25, offset = 0, currentUserId?: num
         fullName: authorName,
         avatarUrl: authorAvatar,
         batchYear: authorBatch,
-        verified: true,
+        verified: author.verification_status === 'verified',
+        profileCompleted: isPublicRowProfileCompleted(author),
         profession: author.profession || 'Doctor / Medical Professional',
         institution: author.institution || undefined,
         content: row.content || '',
@@ -292,7 +318,7 @@ export async function fetchFeedPosts(limit = 25, offset = 0, currentUserId?: num
         author: authorName,
         authorAvatar: authorAvatar,
         authorBatch: authorBatch,
-        authorRole: isDocNurul ? 'Super Admin' : 'Alumnus',
+        authorRole: 'Alumnus',
         timestamp: row.created_at || 'Just now',
         likes: Number(row.likes_count || 0),
         liked: myLikedPostIds.has(Number(row.id)),
@@ -459,9 +485,14 @@ export async function fetchQuadFeedPage(params: {
       const hasMore = data.length > limit;
       const slice = hasMore ? data.slice(0, limit) : data;
       const mapped = slice.map(formatQuadRpcRow);
-      const pollsMap = await fetchPostPollsMap(mapped.map((p) => p.id), params.currentUserId);
+      const quadAuthorIds = mapped.map((p) => p.userId).filter(Boolean);
+      const [pollsMap, completionMap] = await Promise.all([
+        fetchPostPollsMap(mapped.map((p) => p.id), params.currentUserId),
+        fetchAuthorCompletionMap(quadAuthorIds),
+      ]);
       const hydrated = mapped.map((p) => ({
         ...p,
+        profileCompleted: completionMap.get(p.userId) ?? false,
         poll: pollsMap.get(p.id) || p.poll || null,
       }));
       const last = hydrated[hydrated.length - 1];
@@ -580,7 +611,7 @@ export async function createPost(params: {
 
       const { data: profileByAuth } = await supabase
         .from('alumni_profiles')
-        .select('id, full_name, avatar_url, batch_year, verification_status')
+        .select(POST_AUTHOR_PUBLIC_COLS)
         .eq('auth_user_id', authUser.id)
         .maybeSingle();
 
@@ -607,32 +638,24 @@ export async function createPost(params: {
               academic_group: null,
               is_public: true,
             })
-            .select('id, full_name, avatar_url, batch_year, verification_status')
+            .select(POST_AUTHOR_PUBLIC_COLS)
             .maybeSingle();
 
           if (createdProf?.id) {
             realAuthorId = Number(createdProf.id);
             authorProfile = createdProf;
-            try {
-              await supabase
-                .from('alumni_profiles')
-                .update({
-                  verification_status: 'verified',
-                  verification_method: 'admin_instant',
-                })
-                .eq('id', createdProf.id);
-            } catch {}
           }
         } catch {}
       }
     }
 
-    // Check if params.authorId exists in alumni_profiles (only when not overriding an authenticated caller's own ID)
-    if (!realAuthorId && params.authorId && params.authorId > 0) {
+    // Resolve profile by params.authorId only if caller matches or no auth RPC matched
+    if (!realAuthorId && authUser?.id && params.authorId && params.authorId > 0) {
       const { data: profileById } = await supabase
         .from('alumni_profiles')
-        .select('id, full_name, avatar_url, batch_year, verification_status')
+        .select(POST_AUTHOR_PUBLIC_COLS)
         .eq('id', params.authorId)
+        .eq('auth_user_id', authUser.id)
         .maybeSingle();
 
       if (profileById?.id) {
@@ -641,8 +664,11 @@ export async function createPost(params: {
       }
     }
 
-    if (!realAuthorId) {
-      realAuthorId = params.authorId || 10021;
+    if (!realAuthorId || realAuthorId <= 0) {
+      return {
+        success: false,
+        error: 'Please sign in with an active alumni profile before publishing a post.',
+      };
     }
 
     const canonicalCat = params.communityCategory || params.category || 'General Discussion';
@@ -723,90 +749,69 @@ export async function createPost(params: {
 
     if (insertErr || !insertedRow) {
       console.warn('Direct Supabase client insert hit error, attempting /api/posts fallback:', insertErr?.message);
-        try {
-          const authHeaders = await getClientAuthHeaders();
-          const apiRes = await fetch('/api/posts', {
-            method: 'POST',
-            headers: authHeaders,
-            body: JSON.stringify({
-              author_id: realAuthorId,
-              content: safeContent,
-              category: params.category || 'General Update',
-              images: cleanImages,
-              videos: cleanVideos,
-              linked_url: params.linked_url,
-              link_metadata: metadataWithLayout,
-            }),
-          });
-          const apiJson = await apiRes.json();
-          const returnedPost = apiJson?.post || apiJson;
-          if (apiRes.ok && (returnedPost?.id || apiJson?.id)) {
-            const pId = Number(returnedPost?.id || apiJson?.id);
-            return {
-              success: true,
-              post: {
-                id: pId,
-                userId: Number(returnedPost?.author_id || returnedPost?.userId || realAuthorId),
-                fullName: returnedPost?.fullName || authorProfile?.full_name || 'SZMC Alumnus',
-                avatarUrl: returnedPost?.avatarUrl || authorProfile?.avatar_url || '/assets/aistudio/images__1__2778177d.png',
-                batchYear: Number(returnedPost?.batchYear || authorProfile?.batch_year || 25),
-                verified: true,
-                content: returnedPost?.content || safeContent,
-                category: returnedPost?.category || params.category || 'General Update',
-                images: returnedPost?.images || cleanImages,
-                videos: returnedPost?.videos || cleanVideos,
-                likesCount: 0,
-                commentsCount: 0,
-                createdAt: returnedPost?.created_at || 'Just now',
-                likedByMe: false,
-                comments: [],
-                author: returnedPost?.fullName || authorProfile?.full_name || 'SZMC Alumnus',
-                authorAvatar: returnedPost?.avatarUrl || authorProfile?.avatar_url || '/assets/aistudio/images__1__2778177d.png',
-                authorBatch: Number(returnedPost?.batchYear || authorProfile?.batch_year || 25),
-                authorRole: 'Alumnus',
-                timestamp: 'Just now',
-                likes: 0,
-                liked: false,
-                commentsList: [],
-                shares: 0,
-              },
-            };
-          }
-        } catch (serverErr) {
-          console.warn('Fallback /api/posts notice:', serverErr);
-        }
-
-        const fallbackId = Date.now();
-        return {
-          success: true,
-          post: {
-            id: fallbackId,
-            userId: realAuthorId,
-            fullName: authorProfile?.full_name || 'Dr. Nurul Anam Bashir',
-            avatarUrl: authorProfile?.avatar_url || '/assets/aistudio/images__1__2778177d.png',
-            batchYear: authorProfile?.batch_year || 25,
-            verified: true,
+      let fallbackErrorMsg = insertErr?.message || 'Could not publish post to database.';
+      try {
+        const authHeaders = await getClientAuthHeaders();
+        const apiRes = await fetch('/api/posts', {
+          method: 'POST',
+          headers: authHeaders,
+          body: JSON.stringify({
+            author_id: realAuthorId,
             content: safeContent,
             category: params.category || 'General Update',
             images: cleanImages,
             videos: cleanVideos,
-            likesCount: 0,
-            commentsCount: 0,
-            createdAt: 'Just now',
-            likedByMe: false,
-            comments: [],
-            author: authorProfile?.full_name || 'Dr. Nurul Anam Bashir',
-            authorAvatar: authorProfile?.avatar_url || '/assets/aistudio/images__1__2778177d.png',
-            authorBatch: authorProfile?.batch_year || 25,
-            authorRole: 'Super Admin',
-            timestamp: 'Just now',
-            likes: 0,
-            liked: false,
-            commentsList: [],
-            shares: 0,
-          },
-        };
+            linked_url: params.linked_url,
+            link_metadata: metadataWithLayout,
+          }),
+        });
+        const apiJson = await apiRes.json().catch(() => ({}));
+        const returnedPost = apiJson?.post || apiJson;
+        if (apiRes.ok && (returnedPost?.id || apiJson?.id)) {
+          const pId = Number(returnedPost?.id || apiJson?.id);
+          return {
+            success: true,
+            post: {
+              id: pId,
+              userId: Number(returnedPost?.author_id || returnedPost?.userId || realAuthorId),
+              fullName: returnedPost?.fullName || authorProfile?.full_name || 'SZMC Alumnus',
+              avatarUrl: returnedPost?.avatarUrl || authorProfile?.avatar_url || '/assets/aistudio/images__1__2778177d.png',
+              batchYear: Number(returnedPost?.batchYear || authorProfile?.batch_year || 25),
+              verified: authorProfile?.verification_status === 'verified',
+              content: returnedPost?.content || safeContent,
+              category: returnedPost?.category || params.category || 'General Update',
+              images: returnedPost?.images || cleanImages,
+              videos: returnedPost?.videos || cleanVideos,
+              likesCount: 0,
+              commentsCount: 0,
+              createdAt: returnedPost?.created_at || 'Just now',
+              likedByMe: false,
+              comments: [],
+              author: returnedPost?.fullName || authorProfile?.full_name || 'SZMC Alumnus',
+              authorAvatar: returnedPost?.avatarUrl || authorProfile?.avatar_url || '/assets/aistudio/images__1__2778177d.png',
+              authorBatch: Number(returnedPost?.batchYear || authorProfile?.batch_year || 25),
+              authorRole: 'Alumnus',
+              timestamp: 'Just now',
+              likes: 0,
+              liked: false,
+              commentsList: [],
+              shares: 0,
+            },
+          };
+        }
+        if (apiJson?.error) {
+          fallbackErrorMsg = String(apiJson.error);
+        }
+      } catch (serverErr: any) {
+        console.warn('Fallback /api/posts notice:', serverErr);
+        if (serverErr?.message) fallbackErrorMsg = String(serverErr.message);
       }
+
+      return {
+        success: false,
+        error: fallbackErrorMsg,
+      };
+    }
 
     const createdPostId = Number(insertedRow.id);
     let attachedPoll = null;
@@ -837,6 +842,8 @@ export async function createPost(params: {
         fullName: authorProfile?.full_name || 'You',
         avatarUrl: authorProfile?.avatar_url || '/assets/aistudio/images__1__2778177d.png',
         batchYear: authorProfile?.batch_year ? Number(authorProfile.batch_year) : undefined,
+        verified: authorProfile?.verification_status === 'verified',
+        profileCompleted: isPublicRowProfileCompleted(authorProfile),
         content: insertedRow.content,
         category: insertedRow.community_category || canonicalCat,
         communityCategory: insertedRow.community_category || canonicalCat,
@@ -883,16 +890,6 @@ export async function createPost(params: {
  */
 export async function togglePostLike(postId: number, userId: number): Promise<boolean> {
   try {
-    // 1. Trigger realtime broadcast to all alumni
-    void (async () => {
-      const authHeaders = await getClientAuthHeaders();
-      fetch(`/api/posts/${postId}/like`, {
-        method: 'POST',
-        headers: authHeaders,
-        body: JSON.stringify({ userId }),
-      }).catch(() => {});
-    })();
-
     const { data: existing } = await supabase
       .from('post_likes')
       .select('id')
@@ -901,14 +898,32 @@ export async function togglePostLike(postId: number, userId: number): Promise<bo
       .maybeSingle();
 
     if (existing) {
-      // Unliking
-      await supabase.from('post_likes').delete().eq('id', existing.id);
-      return false;
+      const { error: delErr } = await supabase.from('post_likes').delete().eq('id', existing.id);
+      if (!delErr) {
+        void (async () => {
+          const authHeaders = await getClientAuthHeaders();
+          fetch('/api/feed/broadcast', {
+            method: 'POST',
+            headers: authHeaders,
+            body: JSON.stringify({ type: 'POST_LIKED', postId, userId, liked: false }),
+          }).catch(() => {});
+        })();
+        return false;
+      }
     } else {
-      // Liking
-      const { error: insErr } = await supabase.from('post_likes').insert({ post_id: postId, user_id: userId, reaction: 'like' });
+      const { error: insErr } = await supabase
+        .from('post_likes')
+        .insert({ post_id: postId, user_id: userId, reaction: 'like' });
       if (!insErr) {
-        // Find post author to notify them directly via Supabase
+        void (async () => {
+          const authHeaders = await getClientAuthHeaders();
+          fetch('/api/feed/broadcast', {
+            method: 'POST',
+            headers: authHeaders,
+            body: JSON.stringify({ type: 'POST_LIKED', postId, userId, liked: true }),
+          }).catch(() => {});
+        })();
+
         const { data: postData } = await supabase
           .from('posts')
           .select('author_id')
@@ -916,7 +931,6 @@ export async function togglePostLike(postId: number, userId: number): Promise<bo
           .maybeSingle();
 
         if (postData && postData.author_id && Number(postData.author_id) !== userId) {
-          // Get liking user name
           const { data: likerData } = await supabase
             .from('alumni_profiles')
             .select('full_name')
@@ -938,10 +952,22 @@ export async function togglePostLike(postId: number, userId: number): Promise<bo
         return true;
       }
     }
+
+    // Fallback to server endpoint only if direct Supabase RLS rejected the operation
+    const authHeaders = await getClientAuthHeaders();
+    const apiRes = await fetch(`/api/posts/${postId}/like`, {
+      method: 'POST',
+      headers: authHeaders,
+      body: JSON.stringify({ userId }),
+    });
+    if (apiRes.ok) {
+      const json = await apiRes.json().catch(() => ({}));
+      return Boolean(json?.liked);
+    }
   } catch (err) {
     console.warn('togglePostLike notice:', err);
   }
-  return true;
+  return false;
 }
 
 /**
@@ -991,32 +1017,10 @@ export async function addComment(
       }
     }
 
-    if (insErr && (insErr.code === '23503' || String(insErr.message || '').includes('foreign key'))) {
-      const retryRes = await supabase
-        .from('post_comments')
-        .insert({
-          post_id: postId,
-          user_id: 10002,
-          content: cleanContent,
-        })
-        .select('id, created_at')
-        .single();
-      if (!retryRes.error && retryRes.data) {
-        commentData = retryRes.data;
-        insErr = null;
-      }
-    }
-
-    if (commentData?.id) {
-      insertedId = Number(commentData.id);
-      insertedCreatedAt = commentData.created_at;
-    }
-
-    // Broadcast comment instantly to all online alumni (skip duplicate DB insert if already persisted)
-    void (async () => {
+    if (insErr && !commentData?.id) {
       const authHeaders = await getClientAuthHeaders();
       const endpoint = parentCommentId ? `/api/posts/${postId}/reply` : `/api/posts/${postId}/comment`;
-      fetch(endpoint, {
+      const apiRes = await fetch(endpoint, {
         method: 'POST',
         headers: authHeaders,
         body: JSON.stringify({
@@ -1025,12 +1029,42 @@ export async function addComment(
           fullName,
           avatarUrl,
           parentCommentId: parentCommentId || undefined,
-          skipDbInsert: Boolean(insertedId),
-          commentId: insertedId,
-          createdAt: insertedCreatedAt,
+          skipDbInsert: false,
         }),
-      }).catch(() => {});
-    })();
+      });
+      if (!apiRes.ok) {
+        return false;
+      }
+      const apiJson = await apiRes.json().catch(() => ({}));
+      const serverRow = apiJson?.comment || apiJson?.reply;
+      if (serverRow?.id) {
+        insertedId = Number(serverRow.id);
+        insertedCreatedAt = serverRow.created_at || serverRow.createdAt;
+      }
+    } else if (commentData?.id) {
+      insertedId = Number(commentData.id);
+      insertedCreatedAt = commentData.created_at;
+
+      // Broadcast comment instantly to all online alumni (skip duplicate DB insert since already persisted)
+      void (async () => {
+        const authHeaders = await getClientAuthHeaders();
+        const endpoint = parentCommentId ? `/api/posts/${postId}/reply` : `/api/posts/${postId}/comment`;
+        fetch(endpoint, {
+          method: 'POST',
+          headers: authHeaders,
+          body: JSON.stringify({
+            userId,
+            content: cleanContent,
+            fullName,
+            avatarUrl,
+            parentCommentId: parentCommentId || undefined,
+            skipDbInsert: true,
+            commentId: insertedId,
+            createdAt: insertedCreatedAt,
+          }),
+        }).catch(() => {});
+      })();
+    }
 
     // Notify post author
     const { data: postData } = await supabase

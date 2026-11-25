@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo } from 'react';
 import {
   Home,
   Users,
@@ -24,6 +24,7 @@ import {
   Settings,
   Sparkles,
   Compass,
+  Bell,
 } from 'lucide-react';
 import { PWAInstallButton } from './PWAInstallButton';
 import { useTheme } from '../context/ThemeContext';
@@ -31,6 +32,7 @@ import { useAuth } from '../context/AuthContext';
 import { SZMCLogo } from './SZMCLogo';
 import { loadVouchRequests } from '../utils/verificationService';
 import { isUserSuperAdmin, isUserGeneralAdmin, isUserSubAdmin } from '../types';
+import { prefetchRoute } from '../utils/routePrefetch';
 
 export interface NavItemConfig {
   id: string;
@@ -56,7 +58,7 @@ interface NavSection {
   items: NavItemConfig[];
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({
+export const Sidebar: React.FC<SidebarProps> = React.memo(({
   activeTab,
   onSelectTab,
   isOpen,
@@ -68,7 +70,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const { isDark, toggleTheme } = useTheme();
   const { currentUser } = useAuth();
   const isVerified = (currentUser.verificationStatus || 'verified') === 'verified';
-  const pendingCount = loadVouchRequests().filter((r) => r.status === 'pending').length;
+  const pendingCount = useMemo(
+    () => loadVouchRequests().filter((r) => r.status === 'pending').length,
+    [currentUser.id, activeTab]
+  );
   const isSuperAdmin = isUserSuperAdmin(currentUser);
   const isGeneralAdmin = isUserGeneralAdmin(currentUser);
   const isSubAdmin = isUserSubAdmin(currentUser);
@@ -96,6 +101,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       badge: unreadMessagesCount > 0 ? (unreadMessagesCount > 99 ? '99+' : String(unreadMessagesCount)) : undefined,
       badgeType: unreadMessagesCount > 0 ? 'count' : undefined,
     },
+    { id: 'notifications', label: 'Notifications', icon: Bell },
     { id: 'news', label: 'News & Blog', icon: Newspaper, badge: 'SOON', badgeType: 'soon' },
     { id: 'institutions', label: 'Institutions', icon: Building2, badge: 'SOON', badgeType: 'soon' },
   ];
@@ -138,11 +144,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <button
         key={item.id}
         type="button"
+        onMouseEnter={() => prefetchRoute(item.id)}
+        onFocus={() => prefetchRoute(item.id)}
+        onTouchStart={() => prefetchRoute(item.id)}
         onClick={() => {
           onSelectTab(item.id);
           onClose();
         }}
-        className={`w-full flex items-center justify-between gap-2.5 px-3 py-2 rounded-xl text-xs sm:text-[13px] font-medium transition-all text-left cursor-pointer group ${
+        className={`w-full min-h-[44px] lg:min-h-[38px] flex items-center justify-between gap-2.5 px-3 py-2.5 lg:py-2 rounded-xl text-[13px] font-medium transition-colors text-left cursor-pointer group ${
           active
             ? 'bg-blue-600 text-white font-bold shadow-md shadow-blue-600/25'
             : 'text-slate-600 dark:text-slate-300 hover:text-slate-950 dark:hover:text-white hover:bg-blue-100/50 dark:hover:bg-blue-900/30'
@@ -162,13 +171,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {item.badge && (
           isLive ? (
             <span
-              className={`shrink-0 inline-flex items-center gap-1.5 text-[9px] font-black uppercase px-2 py-0.5 rounded-md border tracking-wider transition-all animate-pulse ${
+              className={`shrink-0 inline-flex items-center gap-1.5 text-[9px] font-black uppercase px-2 py-0.5 rounded-md border tracking-wider ${
                 active
                   ? 'bg-rose-500 text-white border-white/40'
                   : 'bg-rose-500/15 text-rose-600 dark:text-rose-400 border-rose-500/30'
               }`}
             >
-              <span className="w-1.5 h-1.5 rounded-full bg-rose-500 dark:bg-rose-400 animate-ping shrink-0" />
+              <span className="w-1.5 h-1.5 rounded-full bg-rose-500 dark:bg-rose-400 shrink-0" />
               <span>LIVE</span>
             </span>
           ) : item.badgeType === 'count' ? (
@@ -207,14 +216,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
         />
       )}
 
-      {/* Subtle Premium Bluish Liquid-Glass Sidebar Container */}
+      {/* Lightweight Crisp Sidebar Container (avoids heavy backdrop-blur-2xl repaints) */}
       <aside
-        className={`fixed top-0 left-0 z-50 h-screen w-72 max-w-[85vw] bg-gradient-to-b from-blue-50/90 via-slate-50/90 to-blue-50/85 dark:from-[#081226]/92 dark:via-[#0b172e]/90 dark:to-[#091428]/92 backdrop-blur-2xl border-r border-blue-200/60 dark:border-blue-500/20 shadow-xl shadow-blue-950/5 dark:shadow-2xl dark:shadow-black/60 flex flex-col transition-transform duration-300 ease-in-out lg:translate-x-0 ${
+        className={`fixed top-0 left-0 z-50 h-[100dvh] w-72 max-w-[85vw] bg-gradient-to-b from-blue-50/96 via-slate-50/96 to-blue-50/95 dark:from-[#081226]/97 dark:via-[#0b172e]/97 dark:to-[#091428]/97 backdrop-blur-md border-r border-blue-200/60 dark:border-blue-500/20 shadow-xl shadow-blue-950/5 dark:shadow-2xl dark:shadow-black/60 flex flex-col transition-transform duration-200 ease-out lg:translate-x-0 ${
           isOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
         {/* Top Brand Header */}
-        <div className="h-18 px-5 flex items-center justify-between border-b border-blue-100/70 dark:border-blue-500/15 bg-white/40 dark:bg-blue-950/20 shrink-0">
+        <div className="h-14 sm:h-16 px-4 flex items-center justify-between border-b border-blue-100/70 dark:border-blue-500/15 bg-white/40 dark:bg-blue-950/20 shrink-0">
           <button
             type="button"
             onClick={() => {
@@ -223,7 +232,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             }}
             className="flex items-center gap-3 text-left cursor-pointer group min-w-0"
           >
-            <div className="w-10 h-10 rounded-2xl bg-white dark:bg-slate-800 p-1 border border-blue-200/70 dark:border-blue-500/25 flex items-center justify-center shadow-xs group-hover:scale-105 transition-transform overflow-hidden shrink-0">
+            <div className="w-9 h-9 rounded-xl bg-white dark:bg-slate-800 p-1 border border-blue-200/70 dark:border-blue-500/25 flex items-center justify-center shadow-xs group-hover:scale-105 transition-transform overflow-hidden shrink-0">
               <SZMCLogo className="w-full h-full" />
             </div>
             <div className="min-w-0">
@@ -239,7 +248,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="lg:hidden p-1.5 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-blue-100/50 dark:hover:bg-blue-900/40 cursor-pointer transition-colors"
+            className="lg:hidden min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-blue-100/50 dark:hover:bg-blue-900/40 cursor-pointer transition-colors"
             aria-label="Close navigation"
           >
             <X className="w-5 h-5" />
@@ -496,7 +505,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <PWAInstallButton variant="sidebar" className="w-full justify-center" />
           <div className="text-center text-[10px] text-slate-400 dark:text-slate-500 font-medium">
             <a
-              href="http://nurulanambashir.gt.tc/?i=1"
+              href="https://nurulanambashir.gt.tc/?i=1"
               target="_blank"
               rel="noopener noreferrer"
               className="text-blue-600 dark:text-blue-400 hover:underline font-semibold"
@@ -508,6 +517,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </aside>
     </>
   );
-};
+});
 
 export default Sidebar;

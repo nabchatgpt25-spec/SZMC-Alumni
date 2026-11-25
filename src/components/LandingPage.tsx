@@ -35,7 +35,7 @@ import { BatchMembersModal } from './landing/BatchMembersModal';
 import { VerificationExplainerModal } from './landing/VerificationExplainerModal';
 import { BloodNeededNowSection } from './landing/BloodNeededNowSection';
 import { LiquidGlassLoginBar } from './landing/LiquidGlassLoginBar';
-import { CursorSpotlight, MagneticWrap } from './motion/CinematicMotion';
+import { MagneticWrap } from './motion/CinematicMotion';
 import { useSiteConfig } from '../services/siteConfigService';
 
 interface LandingPageProps {
@@ -150,26 +150,24 @@ export const LandingPage: React.FC<LandingPageProps> = ({
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-sans selection:bg-blue-600 selection:text-white transition-colors duration-200 relative w-full max-w-full overflow-x-hidden">
-      {/* Global Cursor-Following Institutional Spotlight */}
-      <CursorSpotlight />
 
 
       {/* Main Institutional Brand Header */}
       <header className="sticky top-0 z-40 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 shadow-xs">
-        <div className="max-w-7xl mx-auto px-3 sm:px-6 py-2.5 sm:py-3.5 flex items-center justify-between gap-3 sm:gap-6">
+        <div className="max-w-7xl mx-auto px-3 sm:px-6 py-2 sm:py-3 flex items-center justify-between gap-2.5 sm:gap-6">
           {/* Brand Logo & Bilingual Title */}
           <div
-            className="flex items-center gap-2.5 sm:gap-3.5 cursor-pointer group min-w-0"
+            className="flex items-center gap-2 sm:gap-3.5 cursor-pointer group min-w-0"
             onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
           >
-            <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-white dark:bg-slate-800 p-1 border border-slate-200/90 dark:border-slate-700/90 flex items-center justify-center shadow-md shadow-blue-900/5 group-hover:scale-105 transition-transform overflow-hidden shrink-0">
+            <div className="w-9 h-9 sm:w-12 sm:h-12 rounded-xl bg-white dark:bg-slate-800 p-1 border border-slate-200/90 dark:border-slate-700/90 flex items-center justify-center shadow-md shadow-blue-900/5 group-hover:scale-105 transition-transform overflow-hidden shrink-0">
               <SZMCLogo className="w-full h-full" />
             </div>
             <div className="min-w-0">
-              <div className="font-extrabold text-xs sm:text-[15px] tracking-tight text-slate-900 dark:text-white leading-tight font-serif">
+              <div className="font-extrabold text-[11px] sm:text-[15px] tracking-tight text-slate-900 dark:text-white leading-tight font-serif truncate">
                 শহীদ জিয়াউর রহমান মেডিকেল কলেজ অ্যালামনাই
               </div>
-              <div className="text-[10px] sm:text-[11px] font-black tracking-wider text-blue-900 dark:text-blue-300 uppercase leading-snug">
+              <div className="text-[9px] sm:text-[11px] font-black tracking-wider text-blue-900 dark:text-blue-300 uppercase leading-snug truncate">
                 SZMC ALUMNI ASSOCIATION • ESTD. 1992
               </div>
             </div>
@@ -231,6 +229,13 @@ export const LandingPage: React.FC<LandingPageProps> = ({
             >
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
               <span>Verification</span>
+            </button>
+            <button
+              type="button"
+              onClick={onOpenLogin}
+              className="min-h-[40px] px-3.5 sm:px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-xs transition-all active:scale-95 cursor-pointer whitespace-nowrap"
+            >
+              Sign In
             </button>
           </div>
         </div>
@@ -389,7 +394,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               </div>
               <div className="flex flex-wrap items-center justify-center sm:justify-end gap-x-2 sm:gap-x-3 gap-y-1">
                 <a
-                  href="http://nurulanambashir.gt.tc/?i=1"
+                  href="https://nurulanambashir.gt.tc/?i=1"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="font-semibold text-blue-600 dark:text-blue-400 hover:underline transition-colors cursor-pointer"

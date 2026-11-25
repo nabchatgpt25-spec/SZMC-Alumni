@@ -3,7 +3,6 @@ import {
   MessageCircle,
   Sliders,
   X,
-  ArrowRight,
   Shield,
   RefreshCw,
   Send,
@@ -53,6 +52,7 @@ import type {
 } from '../../types/messaging';
 import { playSound } from '../../utils/audio';
 import { formatStructuredPreview } from '../../utils/structuredChat';
+import { playNotificationChimeOnce, setActiveChatView } from '../../utils/mobileToastBus';
 import { ConversationList } from './ConversationList';
 import { ChatThread } from './ChatThread';
 import { NewChatModal } from './NewChatModal';
@@ -113,11 +113,6 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
   userSettingsRef.current = userSettings;
 
   const [activeTypingText, setActiveTypingText] = useState<string | null>(null);
-  const [incomingToast, setIncomingToast] = useState<{
-    conversationId: string;
-    senderName: string;
-    body: string;
-  } | null>(null);
 
   const [showNewChat, setShowNewChat] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -130,6 +125,13 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
 
   const activeIdRef = useRef<string | null>(null);
   activeIdRef.current = activeId;
+
+  useEffect(() => {
+    setActiveChatView('messenger', activeId);
+    return () => {
+      setActiveChatView('messenger', null);
+    };
+  }, [activeId]);
   const conversationsRef = useRef<ChatConversation[]>([]);
   conversationsRef.current = conversations;
   const lastTypingSentRef = useRef<number>(0);
@@ -450,7 +452,6 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
       const isFromMe = message.senderId === myId;
       const settings = userSettingsRef.current;
       const soundAllowed = settings?.soundEnabled ?? true;
-      const previewAllowed = settings?.notificationPreviewEnabled ?? true;
       const existingConv = conversationsRef.current.find((c) => c.id === message.conversationId);
       const isMuted = Boolean(existingConv?.isMuted);
 
@@ -488,7 +489,7 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
         if (isNewInsert && !isFromMe) {
           void markConversationRead(message.conversationId, myId);
           if (soundAllowed && !isMuted && !message.isSilent) {
-            playSound('notification');
+            playNotificationChimeOnce();
           }
         }
       }
@@ -522,17 +523,6 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
             lastMessageFromMe: isFromMe,
             unreadCount: isCurrentActive || isFromMe ? 0 : target.unreadCount + 1,
           };
-
-          if (!isCurrentActive && !isFromMe && !target.isMuted && !message.isSilent) {
-            setIncomingToast({
-              conversationId: message.conversationId,
-              senderName: target.person.fullName || 'SZMC Colleague',
-              body: previewAllowed ? updatedTarget.lastMessagePreview : 'Sent you a new message',
-            });
-            if (soundAllowed) {
-              playSound('notification');
-            }
-          }
 
           const nextList = prev.filter((_, i) => i !== targetIdx);
           return [updatedTarget, ...nextList];
@@ -894,7 +884,7 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
       )}
 
       {/* Main Two-Column Meta Messenger Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-4 h-[calc(100dvh-185px)] lg:h-[calc(100vh-210px)] min-h-[420px] lg:min-h-[540px]">
+      <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-0 sm:gap-4 h-[calc(100dvh-114px)] sm:h-[calc(100dvh-160px)] lg:h-[calc(100vh-185px)] min-h-[420px] lg:min-h-[540px]">
         {/* Left Column: Conversation List */}
         <div className={`${showThreadOnMobile ? 'hidden lg:flex' : 'flex'} min-h-0`}>
           <ConversationList
@@ -908,9 +898,6 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
             onSelect={(id) => {
               setShowSettings(false);
               setActiveId(id);
-              if (incomingToast && incomingToast.conversationId === id) {
-                setIncomingToast(null);
-              }
             }}
             onStartDirectChat={(pid) => void handleStartDirectFromPresence(pid)}
             onNewChat={() => setShowNewChat(true)}
@@ -1009,48 +996,6 @@ export const MessengerView: React.FC<MessengerViewProps> = ({
           )}
         </div>
       </div>
-
-      {/* Realtime Floating Incoming Message Banner */}
-      {incomingToast && (
-        <div className="fixed bottom-6 right-6 z-50 max-w-sm w-full rounded-2xl bg-white dark:bg-slate-900 border border-[#0084FF]/30 shadow-2xl p-4 flex items-start gap-3 animate-fadeIn">
-          <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-[#0084FF] to-[#00A3FF] text-white flex items-center justify-center shrink-0 shadow-sm shadow-[#0084FF]/30">
-            <MessageCircle className="w-5 h-5 fill-white" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center justify-between gap-1">
-              <p className="text-xs font-bold text-slate-900 dark:text-white truncate">
-                {incomingToast.senderName}
-              </p>
-              <span className="text-[10px] text-[#0084FF] font-bold uppercase">
-                New Message
-              </span>
-            </div>
-            <p className="text-xs text-slate-600 dark:text-slate-300 truncate mt-1">
-              {incomingToast.body}
-            </p>
-            <div className="mt-2 flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setActiveId(incomingToast.conversationId);
-                  setIncomingToast(null);
-                }}
-                className="inline-flex items-center gap-1 text-[11px] font-bold text-[#0084FF] hover:underline cursor-pointer"
-              >
-                <span>Open chat</span>
-                <ArrowRight className="w-3 h-3" />
-              </button>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={() => setIncomingToast(null)}
-            className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 cursor-pointer"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-      )}
 
       {showNewChat && (
         <NewChatModal

@@ -238,6 +238,7 @@ export interface BloodDonorProfile {
   profession?: string;
   institution?: string;
   verificationStatus?: VerificationStatus;
+  profileCompleted?: boolean;
   bloodGroup: BloodGroup;
   isRegisteredDonor: boolean;
   availability: BloodDonorAvailability;
@@ -378,6 +379,7 @@ export interface PostItem {
   albumPhotosCount?: number;
   pinned?: boolean;
   verified?: boolean;
+  profileCompleted?: boolean;
   profession?: string;
   institution?: string;
   author?: string;
@@ -416,6 +418,7 @@ export interface GalleryPhoto {
   tags?: string[];
   mediaType?: 'image' | 'video';
   fileSize?: string;
+  storagePath?: string;
 }
 
 export interface GalleryAlbum {

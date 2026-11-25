@@ -29,6 +29,7 @@ import { realtimeManager } from '../services/supabaseRealtimeService';
 import { BloodRequestModal } from './BloodRequestModal';
 import { BloodDonorRegistration } from './BloodDonorRegistration';
 import { useAuth } from '../context/AuthContext';
+import { VerifiedAvatar } from './verification/VerifiedAvatar';
 
 interface BloodNetworkViewProps {
   currentUser?: {
@@ -474,10 +475,14 @@ export const BloodNetworkView: React.FC<BloodNetworkViewProps> = ({
                 <div key={donor.userId} className={`${cardClass} space-y-3`}>
                   <div className="flex items-start justify-between">
                     <div className="flex items-center gap-2.5 min-w-0">
-                      <img
+                      <VerifiedAvatar
                         src={donor.avatarUrl || '/assets/aistudio/images__1__2778177d.png'}
                         alt={donor.fullName}
-                        className={`w-10 h-10 rounded-full object-cover shrink-0 ${
+                        verificationStatus={donor.verificationStatus}
+                        profileCompleted={Boolean(donor.profileCompleted)}
+                        size="md"
+                        imgClassName="w-10 h-10"
+                        unverifiedClassName={`rounded-full ${
                           glassMode
                             ? 'border-2 border-rose-400/60 shadow-md shadow-rose-600/20'
                             : 'border border-slate-200 dark:border-slate-700'

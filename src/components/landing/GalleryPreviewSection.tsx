@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, useReducedMotion } from 'motion/react';
 import {
   Camera,
@@ -9,7 +9,9 @@ import {
 } from 'lucide-react';
 import { INITIAL_ALBUMS } from '../../data/galleryData';
 import { PhotoLightbox } from '../gallery/PhotoLightbox';
-import { GalleryPhoto } from '../../types';
+import { GalleryAlbum, GalleryPhoto } from '../../types';
+import { fetchGalleryAlbumsFromDb } from '../../services/supabaseService';
+import { realtimeManager } from '../../services/supabaseRealtimeService';
 import {
   MagneticWrap,
   ScrollReveal,
@@ -24,16 +26,47 @@ export const GalleryPreviewSection: React.FC<GalleryPreviewSectionProps> = ({
   onExploreGallery,
 }) => {
   const prefersReducedMotion = useReducedMotion();
-  // Extract top 6 photos across initial albums
+  const [liveAlbums, setLiveAlbums] = useState<GalleryAlbum[]>(INITIAL_ALBUMS);
+
+  useEffect(() => {
+    let isMounted = true;
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const loadLiveGallery = () => {
+      fetchGalleryAlbumsFromDb()
+        .then((dbAlbums) => {
+          if (isMounted && Array.isArray(dbAlbums) && dbAlbums.length > 0) {
+            setLiveAlbums(dbAlbums);
+          }
+        })
+        .catch(() => {
+          // Keep current albums on transient failure
+        });
+    };
+
+    loadLiveGallery();
+    const unsub = realtimeManager.subscribeToGallery(() => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(loadLiveGallery, 300);
+    });
+
+    return () => {
+      isMounted = false;
+      if (debounceTimer) clearTimeout(debounceTimer);
+      unsub();
+    };
+  }, []);
+
+  // Extract top 6 photos across live albums
   const photos = React.useMemo(() => {
     const list: GalleryPhoto[] = [];
-    INITIAL_ALBUMS.forEach((album) => {
+    liveAlbums.forEach((album) => {
       album.photos.forEach((p) => {
-        if (list.length < 6) list.push(p);
+        if (list.length < 6 && p.mediaType !== 'video') list.push(p);
       });
     });
     return list;
-  }, []);
+  }, [liveAlbums]);
 
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [activePhotoIndex, setActivePhotoIndex] = useState(0);

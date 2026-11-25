@@ -27,6 +27,7 @@ import {
   SharedEmbedCard
 } from './SmartPostMediaAndEmbeds';
 import { RichTextWithMentions } from './community/RichTextWithMentions';
+import { VerifiedAvatar } from './verification/VerifiedAvatar';
 
 interface SavedPostsViewProps {
   onViewProfile?: (userId: number) => void;
@@ -75,6 +76,8 @@ export const SavedPostsView: React.FC<SavedPostsViewProps> = ({
       avatarUrl: string;
       batchYear?: number;
       createdAt?: string;
+      verified?: boolean;
+      profileCompleted?: boolean;
     };
     postCaption?: string;
   }>({
@@ -277,10 +280,14 @@ export const SavedPostsView: React.FC<SavedPostsViewProps> = ({
                   className="flex items-center gap-3 cursor-pointer group"
                   onClick={() => onViewProfile?.(post.userId)}
                 >
-                  <img
+                  <VerifiedAvatar
                     src={post.avatarUrl}
                     alt={post.fullName}
-                    className="w-11 h-11 rounded-2xl object-cover border border-slate-200 dark:border-slate-700 group-hover:scale-105 transition-transform"
+                    verified={Boolean(post.verified)}
+                    profileCompleted={Boolean(post.profileCompleted)}
+                    size="md"
+                    imgClassName="w-11 h-11"
+                    unverifiedClassName="rounded-2xl border border-slate-200 dark:border-slate-700 group-hover:scale-105 transition-transform"
                   />
                   <div>
                     <div className="flex items-center gap-2">
@@ -341,6 +348,8 @@ export const SavedPostsView: React.FC<SavedPostsViewProps> = ({
                             avatarUrl: post.avatarUrl,
                             batchYear: post.batchYear,
                             createdAt: post.createdAt,
+                            verified: Boolean(post.verified),
+                            profileCompleted: Boolean(post.profileCompleted),
                           },
                           postCaption: post.content,
                         })

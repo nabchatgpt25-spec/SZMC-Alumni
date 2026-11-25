@@ -959,7 +959,7 @@ export async function fetchFeedPostsForModeration(params: {
 
     return posts.slice(0, limit).map((p) => ({
       id: Number(p.id),
-      authorId: Number(p.authorId || 1),
+      authorId: Number(p.authorId || 0),
       authorName: p.authorName || 'Alumnus',
       authorAvatar: p.authorAvatar || '/placeholder-avatar.png',
       authorBatch: Number(p.authorBatch) || 25,

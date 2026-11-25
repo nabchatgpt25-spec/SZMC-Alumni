@@ -131,7 +131,7 @@ async function resolveCommentAuthor(
   }
 
   return {
-    fullName: fallbackName || (userId === 1 || userId === 10002 ? 'Dr. Nurul Anam Bashir' : 'SZMC Alumnus'),
+    fullName: fallbackName || 'SZMC Alumnus',
     avatarUrl: fallbackAvatar || '/assets/aistudio/images__1__2778177d.png',
   };
 }
@@ -139,17 +139,19 @@ async function resolveCommentAuthor(
 export interface UsePostCommentsChannelHandlers {
   postId?: number;
   currentUserId?: number;
+  enabled?: boolean;
   onCommentInserted: (comment: PostComment, postId: number) => void;
   onReplyInserted?: (reply: PostComment, postId: number, parentCommentId: number) => void;
   onCommentDeleted?: (commentId: number, postId: number) => void;
 }
 
 /**
- * Specialized hook built on `useChannel` that subscribes to real-time `post_comments`
- * database inserts, updates, deletes, and broadcast events across all clients.
+ * Specialized hook that subscribes to real-time `post_comments`
+ * via the shared `realtimeManager` feed channel (zero duplicate WebSocket channels per post card).
  */
 export function usePostCommentsChannel({
   postId,
+  enabled = true,
   onCommentInserted,
   onReplyInserted,
   onCommentDeleted,
@@ -243,48 +245,12 @@ export function usePostCommentsChannel({
     onCommentInsertedRef.current(formattedComment, targetPostId);
   };
 
-  // 1. Direct Supabase Realtime Channel (`postgres_changes` + `broadcast`) via `useChannel`
-  useChannel({
-    channelName: postId ? `realtime:post_comments:${postId}` : 'realtime:post_comments:global',
-    postgresChanges: {
-      event: '*',
-      schema: 'public',
-      table: 'post_comments',
-      ...(postId ? { filter: `post_id=eq.${postId}` } : {}),
-    },
-    broadcastEvent: ['comment:inserted', 'comment:replied', 'comment:deleted'],
-    onPostgresChange: (payload) => {
-      if (payload.eventType === 'INSERT' && payload.new) {
-        void handleRawCommentRow(payload.new);
-      } else if (payload.eventType === 'DELETE' && payload.old) {
-        const deletedId = Number((payload.old as any).id);
-        const targetPostId = Number((payload.old as any).post_id || postId);
-        if (deletedId && targetPostId) {
-          onCommentDeletedRef.current?.(deletedId, targetPostId);
-        }
-      }
-    },
-    onBroadcast: (event, data) => {
-      if (event === 'comment:inserted' && data) {
-        void handleRawCommentRow(data.comment || data);
-      } else if (event === 'comment:replied' && data) {
-        void handleRawCommentRow({
-          ...(data.reply || data),
-          postId: data.postId || data.reply?.postId,
-          parentCommentId: data.parentCommentId,
-        });
-      } else if (event === 'comment:deleted' && data) {
-        const deletedId = Number(data.commentId || data.id);
-        const targetPostId = Number(data.postId || postId);
-        if (deletedId && targetPostId) {
-          onCommentDeletedRef.current?.(deletedId, targetPostId);
-        }
-      }
-    },
-  });
-
-  // 2. Also listen to the unified SSE + shared feed channel in `realtimeManager`
+  // Single shared subscription via `realtimeManager.subscribeToFeed` (already receives
+  // Supabase `postgres_changes` on `post_comments`, broadcast events, and SSE stream),
+  // eliminating N+1 per-PostCard and duplicate global WebSocket channels.
   useEffect(() => {
+    if (!enabled) return;
+
     const unsubscribe = realtimeManager.subscribeToFeed((event: RealtimeFeedEvent) => {
       if (event.table !== 'post_comments') return;
 
@@ -308,5 +274,5 @@ export function usePostCommentsChannel({
     return () => {
       unsubscribe();
     };
-  }, [postId]);
+  }, [postId, enabled]);
 }

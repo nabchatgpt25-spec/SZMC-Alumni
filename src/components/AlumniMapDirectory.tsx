@@ -30,6 +30,7 @@ import { AlumniProfile } from '../types';
 import { ALUMNI_PROFILES, loadStoredAlumniProfiles } from '../data/mockData';
 import { getCachedDirectory } from '../utils/offlineStorage';
 import { fetchAlumniProfilesFromDb } from '../services/supabaseService';
+import { VerifiedAvatar } from './verification/VerifiedAvatar';
 
 const CITY_COORDINATES: Record<string, [number, number]> = {
   bogura: [24.8465, 89.3777],
@@ -1353,11 +1354,14 @@ export const AlumniMapDirectory: React.FC<AlumniMapDirectoryProps> = ({ onViewPr
                         className="p-2 rounded-xl bg-slate-50 dark:bg-slate-800/60 hover:bg-blue-50 dark:hover:bg-blue-950/40 border border-slate-200/60 dark:border-slate-700/60 flex items-center justify-between gap-2 cursor-pointer transition-colors"
                       >
                         <div className="flex items-center gap-2 min-w-0">
-                          <img
+                          <VerifiedAvatar
                             src={alumnus.avatarUrl}
                             alt={alumnus.fullName}
-                            className="w-8 h-8 rounded-full object-cover shrink-0 ring-2"
-                            style={{ borderColor: dept.ringColor }}
+                            verificationStatus={alumnus.verificationStatus}
+                            profile={alumnus}
+                            size="sm"
+                            imgClassName="w-8 h-8"
+                            unverifiedClassName="rounded-full ring-2 ring-slate-200 dark:ring-slate-700"
                           />
                           <div className="min-w-0">
                             <div className="font-bold text-slate-900 dark:text-slate-100 truncate text-[11px]">
@@ -1609,10 +1613,14 @@ export const AlumniMapDirectory: React.FC<AlumniMapDirectoryProps> = ({ onViewPr
           >
             <div className="flex items-start justify-between gap-3">
               <div className="flex items-center gap-3.5">
-                <img
+                <VerifiedAvatar
                   src={selectedMapAlumnus.avatarUrl}
                   alt={selectedMapAlumnus.fullName}
-                  className="w-14 h-14 rounded-2xl object-cover border border-slate-200 dark:border-slate-700"
+                  verificationStatus={selectedMapAlumnus.verificationStatus}
+                  profile={selectedMapAlumnus}
+                  size="lg"
+                  imgClassName="w-14 h-14"
+                  unverifiedClassName="rounded-2xl border border-slate-200 dark:border-slate-700"
                 />
                 <div>
                   <h3 className="text-base font-black text-slate-900 dark:text-slate-100">

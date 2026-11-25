@@ -2,6 +2,7 @@ import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { OFFICIAL_PAGES_DIRECTORY } from '../components/community/quadConstants';
 import { BATCH_LIST } from '../data/mockData';
 import type { PostItem } from '../types';
+import { isPublicRowProfileCompleted } from '../utils/profileCompletion';
 
 export type SpacePostKind = 'discussion' | 'announcement' | 'event' | 'memory' | 'poll';
 
@@ -547,7 +548,7 @@ async function hydrateSpacePosts(rows: any[]): Promise<SpacePost[]> {
     authorIds.length > 0
       ? await supabase
           .from('alumni_profiles')
-          .select('id, full_name, avatar_url, batch_year, verification_status, profession, institution')
+          .select('id, full_name, avatar_url, batch_year, verification_status, profession, position, institution, cadre, specialty, degree, city, country, bio, career_history')
           .in('id', authorIds)
       : { data: [] };
 
@@ -577,6 +578,7 @@ async function hydrateSpacePosts(rows: any[]): Promise<SpacePost[]> {
       batchYear: a.batch_year ? Number(a.batch_year) : undefined,
       authorBatch: a.batch_year ? Number(a.batch_year) : undefined,
       verified: a.verification_status === 'verified',
+      profileCompleted: isPublicRowProfileCompleted(a),
       profession: a.profession || 'Doctor / Medical Professional',
       institution: a.institution || undefined,
       content: row.content || '',

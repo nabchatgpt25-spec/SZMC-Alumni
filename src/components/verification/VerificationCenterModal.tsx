@@ -34,6 +34,7 @@ import { saveMediaFile, isVideoUrl, formatFileSize } from '../../utils/mediaStor
 import { SZMCLogo } from '../SZMCLogo';
 import { WhatsAppIcon } from '../SocialIcons';
 import { fetchVerificationRequestsFromDb } from '../../services/supabaseService';
+import { VerifiedAvatar } from './VerifiedAvatar';
 
 interface VerificationCenterModalProps {
   isOpen: boolean;
@@ -111,7 +112,7 @@ export const VerificationCenterModal: React.FC<VerificationCenterModalProps> = (
 
   if (!isOpen) return null;
 
-  const isVerified = (currentUser.verificationStatus || 'verified') === 'verified';
+  const isVerified = currentUser.verificationStatus === 'verified';
   const vouchesCount = currentUser.vouchesCount ?? (currentUser.verifiedBy?.length ?? (isVerified ? 2 : 0));
   const targetVouches = currentUser.vouchTargetCount || 2;
   const progressPercent = isVerified ? 100 : Math.min(100, Math.round((vouchesCount / targetVouches) * 100));
@@ -310,22 +311,22 @@ export const VerificationCenterModal: React.FC<VerificationCenterModalProps> = (
               >
                 <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-5 border-b border-slate-200/80 dark:border-slate-800">
                   <div className="flex items-center gap-4">
-                    <div className="relative">
-                      <img
-                        src={currentUser.avatarUrl}
-                        alt={currentUser.fullName}
-                        className="w-16 h-16 rounded-2xl object-cover ring-2 ring-blue-500/30 shadow-md"
-                      />
-                      {isVerified ? (
-                        <div className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-emerald-500 text-white flex items-center justify-center ring-2 ring-white dark:ring-slate-900 shadow-xs">
-                          <Check className="w-3.5 h-3.5 stroke-[3]" />
-                        </div>
-                      ) : (
-                        <div className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-amber-500 text-white flex items-center justify-center ring-2 ring-white dark:ring-slate-900 shadow-xs">
-                          <Clock className="w-3.5 h-3.5" />
-                        </div>
-                      )}
-                    </div>
+                    <VerifiedAvatar
+                      src={currentUser.avatarUrl}
+                      alt={currentUser.fullName}
+                      verificationStatus={currentUser.verificationStatus}
+                      profile={currentUser}
+                      size="xl"
+                      imgClassName="w-16 h-16"
+                      unverifiedClassName="rounded-2xl ring-2 ring-blue-500/30 shadow-md"
+                      statusDot={
+                        !isVerified ? (
+                          <div className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-amber-500 text-white flex items-center justify-center ring-2 ring-white dark:ring-slate-900 shadow-xs z-20">
+                            <Clock className="w-3.5 h-3.5" />
+                          </div>
+                        ) : undefined
+                      }
+                    />
 
                     <div>
                       <div className="flex items-center gap-2">
