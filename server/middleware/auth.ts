@@ -1,6 +1,12 @@
 import crypto from 'crypto';
 import type { Request, Response, NextFunction } from 'express';
-import { supabaseServer, isSupabaseServerConfigured, SUPABASE_TABLES } from '../lib/supabase-server.ts';
+import {
+  supabaseServer,
+  isSupabaseServerConfigured,
+  isSupabaseServiceRoleConfigured,
+  getSupabaseWriteClient,
+  SUPABASE_TABLES,
+} from '../lib/supabase-server.ts';
 import type { User as SupabaseUser } from '@supabase/supabase-js';
 
 export type CanonicalUserRole =
@@ -357,11 +363,27 @@ export async function verifyAuthToken(token: string) {
       (user.app_metadata?.role as string) ||
       (user.app_metadata?.claims_admin ? 'admin' : undefined);
 
-    const { data: profile } = await supabaseServer
+    const lookupClient = getSupabaseWriteClient(token)?.client || supabaseServer;
+    // Note: column-level SELECT on `email` is revoked from `authenticated` in Migration 003,
+    // so only select public non-revoked columns when using a user-scoped JWT client.
+    const selectCols = isSupabaseServiceRoleConfigured
+      ? 'id, auth_user_id, email, full_name, role, is_public'
+      : 'id, auth_user_id, full_name, role, is_public';
+
+    const { data: rawProfile } = await lookupClient
       .from(SUPABASE_TABLES.ALUMNI_PROFILES)
-      .select('id, auth_user_id, email, full_name, role, is_public')
+      .select(selectCols)
       .eq('auth_user_id', user.id)
       .maybeSingle();
+
+    const profile = (rawProfile || null) as {
+      id?: number;
+      auth_user_id?: string;
+      email?: string;
+      full_name?: string;
+      role?: string;
+      is_public?: boolean;
+    } | null;
 
     const profileRole = profile?.role as string | undefined;
 

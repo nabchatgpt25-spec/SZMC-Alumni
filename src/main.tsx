@@ -9,9 +9,8 @@ import './index.css';
 import { registerNotificationServiceWorker } from './utils/browserPushNotifications.ts';
 
 try {
-  if (localStorage.getItem('szmc_text_size') === 'large') {
-    document.documentElement.style.fontSize = '112.5%';
-  }
+  localStorage.removeItem('szmc_text_size');
+  document.documentElement.style.fontSize = '';
   const savedStyle = localStorage.getItem('szmc_app_visual_mode');
   if (savedStyle === 'glass' || savedStyle === 'clear-glass') {
     document.documentElement.setAttribute('data-app-style', savedStyle);

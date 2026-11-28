@@ -439,7 +439,7 @@ async function loadPeople(profileIds: number[]): Promise<Map<number, ProfileLite
         batch: existing?.batch ?? row.batch_year ?? null,
         is_verified: existing?.is_verified ?? row.verification_status === 'verified',
         last_seen_at: existing?.last_seen_at ?? row.last_seen_at ?? null,
-        profession: row.profession || existing?.profession,
+        profession: row.position || existing?.profession,
         batch_year: row.batch_year ?? existing?.batch_year ?? null,
         verification_status: row.verification_status ?? existing?.verification_status ?? null,
         profile_completed: isPublicRowProfileCompleted(row),
@@ -461,7 +461,7 @@ async function loadPeople(profileIds: number[]): Promise<Map<number, ProfileLite
               avatar_url: person.avatar_url || row.avatar_url || '',
               batch: person.batch ?? row.batch_year ?? null,
               is_verified: person.is_verified || row.verification_status === 'verified',
-              profession: person.profession || row.profession,
+              profession: person.profession || row.position,
               batch_year: person.batch_year ?? row.batch_year ?? null,
               verification_status: person.verification_status ?? row.verification_status ?? null,
               profile_completed: person.profile_completed || isPublicRowProfileCompleted(row),
@@ -1890,7 +1890,7 @@ export async function searchAlumniForChat(query: string, myProfileId?: number | 
     supabase
       .from('alumni_profiles')
       .select(ALUMNI_PUBLIC_COLUMNS)
-      .or(`full_name.ilike.%${term}%,profession.ilike.%${term}%,institution.ilike.%${term}%`)
+      .or(`full_name.ilike.%${term}%,position.ilike.%${term}%,institution.ilike.%${term}%`)
       .order('full_name', { ascending: true })
       .limit(25),
     getMessengerBlockState(myId),
@@ -1912,7 +1912,7 @@ export async function searchAlumniForChat(query: string, myProfileId?: number | 
           avatar_url: row.avatar_url || '',
           batch: row.batch_year ?? null,
           is_verified: row.verification_status === 'verified',
-          profession: row.profession,
+          profession: row.position,
           batch_year: row.batch_year,
           verification_status: row.verification_status,
         },
@@ -1963,7 +1963,7 @@ export async function listSuggestedColleaguesForChat(
           avatar_url: row.avatar_url || '',
           batch: row.batch_year ?? null,
           is_verified: row.verification_status === 'verified',
-          profession: row.profession,
+          profession: row.position,
           batch_year: row.batch_year,
           verification_status: row.verification_status,
         },

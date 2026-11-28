@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { motion } from 'motion/react';
 import {
   X,
@@ -337,7 +338,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       const cleanWhatsapp = whatsapp.trim() ? formatToE164Phone(whatsapp) : '';
 
       const autoVerify = isInstantAutoVerificationActive();
-      const autoLoggedIn = await register({
+      await register({
         fullName: fullName.trim(),
         avatarUrl: selectedAvatar,
         batchYear: parsedBatchNum,
@@ -365,19 +366,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         bio: '',
         password,
       });
-
-      if (!autoLoggedIn) {
-        if (typeof window !== 'undefined') {
-          try {
-            localStorage.removeItem(REGISTRATION_DRAFT_STORAGE_KEY);
-          } catch {}
-        }
-        setSuccessMessage(
-          'Registration successful! Please check your email inbox and click the confirmation link before signing in.'
-        );
-        setMode('login');
-        return;
-      }
 
       // Securely upload ID document to private storage and record in admin_doc_submissions
       if (verificationMethod === 'id_card_upload' && idProofFile) {
@@ -419,14 +407,24 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         }
       }
 
-      setSuccessMessage('Registration successful! Welcome to the SZMC Alumni Network. Logging you in...');
-      setTimeout(() => {
-        onClose();
-        if (onSuccess) onSuccess('register');
-      }, 500);
+      onClose();
+      if (onSuccess) onSuccess('register');
     } catch (err: unknown) {
       const error = err as Error;
-      setErrorMessage(error.message || 'Registration failed. Please check your details and try again.');
+      const msg = error.message || '';
+      if (msg.startsWith('CONFIRM_EMAIL_REQUIRED:')) {
+        if (typeof window !== 'undefined') {
+          try {
+            localStorage.removeItem(REGISTRATION_DRAFT_STORAGE_KEY);
+          } catch {}
+        }
+        setLoginIdentifier(email.trim());
+        setMode('login');
+        setErrorMessage('');
+        setSuccessMessage(msg.replace('CONFIRM_EMAIL_REQUIRED:', '').trim());
+      } else {
+        setErrorMessage(msg || 'Registration failed. Please check your details and try again.');
+      }
     } finally {
       setLoading(false);
     }
@@ -488,7 +486,19 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
   };
 
-  return (
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !loading) {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [loading, onClose]);
+
+  const modalContent = (
     <>
       {loading && (
         <OutstandingLoadingScreen
@@ -503,7 +513,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       )}
       <div
         onClick={onClose}
-        className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 md:p-6 overflow-y-auto bg-slate-900/40 dark:bg-slate-950/60 backdrop-blur-md animate-in fade-in duration-200"
+        className="fixed inset-0 z-[9990] flex items-end sm:items-center justify-center p-0 sm:p-4 md:p-6 overflow-y-auto bg-slate-900/40 dark:bg-slate-950/60 backdrop-blur-md animate-in fade-in duration-200"
       >
       <div
         className="relative w-full max-w-2xl sm:my-auto bg-white/85 dark:bg-slate-900/90 sm:bg-white/40 sm:dark:bg-slate-900/50 backdrop-blur-2xl backdrop-saturate-180 rounded-t-3xl sm:rounded-3xl shadow-[0_24px_64px_-12px_rgba(15,23,42,0.35),inset_0_1px_1px_rgba(255,255,255,0.75)] dark:shadow-[0_24px_64px_-12px_rgba(0,0,0,0.65),inset_0_1px_1px_rgba(255,255,255,0.2)] border-t sm:border border-white/60 dark:border-white/15 ring-1 ring-white/35 dark:ring-white/10 overflow-hidden flex flex-col max-h-[94dvh] sm:max-h-[92vh] pb-safe sm:pb-0"
@@ -599,8 +609,23 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         <div className="relative p-4 sm:p-6 overflow-y-auto space-y-4">
           {/* Status Alerts */}
           {errorMessage && (
-            <div className="p-3.5 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 text-rose-700 dark:text-rose-300 text-xs font-semibold animate-in fade-in">
-              {errorMessage}
+            <div className="p-3.5 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 text-rose-700 dark:text-rose-300 text-xs font-semibold animate-in fade-in space-y-2">
+              <div>{errorMessage}</div>
+              {mode === 'register' && errorMessage.toLowerCase().includes('already exists') && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLoginIdentifier(email.trim());
+                    setMode('login');
+                    setErrorMessage('');
+                    setSuccessMessage('Enter your password below to sign in to your existing account.');
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-colors cursor-pointer"
+                >
+                  <span>Sign in with this email</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              )}
             </div>
           )}
 
@@ -1219,4 +1244,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     </div>
   </>
   );
+
+  return typeof document !== 'undefined' ? createPortal(modalContent, document.body) : modalContent;
 };

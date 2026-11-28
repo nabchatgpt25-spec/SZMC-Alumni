@@ -2,6 +2,12 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+  --font-serif: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
 :root {
   --theme-color-primary: #1d4ed8;
   --theme-color-primary-hover: #1e40af;
@@ -58,6 +64,8 @@ html {
 }
 
 body {
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  transition: background-color 0.25s ease, color 0.25s ease;
   overflow-x: hidden;
   max-width: 100%;
   width: 100%;
@@ -290,8 +298,14 @@ p, h1, h2, h3, h4, h5, h6, span, a, blockquote {
   }
   .float-3d-slow,
   .float-3d-delayed,
-  .animated-institutional-gradient {
+  .animated-institutional-gradient,
+  .verified-avatar-halo,
+  .verified-avatar-ring::before {
     animation: none !important;
+  }
+  .mobile-toast-enter,
+  .mobile-toast-exit {
+    animation-duration: 1ms !important;
   }
 }
 
@@ -829,9 +843,8 @@ p, h1, h2, h3, h4, h5, h6, span, a, blockquote {
   transform: scale(1.06);
 }
 
-body {
-  font-family: 'Hind Siliguri', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
-  transition: background-color 0.25s ease, color 0.25s ease;
+button, input, select, textarea {
+  font-family: inherit;
 }
 
 /* Leaflet Custom Marker & Popup Refinements */
@@ -1046,14 +1059,14 @@ html[data-portal-custom-typography="true"].dark {
 }
 
 html[data-portal-custom-typography="true"] body {
-  font-family: var(--portal-font-body, 'Hind Siliguri', system-ui, sans-serif) !important;
+  font-family: var(--portal-font-body, ui-sans-serif, system-ui, -apple-system, sans-serif) !important;
   font-weight: var(--portal-body-weight, 400);
   line-height: var(--portal-body-line-height, 1.6);
   color: var(--portal-body-color);
 }
 
 html[data-portal-custom-typography="true"] :where(h1, h2, h3, h4, h5, h6) {
-  font-family: var(--portal-font-heading, 'Hind Siliguri', system-ui, sans-serif) !important;
+  font-family: var(--portal-font-heading, ui-sans-serif, system-ui, -apple-system, sans-serif) !important;
   font-weight: var(--portal-heading-weight, 700);
   letter-spacing: var(--portal-heading-tracking, 0em);
   font-style: var(--portal-heading-style, normal);
@@ -1851,13 +1864,6 @@ html[data-app-style="clear-glass"].dark .mobile-toast-card {
   border-color: rgba(255, 255, 255, 0.22) !important;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .mobile-toast-enter,
-  .mobile-toast-exit {
-    animation-duration: 1ms !important;
-  }
-}
-
 /* Mobile GPU repaint optimization: cap expensive nested blur layers inside scrollable card lists */
 @media (max-width: 767px) {
   .glass-card,
@@ -2016,12 +2022,5 @@ html[data-app-style="glass"]:not(.dark) .verified-avatar-inner {
 html[data-app-style="clear-glass"].dark .verified-avatar-inner,
 html[data-app-style="glass"].dark .verified-avatar-inner {
   background: rgba(15, 23, 42, 0.94) !important;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .verified-avatar-halo,
-  .verified-avatar-ring::before {
-    animation: none;
-  }
 }
 

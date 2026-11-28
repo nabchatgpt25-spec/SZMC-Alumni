@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { Flag, X, ShieldBan, CheckCircle2, Loader2, UserX } from 'lucide-react';
 import { REPORT_REASONS, type ReportTargetType } from '../../services/communitySafetyUtils';
 import {
@@ -43,6 +44,18 @@ export const ReportContentModal: React.FC<ReportContentModalProps> = ({
     }
   }, [isOpen, targetId, targetType]);
 
+  useEffect(() => {
+    if (!isOpen || typeof window === 'undefined') return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !submitting) {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, submitting, onClose]);
+
   if (!isOpen) return null;
 
   const titleByType: Record<ReportTargetType, string> = {
@@ -82,12 +95,15 @@ export const ReportContentModal: React.FC<ReportContentModalProps> = ({
     onClose();
   };
 
-  return (
+  const modalContent = (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/65 backdrop-blur-xs"
+      className="fixed inset-0 z-[9990] flex items-center justify-center p-4 bg-slate-950/65 backdrop-blur-xs"
       role="dialog"
       aria-modal="true"
       aria-labelledby="report-content-modal-title"
+      onClick={(e) => {
+        if (e.target === e.currentTarget && !submitting) onClose();
+      }}
     >
       <form
         onSubmit={handleSubmit}
@@ -187,6 +203,8 @@ export const ReportContentModal: React.FC<ReportContentModalProps> = ({
       </form>
     </div>
   );
+
+  return typeof document !== 'undefined' ? createPortal(modalContent, document.body) : modalContent;
 };
 
 interface BlockedUsersPanelProps {

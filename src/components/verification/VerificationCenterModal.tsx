@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import {
   X,
   ShieldCheck,
@@ -110,6 +111,22 @@ export const VerificationCenterModal: React.FC<VerificationCenterModalProps> = (
     return () => window.removeEventListener('szmc_vouch_requests_updated', handleUpdate);
   }, []);
 
+  useEffect(() => {
+    if (!isOpen || typeof window === 'undefined') return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        if (confirmingVouchFor) {
+          setConfirmingVouchFor(null);
+        } else {
+          onClose();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, confirmingVouchFor, onClose]);
+
   if (!isOpen) return null;
 
   const isVerified = currentUser.verificationStatus === 'verified';
@@ -191,8 +208,13 @@ export const VerificationCenterModal: React.FC<VerificationCenterModalProps> = (
 
   const allPendingCount = vouchRequests.filter((r) => r.status === 'pending').length;
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-black/70 backdrop-blur-sm animate-fade-in">
+  const modalContent = (
+    <div
+      className="fixed inset-0 z-[9990] flex items-center justify-center p-3 sm:p-5 bg-black/70 backdrop-blur-sm animate-fade-in"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
       <div className="relative w-full max-w-3xl bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden max-h-[92vh] flex flex-col">
         {/* Top Header */}
         <div className="p-5 sm:p-6 bg-gradient-to-r from-blue-900 via-indigo-900 to-slate-900 text-white flex items-center justify-between shrink-0">
@@ -857,4 +879,6 @@ export const VerificationCenterModal: React.FC<VerificationCenterModalProps> = (
       </div>
     </div>
   );
+
+  return typeof document !== 'undefined' ? createPortal(modalContent, document.body) : modalContent;
 };

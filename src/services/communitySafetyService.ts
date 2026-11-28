@@ -133,7 +133,7 @@ export async function fetchBlockedUsersList(blockerId?: number): Promise<Blocked
       if (blockedIds.length > 0) {
         const { data: profiles } = await supabase
           .from('alumni_profiles')
-          .select('id, full_name, avatar_url, batch_year, profession')
+          .select('id, full_name, avatar_url, batch_year, position')
           .in('id', blockedIds);
         (profiles || []).forEach((p: any) => profileMap.set(Number(p.id), p));
       }
@@ -147,7 +147,7 @@ export async function fetchBlockedUsersList(blockerId?: number): Promise<Blocked
           fullName: prof?.full_name || 'SZMC Alumnus',
           avatarUrl: prof?.avatar_url || '/assets/aistudio/images__1__2778177d.png',
           batchYear: prof?.batch_year ? Number(prof.batch_year) : undefined,
-          profession: prof?.profession || undefined,
+          profession: prof?.position || undefined,
           reason: r.reason || null,
           createdAt: r.created_at || new Date().toISOString(),
         };

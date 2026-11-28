@@ -37,6 +37,7 @@ import {
   resolveInitialAlbumIdFromLocation,
   resolveInitialRouteFromLocation,
 } from './utils/appRouting';
+import { calculateProfileCompletion } from './utils/profileCompletion';
 
 // Code-split dynamic views backed by centralized prefetchable loaders
 const LandingPage = lazy(() => routeLoaders.landing().then(m => ({ default: m.LandingPage })));
@@ -68,6 +69,12 @@ const AdminPage = lazy(() => routeLoaders.admin().then(m => ({ default: m.AdminP
 const SettingsView = lazy(() => routeLoaders.settings().then(m => ({ default: m.SettingsView })));
 const FrostedProfileCardModal = lazy(() => routeLoaders.profileCard().then(m => ({ default: m.FrostedProfileCardModal })));
 const OutstandingLoadingScreen = lazy(() => routeLoaders.splash().then(m => ({ default: m.OutstandingLoadingScreen })));
+const RegistrationCongratulationsFlow = lazy(() =>
+  routeLoaders.congratulations().then(m => ({ default: m.RegistrationCongratulationsFlow }))
+);
+const ProfileCompletionPromptModal = lazy(() =>
+  routeLoaders.profileCompletionPrompt().then(m => ({ default: m.ProfileCompletionPromptModal }))
+);
 
 const ViewSkeletonFallback: React.FC = () => (
   <div className="w-full max-w-3xl mx-auto space-y-4 py-2" aria-hidden="true">
@@ -110,10 +117,57 @@ function AlumniAppContent() {
     return false;
   });
 
+  // First-Time Registration Congratulation Pages state (triggered after registration or via ?welcome=1 / #congratulations)
+  const [showCongratulations, setShowCongratulations] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const hash = window.location.hash.replace(/^#\/?/, '').toLowerCase();
+      if (params.get('welcome') === '1' || hash === 'congratulations' || hash === 'welcome') {
+        return true;
+      }
+    }
+    return false;
+  });
+
+  const [congratsAutoEnter, setCongratsAutoEnter] = useState<boolean>(false);
+
+  // Profile Completion & Verified Premium Access Pop-Up state
+  const [showProfileCompletionPrompt, setShowProfileCompletionPrompt] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const hash = window.location.hash.replace(/^#\/?/, '').toLowerCase();
+      if (params.get('complete-profile') === '1' || hash === 'complete-profile') {
+        return true;
+      }
+    }
+    return false;
+  });
+  const [profileInitialTab, setProfileInitialTab] = useState<'about' | 'edit'>('about');
+
   useEffect(() => {
     if (typeof window !== 'undefined') {
       (window as any).szmcReplaySplash = () => setShowSplash(true);
+      (window as any).szmcReplayCongratulations = () => {
+        setCongratsAutoEnter(false);
+        setShowCongratulations(true);
+      };
+      (window as any).szmcShowCompleteProfilePopup = () => {
+        setShowProfileCompletionPrompt(true);
+      };
     }
+  }, []);
+
+  useEffect(() => {
+    const syncOverlayFromHash = () => {
+      const hash = window.location.hash.replace(/^#\/?/, '').toLowerCase();
+      if (hash === 'congratulations' || hash === 'welcome') {
+        setShowCongratulations(true);
+      } else if (hash === 'complete-profile') {
+        setShowProfileCompletionPrompt(true);
+      }
+    };
+    window.addEventListener('hashchange', syncOverlayFromHash);
+    return () => window.removeEventListener('hashchange', syncOverlayFromHash);
   }, []);
 
   // Target Album ID for direct deep-linking from Feed ("See Album") into Gallery
@@ -145,13 +199,23 @@ function AlumniAppContent() {
     prefetchCoreRoutesOnIdle(isLoggedIn);
   }, [isLoggedIn]);
 
-  // Whenever user logs in, take them straight to The Quad immediately (no artificial 2.4s splash delay)
+  // Whenever user logs in, take them straight to The Quad immediately (and show the Welcome Note on first-time registration)
   const wasLoggedInRef = useRef(isLoggedIn);
   useEffect(() => {
     if (!wasLoggedInRef.current && isLoggedIn) {
+      let justRegistered = false;
       try {
         sessionStorage.setItem('szmc_login_timestamp', Date.now().toString());
+        if (sessionStorage.getItem('szmc_just_registered') === '1') {
+          justRegistered = true;
+          sessionStorage.removeItem('szmc_just_registered');
+        }
       } catch {}
+      if (justRegistered) {
+        setAuthModalMode(null);
+        setCongratsAutoEnter(true);
+        setShowCongratulations(true);
+      }
       setRoute('feed');
       window.location.hash = 'feed';
       window.scrollTo(0, 0);
@@ -236,11 +300,22 @@ function AlumniAppContent() {
     initialTab: 'status',
   });
 
-  const openVerificationCenter = (
-    initialTab: 'status' | 'vouch_classmates' | 'vouch_others' | 'upload_id' | 'policy' = 'status'
-  ) => {
-    setVerificationModalState({ isOpen: true, initialTab });
-  };
+  const dismissProfileCompletionPrompt = useCallback(() => {
+    setShowProfileCompletionPrompt(false);
+    try {
+      sessionStorage.setItem('szmc_profile_prompt_dismissed_v1', '1');
+      if (typeof window !== 'undefined') {
+        const url = new URL(window.location.href);
+        if (url.searchParams.has('complete-profile')) {
+          url.searchParams.delete('complete-profile');
+          window.history.replaceState({}, document.title, `${url.pathname}${url.search}`);
+        }
+        if (window.location.hash.toLowerCase() === '#complete-profile') {
+          window.location.hash = isLoggedIn ? 'feed' : '';
+        }
+      }
+    } catch {}
+  }, [isLoggedIn]);
 
   // Facebook Messenger Floating Dock, Direct Message & Live Unread Badge state
   const [dockChatPeer, setDockChatPeer] = useState<AlumniProfile | null>(null);
@@ -250,6 +325,51 @@ function AlumniAppContent() {
 
   // Shareable Frosted Profile Card Modal state (?card=<id> deep-link or Header "Share Profile Card")
   const [sharedCardProfile, setSharedCardProfile] = useState<AlumniProfile | null>(null);
+
+  // Respectful dwell prompt (11s) for logged-in members with an incomplete profile
+  useEffect(() => {
+    if (!isLoggedIn || !currentUser?.id) return;
+    if (
+      showSplash ||
+      showCongratulations ||
+      authModalMode ||
+      verificationModalState.isOpen ||
+      sharedCardProfile ||
+      dockChatPeer
+    ) {
+      return;
+    }
+    if (route === 'profile' || route === 'landing') return;
+
+    const completion = calculateProfileCompletion(currentUser);
+    if (completion.percentage >= 100) return;
+
+    try {
+      if (sessionStorage.getItem('szmc_profile_prompt_dismissed_v1') === '1') return;
+    } catch {}
+
+    const timer = window.setTimeout(() => {
+      setShowProfileCompletionPrompt(true);
+    }, 11000);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    isLoggedIn,
+    currentUser,
+    route,
+    showSplash,
+    showCongratulations,
+    authModalMode,
+    verificationModalState.isOpen,
+    sharedCardProfile,
+    dockChatPeer,
+  ]);
+
+  const openVerificationCenter = (
+    initialTab: 'status' | 'vouch_classmates' | 'vouch_others' | 'upload_id' | 'policy' = 'status'
+  ) => {
+    setVerificationModalState({ isOpen: true, initialTab });
+  };
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -548,12 +668,64 @@ function AlumniAppContent() {
           </Suspense>
         )}
 
+        {showCongratulations && (
+          <Suspense fallback={null}>
+            <RegistrationCongratulationsFlow
+              profile={isLoggedIn ? currentUser : null}
+              autoEnterFeed={congratsAutoEnter}
+              onComplete={(targetRoute) => {
+                setShowCongratulations(false);
+                if (typeof window !== 'undefined') {
+                  const url = new URL(window.location.href);
+                  if (url.searchParams.has('welcome')) {
+                    url.searchParams.delete('welcome');
+                    window.history.replaceState({}, document.title, `${url.pathname}${url.search}`);
+                  }
+                  if (window.location.hash === '#congratulations' || window.location.hash === '#welcome') {
+                    window.location.hash = isLoggedIn ? (targetRoute || 'feed') : '';
+                  }
+                }
+                if (isLoggedIn && targetRoute) {
+                  if (targetRoute === 'profile') {
+                    setSelectedProfileId(currentUser.id);
+                  }
+                  navigateTo(targetRoute);
+                }
+              }}
+            />
+          </Suspense>
+        )}
+
+        {showProfileCompletionPrompt && (
+          <Suspense fallback={null}>
+            <ProfileCompletionPromptModal
+              isOpen={showProfileCompletionPrompt}
+              profile={isLoggedIn ? currentUser : null}
+              onClose={dismissProfileCompletionPrompt}
+              onCompleteProfile={() => {
+                dismissProfileCompletionPrompt();
+                if (!isLoggedIn) {
+                  setAuthModalMode('register');
+                } else {
+                  setSelectedProfileId(currentUser.id);
+                  setProfileInitialTab('edit');
+                  navigateTo('profile');
+                }
+              }}
+            />
+          </Suspense>
+        )}
+
         <Suspense fallback={<ViewSkeletonFallback />}>
           <LandingPage
             onOpenLogin={() => setAuthModalMode('login')}
             onOpenRegister={() => setAuthModalMode('register')}
             isAuthModalOpen={authModalMode !== null}
             onReplaySplash={() => setShowSplash(true)}
+            onPreviewCongratulations={() => {
+              setCongratsAutoEnter(false);
+              setShowCongratulations(true);
+            }}
             onNavigate={(target) => {
               if (target === 'landing') {
                 navigateTo(target);
@@ -571,8 +743,12 @@ function AlumniAppContent() {
             <AuthModal
               initialMode={authModalMode}
               onClose={() => setAuthModalMode(null)}
-              onSuccess={() => {
+              onSuccess={(mode) => {
                 setAuthModalMode(null);
+                if (mode === 'register') {
+                  setCongratsAutoEnter(true);
+                  setShowCongratulations(true);
+                }
                 navigateTo('feed');
               }}
             />
@@ -615,14 +791,65 @@ function AlumniAppContent() {
         </Suspense>
       )}
 
+      {/* First-Time Registration Congratulation Pages */}
+      {showCongratulations && (
+        <Suspense fallback={null}>
+          <RegistrationCongratulationsFlow
+            profile={currentUser}
+            autoEnterFeed={congratsAutoEnter}
+            onComplete={(targetRoute) => {
+              setShowCongratulations(false);
+              if (typeof window !== 'undefined') {
+                const url = new URL(window.location.href);
+                if (url.searchParams.has('welcome')) {
+                  url.searchParams.delete('welcome');
+                  window.history.replaceState({}, document.title, `${url.pathname}${url.search}`);
+                }
+              }
+              if (targetRoute === 'profile') {
+                setSelectedProfileId(currentUser.id);
+                setProfileInitialTab('edit');
+              }
+              navigateTo(targetRoute || 'feed');
+            }}
+            onOpenVerificationCenter={() => openVerificationCenter('status')}
+          />
+        </Suspense>
+      )}
+
+      {/* Profile Completion & Verified Premium Access Pop-Up */}
+      {showProfileCompletionPrompt && (
+        <Suspense fallback={null}>
+          <ProfileCompletionPromptModal
+            isOpen={showProfileCompletionPrompt}
+            profile={currentUser}
+            onClose={dismissProfileCompletionPrompt}
+            onCompleteProfile={() => {
+              dismissProfileCompletionPrompt();
+              setSelectedProfileId(currentUser.id);
+              setProfileInitialTab('edit');
+              navigateTo('profile');
+            }}
+            onOpenVerificationCenter={() => openVerificationCenter('status')}
+          />
+        </Suspense>
+      )}
+
       {/* Sidebar Navigation */}
       <Sidebar
         activeTab={route.startsWith('batch:') ? 'batches' : route}
-        onSelectTab={navigateTo}
+        onSelectTab={(tab) => {
+          if (tab === 'profile') {
+            setSelectedProfileId(currentUser.id);
+            setProfileInitialTab('about');
+          }
+          navigateTo(tab);
+        }}
         isOpen={isSidebarOpen}
         onClose={() => setIsSidebarOpen(false)}
         unreadMessagesCount={unreadMessagesCount}
         onOpenVerificationCenter={openVerificationCenter}
+        onOpenProfileCompletionPrompt={() => setShowProfileCompletionPrompt(true)}
       />
 
       {/* Main Content Area */}
@@ -854,9 +1081,17 @@ function AlumniAppContent() {
 
                 {route === 'profile' && (
                   <ProfileView
-                    key={selectedProfileId || currentUser.id}
+                    key={`${selectedProfileId || currentUser.id}-${profileInitialTab}`}
                     profileId={selectedProfileId || currentUser.id}
-                    onBack={() => navigateTo(previousRoute || 'alumni')}
+                    initialTab={
+                      (selectedProfileId || currentUser.id) === currentUser.id
+                        ? profileInitialTab
+                        : 'about'
+                    }
+                    onBack={() => {
+                      setProfileInitialTab('about');
+                      navigateTo(previousRoute || 'alumni');
+                    }}
                     backLabel={getBackLabel()}
                     onOpenVerificationCenter={openVerificationCenter}
                     onNavigate={navigateTo}
@@ -1081,8 +1316,12 @@ function AlumniAppContent() {
           <AuthModal
             initialMode={authModalMode}
             onClose={() => setAuthModalMode(null)}
-            onSuccess={() => {
+            onSuccess={(mode) => {
               setAuthModalMode(null);
+              if (mode === 'register') {
+                setCongratsAutoEnter(true);
+                setShowCongratulations(true);
+              }
               navigateTo('feed');
             }}
           />

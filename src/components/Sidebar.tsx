@@ -33,6 +33,7 @@ import { SZMCLogo } from './SZMCLogo';
 import { loadVouchRequests } from '../utils/verificationService';
 import { isUserSuperAdmin, isUserGeneralAdmin, isUserSubAdmin } from '../types';
 import { prefetchRoute } from '../utils/routePrefetch';
+import { calculateProfileCompletion } from '../utils/profileCompletion';
 
 export interface NavItemConfig {
   id: string;
@@ -50,6 +51,7 @@ interface SidebarProps {
   customNavItems?: NavItemConfig[];
   unreadMessagesCount?: number;
   onOpenVerificationCenter?: (tab?: 'status' | 'vouch_classmates' | 'upload_id' | 'policy') => void;
+  onOpenProfileCompletionPrompt?: () => void;
 }
 
 interface NavSection {
@@ -66,10 +68,15 @@ export const Sidebar: React.FC<SidebarProps> = React.memo(({
   customNavItems,
   unreadMessagesCount = 0,
   onOpenVerificationCenter,
+  onOpenProfileCompletionPrompt,
 }) => {
   const { isDark, toggleTheme } = useTheme();
   const { currentUser } = useAuth();
   const isVerified = (currentUser.verificationStatus || 'verified') === 'verified';
+  const profileCompletion = useMemo(
+    () => calculateProfileCompletion(currentUser),
+    [currentUser]
+  );
   const pendingCount = useMemo(
     () => loadVouchRequests().filter((r) => r.status === 'pending').length,
     [currentUser.id, activeTab]
@@ -346,6 +353,26 @@ export const Sidebar: React.FC<SidebarProps> = React.memo(({
                 />
                 <span className="truncate">My Profile</span>
               </button>
+
+              {/* Complete Profile & Unlock Verified Premium Prompt Trigger */}
+              {onOpenProfileCompletionPrompt && profileCompletion.percentage < 100 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onOpenProfileCompletionPrompt();
+                    onClose();
+                  }}
+                  className="w-full flex items-center justify-between gap-2 px-3 py-2 rounded-xl font-semibold text-xs sm:text-[13px] text-amber-800 dark:text-amber-300 bg-amber-50/80 dark:bg-amber-950/35 hover:bg-amber-100/90 dark:hover:bg-amber-900/40 border border-amber-200/70 dark:border-amber-700/40 transition-all text-left cursor-pointer group"
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <Sparkles className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                    <span className="truncate">Complete Profile</span>
+                  </div>
+                  <span className="shrink-0 font-mono tabular-nums text-[11px] font-bold text-amber-700 dark:text-amber-300">
+                    {profileCompletion.percentage}%
+                  </span>
+                </button>
+              )}
 
               {/* Settings */}
               <button

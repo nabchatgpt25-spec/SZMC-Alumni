@@ -1,4 +1,5 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import {
   X,
   Upload,
@@ -105,6 +106,25 @@ export const PhotoChangeModal: React.FC<PhotoChangeModalProps> = ({
   const [fileError, setFileError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    setPreviewUrl(currentUrl || (type === 'avatar' ? DEFAULT_AVATAR : DEFAULT_COVER));
+    setUrlInput('');
+    setFileError(null);
+  }, [isOpen, currentUrl, type]);
+
+  useEffect(() => {
+    if (!isOpen || typeof window === 'undefined') return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   const isAvatar = type === 'avatar';
@@ -185,10 +205,10 @@ export const PhotoChangeModal: React.FC<PhotoChangeModalProps> = ({
 
   const presets = isAvatar ? AVATAR_PRESETS : COVER_PRESETS;
 
-  return (
+  const modalContent = (
     <div
       id="photo-change-modal-backdrop"
-      className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
+      className="fixed inset-0 z-[9990] bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -477,4 +497,6 @@ export const PhotoChangeModal: React.FC<PhotoChangeModalProps> = ({
       </div>
     </div>
   );
+
+  return typeof document !== 'undefined' ? createPortal(modalContent, document.body) : modalContent;
 };

@@ -13,6 +13,7 @@ interface ReactionPickerButtonProps {
   likesCount: number;
   reactionsSummary?: Partial<Record<ReactionType, number>>;
   disabled?: boolean;
+  compact?: boolean;
   onReact: (reaction: ReactionType | null) => void;
 }
 
@@ -22,6 +23,7 @@ export const ReactionPickerButton: React.FC<ReactionPickerButtonProps> = ({
   likesCount,
   reactionsSummary,
   disabled = false,
+  compact = false,
   onReact,
 }) => {
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -78,7 +80,7 @@ export const ReactionPickerButton: React.FC<ReactionPickerButtonProps> = ({
   return (
     <div
       ref={containerRef}
-      className="relative flex-1 sm:flex-initial flex items-center"
+      className={compact ? 'relative flex-1 flex items-center' : 'relative flex-1 sm:flex-initial flex items-center'}
       onMouseEnter={openWithDelayCancel}
       onMouseLeave={closeWithGrace}
     >
@@ -127,9 +129,15 @@ export const ReactionPickerButton: React.FC<ReactionPickerButtonProps> = ({
         }}
         aria-label={activeMeta ? `Remove ${activeMeta.label} reaction` : 'React to post'}
         title={activeMeta ? `${activeMeta.label} (hover for more reactions)` : 'React (hover for options)'}
-        className={`w-full sm:w-auto min-h-[44px] sm:min-h-[38px] flex items-center justify-center gap-1.5 py-2 px-2.5 sm:px-3.5 rounded-xl text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
+        className={`${
+          compact
+            ? 'w-full h-8 flex items-center justify-center gap-1.5 py-1 px-2 rounded-lg text-xs font-semibold'
+            : 'w-full sm:w-auto min-h-[44px] sm:min-h-[38px] flex items-center justify-center gap-1.5 py-2 px-2.5 sm:px-3.5 rounded-xl text-xs font-semibold'
+        } transition-colors whitespace-nowrap shrink-0 cursor-pointer active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
           activeMeta
-            ? `${activeMeta.activeClass} ring-1`
+            ? compact
+              ? `${activeMeta.activeClass}`
+              : `${activeMeta.activeClass} ring-1`
             : 'text-slate-600 dark:text-slate-400 hover:text-rose-600 hover:bg-slate-100 dark:hover:bg-slate-800/80'
         }`}
       >

@@ -22,7 +22,6 @@ import {
   Volume2,
   VolumeX,
   MessageSquare,
-  Type,
   BadgeCheck,
   Sparkles,
   Droplets,
@@ -74,7 +73,7 @@ const SIMPLE_CATEGORIES: CategoryItem[] = [
   {
     id: 'display',
     title: 'Screen & Language',
-    subtitle: 'Classic or Liquid Glass mode, light/dark screen, text size & ভাষা',
+    subtitle: 'Classic or Liquid Glass mode, light/dark screen & ভাষা',
     icon: Sun,
     iconBgClass: 'bg-amber-50 text-amber-600 dark:bg-amber-950/60 dark:text-amber-400',
   },
@@ -177,15 +176,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [activeCategory, setActiveCategory] = useState<SimpleCategoryId>('profile');
   const [mobileView, setMobileView] = useState<'home' | SimpleCategoryId>('home');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
-
-  // Easy-to-read Text Size toggle (Normal vs Large)
-  const [isLargeText, setIsLargeText] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem('szmc_text_size') === 'large';
-    } catch {
-      return false;
-    }
-  });
 
   // Inline Edit & Modal States
   const [isEditingPersonal, setIsEditingPersonal] = useState(false);
@@ -308,16 +298,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setActiveCategory(id);
     setMobileView(id);
     window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
-
-  const handleToggleLargeText = (nextLarge?: boolean) => {
-    const target = typeof nextLarge === 'boolean' ? nextLarge : !isLargeText;
-    setIsLargeText(target);
-    try {
-      localStorage.setItem('szmc_text_size', target ? 'large' : 'normal');
-      document.documentElement.style.fontSize = target ? '112.5%' : '';
-    } catch {}
-    showToast(target ? 'Saved: Larger text is now ON' : 'Saved: Normal text size');
   };
 
   const handleQuickThemeToggle = () => {
@@ -715,12 +695,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         </div>
 
-        {/* INSTANT QUICK CONTROLS — 4 Big Interactive One-Tap Tiles */}
+        {/* INSTANT QUICK CONTROLS — 3 Big Interactive One-Tap Tiles */}
         <section
           aria-label="Quick Controls"
           className={`${mobileView !== 'home' ? 'hidden lg:block' : 'block'}`}
         >
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             {/* Quick Tile 1: App Style (Click 1 = Glass, Click 2 = Clear Glass, Click 3 = Classic) */}
             <button
               type="button"
@@ -802,42 +782,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </div>
               <span className="text-xs font-bold text-blue-600 dark:text-blue-400 whitespace-nowrap shrink-0">
                 Switch
-              </span>
-            </button>
-
-            {/* Quick Tile 2: Bigger Text for Easy Reading */}
-            <button
-              type="button"
-              onClick={() => handleToggleLargeText()}
-              className={`min-h-[76px] p-4 rounded-2xl border text-left flex items-center justify-between gap-3 transition-all cursor-pointer active:scale-[0.98] ${
-                isLargeText
-                  ? 'bg-blue-50/80 dark:bg-blue-950/40 border-blue-500 text-slate-900 dark:text-white'
-                  : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white hover:border-blue-300'
-              }`}
-            >
-              <div className="flex items-center gap-3 min-w-0">
-                <div
-                  className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 ${
-                    isLargeText
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
-                  }`}
-                >
-                  <Type className="w-5 h-5" />
-                </div>
-                <div className="min-w-0">
-                  <div className="text-sm font-bold leading-snug">Larger Text</div>
-                  <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                    {isLargeText ? 'Bigger & easier to read' : 'Normal size'}
-                  </div>
-                </div>
-              </div>
-              <span
-                className={`text-xs font-bold whitespace-nowrap shrink-0 ${
-                  isLargeText ? 'text-blue-600 dark:text-blue-400' : 'text-slate-400'
-                }`}
-              >
-                {isLargeText ? 'ON' : 'OFF'}
               </span>
             </button>
 
@@ -1730,54 +1674,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </div>
                 </div>
 
-                {/* Step 2: Text Size (Huge win for senior users) */}
+                {/* Step 2: Screen Brightness (Light or Dark — works with both Classic & Glass) */}
                 <div className="space-y-3 pt-4 border-t border-slate-100 dark:border-slate-800">
                   <div className="text-base font-bold text-slate-900 dark:text-white">
-                    2. Text Size
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <button
-                      type="button"
-                      onClick={() => handleToggleLargeText(false)}
-                      className={`min-h-[68px] p-4 rounded-2xl border-2 text-left flex items-center justify-between gap-3 transition-all cursor-pointer active:scale-[0.99] ${
-                        !isLargeText
-                          ? 'border-blue-600 bg-blue-50/70 dark:bg-blue-950/30 text-slate-900 dark:text-white'
-                          : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 text-slate-700 dark:text-slate-300'
-                      }`}
-                    >
-                      <div>
-                        <div className="text-base font-bold">Normal Size</div>
-                        <div className="text-sm text-slate-500 dark:text-slate-400">
-                          Standard everyday reading size
-                        </div>
-                      </div>
-                      {!isLargeText && <Check className="w-5 h-5 text-blue-600 dark:text-blue-400 shrink-0" />}
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => handleToggleLargeText(true)}
-                      className={`min-h-[68px] p-4 rounded-2xl border-2 text-left flex items-center justify-between gap-3 transition-all cursor-pointer active:scale-[0.99] ${
-                        isLargeText
-                          ? 'border-blue-600 bg-blue-50/70 dark:bg-blue-950/30 text-slate-900 dark:text-white'
-                          : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 text-slate-700 dark:text-slate-300'
-                      }`}
-                    >
-                      <div>
-                        <div className="text-lg font-bold">Large Text</div>
-                        <div className="text-sm text-slate-500 dark:text-slate-400">
-                          Bigger words, easier on the eyes
-                        </div>
-                      </div>
-                      {isLargeText && <Check className="w-5 h-5 text-blue-600 dark:text-blue-400 shrink-0" />}
-                    </button>
-                  </div>
-                </div>
-
-                {/* Step 3: Screen Brightness (Light or Dark — works with both Classic & Glass) */}
-                <div className="space-y-3 pt-4 border-t border-slate-100 dark:border-slate-800">
-                  <div className="text-base font-bold text-slate-900 dark:text-white">
-                    3. Screen Color
+                    2. Screen Color
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     {[
@@ -1834,11 +1734,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </div>
                 </div>
 
-                {/* Step 4: Language */}
+                {/* Step 3: Language */}
                 <div className="space-y-3 pt-4 border-t border-slate-100 dark:border-slate-800">
                   <div className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
                     <Globe className="w-5 h-5 text-blue-600 dark:text-blue-400" />
-                    <span>4. Language / ভাষা</span>
+                    <span>3. Language / ভাষা</span>
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <button

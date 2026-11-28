@@ -184,8 +184,8 @@ export const BloodNetworkView: React.FC<BloodNetworkViewProps> = ({
 
       {/* Toast */}
       {toastMessage && (
-        <div className="fixed bottom-6 right-6 z-50 bg-slate-900/95 text-white px-4 py-2.5 rounded-xl shadow-xl text-xs font-bold flex items-center gap-2 border border-rose-500/50 animate-fade-in backdrop-blur-md shadow-rose-950/40">
-          <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+        <div className="fixed bottom-20 lg:bottom-6 right-4 sm:right-6 z-[9995] max-w-[calc(100vw-2rem)] bg-slate-900/95 text-white px-4 py-2.5 rounded-xl shadow-xl text-xs font-bold flex items-center gap-2 border border-rose-500/50 animate-fade-in backdrop-blur-md shadow-rose-950/40">
+          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
           <span>{toastMessage}</span>
         </div>
       )}

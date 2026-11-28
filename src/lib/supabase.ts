@@ -132,7 +132,6 @@ export const ALUMNI_PUBLIC_COLUMNS = [
   'vouch_target_count',
   'verified_at',
   'verified_by_profile_id',
-  'profession',
   'position',
   'institution',
   'cadre',

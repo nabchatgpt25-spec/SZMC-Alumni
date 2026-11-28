@@ -51,7 +51,7 @@ export async function fetchSavedPostsFromDb(userId?: number): Promise<{
     if (authorIds.length > 0) {
       const { data: authors } = await supabase
         .from('alumni_profiles')
-        .select('id, full_name, avatar_url, batch_year, profession, institution, verification_status')
+        .select('id, full_name, avatar_url, batch_year, position, institution, verification_status')
         .in('id', authorIds);
       (authors || []).forEach((a: any) => authorMap.set(Number(a.id), a));
     }
@@ -66,7 +66,7 @@ export async function fetchSavedPostsFromDb(userId?: number): Promise<{
         avatarUrl: author.avatar_url || '/assets/aistudio/images__1__2778177d.png',
         batchYear: author.batch_year ? Number(author.batch_year) : undefined,
         verified: author.verification_status === 'verified',
-        profession: author.profession || undefined,
+        profession: author.position || undefined,
         institution: author.institution || undefined,
         content: row.content || '',
         category: row.category || 'General Discussion',

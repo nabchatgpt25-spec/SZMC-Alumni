@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ShieldCheck,
   MapPin,
@@ -603,11 +604,9 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   // Edit form state (restored from localStorage draft if available)
   const [editName, setEditName] = useState<string>(initialEditDraft?.editName ?? profile.fullName);
   const [editBatch, setEditBatch] = useState<number>(initialEditDraft?.editBatch ?? profile.batchYear);
-  const [editCollegeRoll, setEditCollegeRoll] = useState<string>(initialEditDraft?.editCollegeRoll ?? (profile.collegeRoll || ''));
   const [editBio, setEditBio] = useState<string>(initialEditDraft?.editBio ?? (profile.bio || ''));
   const [editPosition, setEditPosition] = useState<string>(initialEditDraft?.editPosition ?? (profile.position || ''));
   const [editInstitution, setEditInstitution] = useState<string>(initialEditDraft?.editInstitution ?? (profile.institution || ''));
-  const [editProfession, setEditProfession] = useState<string>(initialEditDraft?.editProfession ?? (profile.profession || ''));
   const [editCadre, setEditCadre] = useState<string>(initialEditDraft?.editCadre ?? (profile.cadre || ''));
   const [editCity, setEditCity] = useState<string>(initialEditDraft?.editCity ?? (profile.city || ''));
   const [editCountry, setEditCountry] = useState<string>(initialEditDraft?.editCountry ?? (profile.country || ''));
@@ -620,7 +619,6 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const [editDegreeOther, setEditDegreeOther] = useState<string>(initialEditDraft?.editDegreeOther ?? '');
   const [editSpecialties, setEditSpecialties] = useState<string[]>(initialEditDraft?.editSpecialties ?? (profile.specialty || []));
   const [editSpecialtyOther, setEditSpecialtyOther] = useState<string>(initialEditDraft?.editSpecialtyOther ?? (profile.specialtyOther || ''));
-  const [editProfessionOther, setEditProfessionOther] = useState<string>(initialEditDraft?.editProfessionOther ?? '');
   const [editBadges, setEditBadges] = useState<string[]>(initialEditDraft?.editBadges ?? (profile.badges || []));
   const [currentPass, setCurrentPass] = useState('');
   const [newPass, setNewPass] = useState('');
@@ -644,12 +642,9 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
       if (savedDraft) {
         setEditName(savedDraft.editName ?? currentUser.fullName);
         setEditBatch(savedDraft.editBatch ?? currentUser.batchYear);
-        setEditCollegeRoll(savedDraft.editCollegeRoll ?? (currentUser.collegeRoll || ''));
         setEditBio(savedDraft.editBio ?? (currentUser.bio || ''));
         setEditPosition(savedDraft.editPosition ?? (currentUser.position || ''));
         setEditInstitution(savedDraft.editInstitution ?? (currentUser.institution || ''));
-        setEditProfession(savedDraft.editProfession ?? (currentUser.profession || ''));
-        setEditProfessionOther(savedDraft.editProfessionOther ?? '');
         setEditCadre(savedDraft.editCadre ?? (currentUser.cadre || ''));
         setEditCity(savedDraft.editCity ?? (currentUser.city || ''));
         setEditCountry(savedDraft.editCountry ?? (currentUser.country || ''));
@@ -666,12 +661,9 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
       } else {
         setEditName(currentUser.fullName);
         setEditBatch(currentUser.batchYear);
-        setEditCollegeRoll(currentUser.collegeRoll || '');
         setEditBio(currentUser.bio || '');
         setEditPosition(currentUser.position || '');
         setEditInstitution(currentUser.institution || '');
-        setEditProfession(currentUser.profession || '');
-        setEditProfessionOther('');
         setEditCadre(currentUser.cadre || '');
         setEditCity(currentUser.city || '');
         setEditCountry(currentUser.country || '');
@@ -699,12 +691,9 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
       const draftPayload = {
         editName,
         editBatch,
-        editCollegeRoll,
         editBio,
         editPosition,
         editInstitution,
-        editProfession,
-        editProfessionOther,
         editCadre,
         editCity,
         editCountry,
@@ -728,12 +717,9 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     editDraftStorageKey,
     editName,
     editBatch,
-    editCollegeRoll,
     editBio,
     editPosition,
     editInstitution,
-    editProfession,
-    editProfessionOther,
     editCadre,
     editCity,
     editCountry,
@@ -754,11 +740,9 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     ...profile,
     fullName: editName,
     batchYear: Number(editBatch),
-    collegeRoll: editCollegeRoll,
     bio: editBio,
     position: editPosition,
     institution: editInstitution,
-    profession: editProfession,
     cadre: editCadre,
     city: editCity,
     country: editCountry,
@@ -839,16 +823,24 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     });
   };
 
-  const handleSavePhoto = (newUrl: string) => {
-    if (photoModal.type === 'avatar') {
-      updateProfile({ avatarUrl: newUrl });
-      setProfile((prev) => ({ ...prev, avatarUrl: newUrl }));
-    } else {
-      updateProfile({ coverUrl: newUrl });
-      setProfile((prev) => ({ ...prev, coverUrl: newUrl }));
+  const persistPhotoUpdate = async (type: PhotoType, newUrl: string) => {
+    setSaveError(null);
+    const patch = type === 'avatar' ? { avatarUrl: newUrl } : { coverUrl: newUrl };
+    const res = await updateProfile(patch);
+    if (!res.success) {
+      const msg = res.error || 'Could not save photo to Supabase. Please try again.';
+      setSaveError(msg);
+      showToast(msg, 'error');
+      return;
     }
+    setProfile((prev) => ({ ...prev, ...patch }));
     setSaveSuccess(true);
+    showToast(type === 'avatar' ? 'Profile photo saved to Supabase.' : 'Cover photo saved to Supabase.', 'success');
     setTimeout(() => setSaveSuccess(false), 2000);
+  };
+
+  const handleSavePhoto = async (newUrl: string) => {
+    await persistPhotoUpdate(photoModal.type, newUrl);
   };
 
   const handleDirectFileInput = (e: React.ChangeEvent<HTMLInputElement>, type: PhotoType) => {
@@ -857,30 +849,13 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
       if (!file.type.startsWith('image/')) return;
       compressImageFileToDataUrl(file)
         .then((dataUrl) => {
-          if (type === 'avatar') {
-            updateProfile({ avatarUrl: dataUrl });
-            setProfile((prev) => ({ ...prev, avatarUrl: dataUrl }));
-          } else {
-            updateProfile({ coverUrl: dataUrl });
-            setProfile((prev) => ({ ...prev, coverUrl: dataUrl }));
-          }
-          setSaveSuccess(true);
-          setTimeout(() => setSaveSuccess(false), 2000);
+          void persistPhotoUpdate(type, dataUrl);
         })
         .catch(() => {
           const reader = new FileReader();
           reader.onload = (event) => {
             if (event.target?.result && typeof event.target.result === 'string') {
-              const dataUrl = event.target.result;
-              if (type === 'avatar') {
-                updateProfile({ avatarUrl: dataUrl });
-                setProfile((prev) => ({ ...prev, avatarUrl: dataUrl }));
-              } else {
-                updateProfile({ coverUrl: dataUrl });
-                setProfile((prev) => ({ ...prev, coverUrl: dataUrl }));
-              }
-              setSaveSuccess(true);
-              setTimeout(() => setSaveSuccess(false), 2000);
+              void persistPhotoUpdate(type, event.target.result);
             }
           };
           reader.readAsDataURL(file);
@@ -918,20 +893,13 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
       ])
     );
 
-    const finalProfession =
-      editProfession === 'Others' && editProfessionOther.trim()
-        ? editProfessionOther.trim()
-        : editProfession;
-
     // Build client update data - notice role, verificationStatus, badges are strictly excluded
     const updatedData: Partial<AlumniProfile> = {
       fullName: editName,
       batchYear: Number(editBatch),
-      collegeRoll: editCollegeRoll,
       bio: editBio,
       position: editPosition,
       institution: editInstitution,
-      profession: finalProfession,
       cadre: editCadre,
       city: editCity,
       country: editCountry,
@@ -945,38 +913,42 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
       specialtyOther: editSpecialtyOther,
     };
 
-    setEditDegrees(finalDegrees);
-    setEditSpecialties(finalSpecialties);
-    setEditDegreeOther('');
-    setEditSpecialtyOther('');
-    setEditProfessionOther('');
-
     try {
       const res = await updateProfile(updatedData);
       setIsSavingProfile(false);
 
       if (!res.success) {
-        setSaveError(res.error || 'Failed to save profile changes to database.');
+        const msg = res.error || 'Failed to save profile changes to Supabase.';
+        setSaveError(msg);
+        showToast(msg, 'error');
         return;
       }
 
       if (typeof window !== 'undefined') {
         try {
           localStorage.removeItem(editDraftStorageKey);
-        } catch (e) {
-          console.warn('Failed to clear profile edit draft', e);
+        } catch (err) {
+          console.warn('Failed to clear profile edit draft', err);
         }
       }
 
+      setEditDegrees(finalDegrees);
+      setEditSpecialties(finalSpecialties);
+      setEditDegreeOther('');
+      setEditSpecialtyOther('');
+
       setProfile((prev) => ({ ...prev, ...updatedData }));
       setSaveSuccess(true);
+      showToast('Profile saved to Supabase!', 'success');
       setTimeout(() => {
         setSaveSuccess(false);
         setActiveTab('about');
       }, 1500);
     } catch (err: any) {
       setIsSavingProfile(false);
-      setSaveError(err?.message || 'Unexpected failure while persisting profile.');
+      const msg = err?.message || 'Unexpected failure while persisting profile.';
+      setSaveError(msg);
+      showToast(msg, 'error');
     }
   };
 
@@ -1416,11 +1388,6 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                             profile.vouchesCount ?? (profile.verifiedBy?.length || 0)
                           }/2 Vouches)`}
                     </span>
-                    {profile.collegeRoll && (
-                      <span className="text-[11px] font-mono font-bold px-2 py-0.5 rounded-md bg-white/80 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300">
-                        Roll: {profile.collegeRoll}
-                      </span>
-                    )}
                   </div>
                   <p className="text-[11px] text-slate-600 dark:text-slate-300">
                     {profile.verifiedBy && profile.verifiedBy.length > 0
@@ -2380,19 +2347,6 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
 
                 <div className="sm:col-span-2">
                   <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    College Roll / Registration ID
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="e.g. SZMC-01-018 or BMDC A-12345"
-                    value={editCollegeRoll}
-                    onChange={(e) => setEditCollegeRoll(e.target.value)}
-                    className="w-full px-3.5 py-2 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-
-                <div className="sm:col-span-2">
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
                     Biography / About Me
                   </label>
                   <textarea
@@ -2435,46 +2389,6 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                     onChange={(e) => setEditInstitution(e.target.value)}
                     className="w-full px-3.5 py-2 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Profession Type
-                  </label>
-                  <select
-                    value={editProfession}
-                    onChange={(e) => setEditProfession(e.target.value)}
-                    className="w-full px-3.5 py-2 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="">Select Profession Type</option>
-                    <option value="Engineer / Tech Executive">Engineer / Tech Executive</option>
-                    <option value="Doctor / Medical Specialist">Doctor / Medical Specialist</option>
-                    <option value="Academic & Researcher">Academic & Researcher</option>
-                    <option value="Corporate Executive & Leader">Corporate Executive & Leader</option>
-                    <option value="Entrepreneur & Founder">Entrepreneur & Founder</option>
-                    <option value="Civil Servant / Administration">Civil Servant / Administration</option>
-                    <option value="Diplomat & Foreign Service">Diplomat & Foreign Service</option>
-                    <option value="Defense & Armed Forces Officer">Defense & Armed Forces Officer</option>
-                    <option value="Lawyer & Legal Counsel">Lawyer & Legal Counsel</option>
-                    <option value="Banker & Financial Analyst">Banker & Financial Analyst</option>
-                    <option value="Chartered Accountant & Auditor">Chartered Accountant & Auditor</option>
-                    <option value="Architect & Urban Planner">Architect & Urban Planner</option>
-                    <option value="Pharmacist & Biotech Specialist">Pharmacist & Biotech Specialist</option>
-                    <option value="Journalist & Media Professional">Journalist & Media Professional</option>
-                    <option value="Development & NGO Specialist">Development & NGO Specialist</option>
-                    <option value="University Student">University Student</option>
-                    <option value="Professional Consultant">Professional Consultant</option>
-                    <option value="Others">Others</option>
-                  </select>
-                  {editProfession === 'Others' && (
-                    <input
-                      type="text"
-                      placeholder="Write your custom profession..."
-                      value={editProfessionOther}
-                      onChange={(e) => setEditProfessionOther(e.target.value)}
-                      className="mt-2 w-full px-3.5 py-2 text-xs bg-white dark:bg-slate-800 border border-blue-400 dark:border-blue-500 rounded-xl text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                  )}
                 </div>
 
                 <div className="sm:col-span-2">
@@ -2589,7 +2503,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                     rows={4}
                     value={editCareer}
                     onChange={(e) => setEditCareer(e.target.value)}
-                    placeholder="e.g. 2024 - Present: Senior Software Engineer, Google&#10;2020 - 2024: Software Engineer, Grameenphone"
+                    placeholder="e.g: 2024-present: Departmental Head, SZMC&#10;2020-24: Cardiologist, DMC"
                     className="w-full p-3 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
@@ -2676,7 +2590,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                     <span>Facebook Profile Link</span>
                   </label>
                   <input
-                    type="url"
+                    type="text"
                     placeholder="https://facebook.com/username"
                     value={editFb}
                     onChange={(e) => setEditFb(e.target.value)}
@@ -2685,6 +2599,20 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                 </div>
               </div>
             </div>
+
+            {saveError && (
+              <div className="p-3.5 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs font-bold flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{saveError}</span>
+              </div>
+            )}
+
+            {saveSuccess && (
+              <div className="p-3.5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 text-xs font-bold flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
+                <span>Profile updated and synced successfully across Supabase!</span>
+              </div>
+            )}
 
             <div className="pt-4 flex items-center justify-end gap-3 border-t border-slate-100 dark:border-slate-800">
               <button
@@ -2867,9 +2795,16 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
       )}
 
       {/* Delete Profile Confirmation Modal */}
-      {isDeleteModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm">
-          <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-md w-full p-6 sm:p-7 border border-slate-200 dark:border-slate-800 shadow-2xl space-y-5 animate-in fade-in zoom-in-95 duration-200">
+      {isDeleteModalOpen &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[9996] flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm"
+            onClick={(e) => {
+              if (e.target === e.currentTarget && !isDeleting) setIsDeleteModalOpen(false);
+            }}
+          >
+            <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-md w-full p-6 sm:p-7 border border-slate-200 dark:border-slate-800 shadow-2xl space-y-5 animate-in fade-in zoom-in-95 duration-200">
             <div className="flex items-start gap-4">
               <div className="w-12 h-12 rounded-2xl bg-red-100 dark:bg-red-950/60 border border-red-200 dark:border-red-900 flex items-center justify-center shrink-0">
                 <AlertTriangle className="w-6 h-6 text-red-600 dark:text-red-400" />
@@ -2949,8 +2884,9 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
               </button>
             </div>
           </div>
-        </div>
-      )}
+          </div>,
+          document.body
+        )}
 
       {/* Interactive Photo Change Modal (Upload, Presets, or Link) */}
       <PhotoChangeModal
@@ -2995,19 +2931,22 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         onEditOwnProfile={isMine ? () => setActiveTab('edit') : undefined}
       />
 
-      {safetyBanner && (
-        <div className="fixed bottom-5 right-5 z-50 max-w-sm bg-slate-900 text-white border border-slate-700 rounded-xl px-4 py-3 shadow-2xl flex items-center gap-3 text-xs font-medium">
-          <span className="flex-1">{safetyBanner}</span>
-          <button
-            type="button"
-            onClick={() => setSafetyBanner(null)}
-            className="text-slate-400 hover:text-white cursor-pointer"
-            aria-label="Dismiss notification"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-      )}
+      {safetyBanner &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div className="fixed bottom-20 lg:bottom-6 right-4 sm:right-6 z-[9995] max-w-[calc(100vw-2rem)] sm:max-w-sm bg-slate-900 text-white border border-slate-700 rounded-xl px-4 py-3 shadow-2xl flex items-center gap-3 text-xs font-medium">
+            <span className="flex-1">{safetyBanner}</span>
+            <button
+              type="button"
+              onClick={() => setSafetyBanner(null)}
+              className="text-slate-400 hover:text-white cursor-pointer shrink-0"
+              aria-label="Dismiss notification"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>,
+          document.body
+        )}
     </div>
   );
 };

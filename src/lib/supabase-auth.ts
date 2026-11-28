@@ -50,7 +50,7 @@ export function mapSupabaseRowToAlumniProfile(row: any, authUser?: User): Alumni
     vouchesCount: Number(row.vouches_count) || (resolvedRole === 'admin' ? 2 : 0),
     vouchTargetCount: Number(row.vouch_target_count) || 2,
     verificationDate: row.verified_at ? String(row.verified_at) : undefined,
-    profession: row.profession || (resolvedRole === 'admin' ? 'Portal Administrator' : 'Medical Doctor / Physician'),
+    profession: row.position || (resolvedRole === 'admin' ? 'Portal Administrator' : 'Medical Doctor / Physician'),
     position: row.position || '',
     institution: row.institution || '',
     cadre: row.cadre || undefined,
@@ -190,9 +190,10 @@ export async function getOrCreateSupabaseProfile(
       academic_stream: streamGroup.academicStream,
       academic_group: streamGroup.academicGroup,
       section: extraData?.section || 'MBBS',
-      profession: extraData?.profession || (resolvedRole === 'admin' ? 'Portal Administrator' : 'Medical Doctor / Physician'),
       position: extraData?.position || (resolvedRole === 'admin' ? 'Administrator' : 'Physician'),
       institution: extraData?.institution || 'Shaheed Ziaur Rahman Medical College Hospital',
+      specialty: Array.isArray(extraData?.specialty) ? extraData.specialty : [],
+      degree: Array.isArray(extraData?.degree) && extraData.degree.length > 0 ? extraData.degree : ['MBBS'],
       city: extraData?.city || 'Bogura',
       country: extraData?.country || 'Bangladesh',
       email: cleanEmail || null,
@@ -238,7 +239,7 @@ export async function getOrCreateSupabaseProfile(
       return null;
     }
 
-    if (inserted && (isAutoVerified || resolvedRole !== 'member')) {
+    if (inserted && resolvedRole === 'admin') {
       try {
         const { data: updatedRow } = await supabase
           .from('alumni_profiles')

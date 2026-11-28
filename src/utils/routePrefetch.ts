@@ -36,6 +36,8 @@ export const routeLoaders = {
   settings: () => import('../components/SettingsView'),
   profileCard: () => import('../components/FrostedProfileCardModal'),
   splash: () => import('../components/OutstandingLoadingScreen'),
+  congratulations: () => import('../components/RegistrationCongratulationsFlow'),
+  profileCompletionPrompt: () => import('../components/ProfileCompletionPromptModal'),
 } as const;
 
 type LoaderKey = keyof typeof routeLoaders;
@@ -69,6 +71,7 @@ function resolveLoaderKeys(route: string): LoaderKey[] {
   if (route === 'admin' || route === 'admin-center' || route === 'admin-hub' || route === 'admin-command-center') return ['admin'];
   if (route === 'institutions' || route === 'news') return ['upcoming'];
   if (route === 'landing') return ['landing'];
+  if (route === 'auth') return ['auth'];
   return [];
 }
 

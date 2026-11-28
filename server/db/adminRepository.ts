@@ -1,6 +1,9 @@
 import {
   supabaseServer,
   isSupabaseServerConfigured,
+  isSupabaseServiceRoleConfigured,
+  getSupabaseWriteClient,
+  createUserScopedSupabaseClient,
   findAuthUserByEmailOrPhone,
   SUPABASE_TABLES,
 } from '../lib/supabase-server.ts';
@@ -416,7 +419,7 @@ export async function queryPaginatedAlumniProfiles(params: ProfileFilterParams) 
       if (params.search && params.search.trim()) {
         const s = params.search.trim();
         query = query.or(
-          `full_name.ilike.%${s}%,institution.ilike.%${s}%,profession.ilike.%${s}%,city.ilike.%${s}%,college_roll.ilike.%${s}%`
+          `full_name.ilike.%${s}%,institution.ilike.%${s}%,position.ilike.%${s}%,city.ilike.%${s}%`
         );
       }
 
@@ -443,7 +446,7 @@ export async function queryPaginatedAlumniProfiles(params: ProfileFilterParams) 
           vouchesCount: Number(r.vouches_count) || 0,
           vouchTargetCount: Number(r.vouch_target_count) || 2,
           verifiedByAdmin: r.verified_by_profile_id ? String(r.verified_by_profile_id) : null,
-          profession: r.profession || '',
+          profession: r.position || '',
           position: r.position || '',
           institution: r.institution || '',
           city: r.city || 'Dhaka',
@@ -538,6 +541,7 @@ export async function createOrRegisterAlumniProfile(input: {
   passwordHash?: string;
   bloodGroup?: string | null;
   isRegisteredDonor?: boolean;
+  allowExistingAuthUser?: boolean;
 }) {
   const cleanEmail = (input.email || '').trim().toLowerCase() || null;
   const cleanPhone = (input.phone || '').trim() || null;
@@ -562,53 +566,62 @@ export async function createOrRegisterAlumniProfile(input: {
     effectiveAuthUid = input.userUid;
   }
 
+  const allowExisting = Boolean(input.allowExistingAuthUser);
+
   if (isSupabaseServerConfigured) {
     try {
-      // 1. If effectiveAuthUid is not yet a valid UUID, look up or provision in auth.users (bounded lookup)
+      // 1. Prevent duplicate registration / account takeover when registering a brand-new user
       if (!effectiveAuthUid && cleanEmail) {
         const existingAuthUser = await findAuthUserByEmailOrPhone({ email: cleanEmail });
         if (existingAuthUser) {
+          if (!allowExisting) {
+            const dupErr: any = new Error('An account with this email already exists. Please sign in directly.');
+            dupErr.statusCode = 409;
+            throw dupErr;
+          }
           effectiveAuthUid = existingAuthUser.id;
+        } else if (!allowExisting) {
+          const { data: existingProfileByEmail } = await supabaseServer
+            .from(SUPABASE_TABLES.ALUMNI_PROFILES)
+            .select('id')
+            .ilike('email', cleanEmail)
+            .maybeSingle();
+          if (existingProfileByEmail?.id) {
+            const dupErr: any = new Error('An account with this email already exists. Please sign in directly.');
+            dupErr.statusCode = 409;
+            throw dupErr;
+          }
         }
       }
 
       if (!effectiveAuthUid && cleanEmail && (input.rawPassword || input.passwordHash)) {
         const initialPass = input.rawPassword || 'TempPass_' + Date.now();
-        try {
-          const { data: createdAuthUser, error: createAuthErr } =
-            await supabaseServer.auth.admin.createUser({
-              email: cleanEmail,
-              password: initialPass,
-              email_confirm: false,
-              user_metadata: {
-                full_name: input.fullName.trim(),
-                batch_year: batchNum,
-                phone: cleanPhone,
-              },
-            });
-          if (!createAuthErr && createdAuthUser?.user) {
-            effectiveAuthUid = createdAuthUser.user.id;
+        const { data: createdAuthUser, error: createAuthErr } =
+          await supabaseServer.auth.admin.createUser({
+            email: cleanEmail,
+            password: initialPass,
+            // Confirm immediately on server so no confirmation email is sent and member enters feed directly
+            email_confirm: true,
+            user_metadata: {
+              full_name: input.fullName.trim(),
+              batch_year: batchNum,
+              phone: cleanPhone,
+            },
+          });
+        if (!createAuthErr && createdAuthUser?.user) {
+          effectiveAuthUid = createdAuthUser.user.id;
+        } else if (createAuthErr) {
+          const errMsg = (createAuthErr.message || '').toLowerCase();
+          if (
+            errMsg.includes('already been registered') ||
+            errMsg.includes('already exists') ||
+            errMsg.includes('duplicate')
+          ) {
+            const dupErr: any = new Error('An account with this email already exists. Please sign in directly.');
+            dupErr.statusCode = 409;
+            throw dupErr;
           }
-        } catch {}
-
-        // Fallback to regular signUp if auth.admin lacks service_role key
-        if (!effectiveAuthUid) {
-          try {
-            const { data: sData, error: sErr } = await supabaseServer.auth.signUp({
-              email: cleanEmail,
-              password: initialPass,
-              options: {
-                data: {
-                  full_name: input.fullName.trim(),
-                  batch_year: batchNum,
-                  phone: cleanPhone,
-                },
-              },
-            });
-            if (!sErr && sData?.user) {
-              effectiveAuthUid = sData.user.id;
-            }
-          } catch {}
+          console.warn('Supabase auth.admin.createUser notice:', createAuthErr.message);
         }
       }
 
@@ -624,11 +637,9 @@ export async function createOrRegisterAlumniProfile(input: {
               avatar_url: input.avatarUrl || '/assets/aistudio/images__1__2778177d.png',
               batch_year: batchNum,
               session,
-              college_roll: input.collegeRoll?.trim() || null,
               academic_stream: streamVal,
               academic_group: groupVal,
               section: input.section || 'SZMC',
-              profession: input.profession || '',
               position: input.position || '',
               institution: input.institution || '',
               specialty: Array.isArray(input.specialty) ? input.specialty : [],
@@ -656,20 +667,24 @@ export async function createOrRegisterAlumniProfile(input: {
           invalidateAdminOverviewCache();
           const profileResult = {
             id: Number(data.id),
+            authUserId: data.auth_user_id,
             fullName: data.full_name,
             avatarUrl: data.avatar_url,
             batchYear: data.batch_year,
             session: data.session,
-            collegeRoll: data.college_roll,
+            collegeRoll: data.college_roll ?? null,
             academicStream: data.academic_stream,
             academicGroup: data.academic_group,
             section: data.section,
-            profession: data.profession,
-            position: data.position,
+            profession: data.position || '',
+            position: data.position || '',
             institution: data.institution,
+            specialty: Array.isArray(data.specialty) ? data.specialty : [],
+            degree: Array.isArray(data.degree) ? data.degree : ['MBBS'],
             city: data.city,
             country: data.country,
             phone: data.phone,
+            whatsapp: data.whatsapp,
             email: data.email,
             bloodGroup: data.blood_group,
             role: data.role,
@@ -690,8 +705,23 @@ export async function createOrRegisterAlumniProfile(input: {
           console.warn('Supabase alumni_profiles upsert notice:', error.message);
         }
       }
-    } catch (err) {
+    } catch (err: any) {
+      if (err?.statusCode === 409) {
+        throw err;
+      }
       console.warn('Supabase createOrRegisterAlumniProfile notice:', err);
+    }
+  }
+
+  // Prevent duplicate registration in in-memory fallback store as well
+  if (!allowExisting && cleanEmail) {
+    const memDup = inMemoryAlumniProfiles.find(
+      (p) => p.email && p.email.toLowerCase() === cleanEmail
+    );
+    if (memDup) {
+      const dupErr: any = new Error('An account with this email already exists. Please sign in directly.');
+      dupErr.statusCode = 409;
+      throw dupErr;
     }
   }
 
@@ -750,7 +780,7 @@ export async function findAlumniByCredential(credential: string) {
     try {
       let query = supabaseServer
         .from(SUPABASE_TABLES.ALUMNI_PROFILES)
-        .select('id, full_name, avatar_url, batch_year, session, college_roll, academic_stream, academic_group, section, profession, position, institution, city, country, phone, phone_ownership_verified, phone_verified_at, phone_verified_by_profile_id, phone_verification_notes, email, blood_group, role, verification_status, is_public, auth_user_id, created_at');
+        .select('id, full_name, avatar_url, batch_year, session, academic_stream, academic_group, section, position, institution, city, country, phone, phone_ownership_verified, phone_verified_at, phone_verified_by_profile_id, phone_verification_notes, email, blood_group, role, verification_status, is_public, auth_user_id, created_at');
       if (clean.includes('@')) {
         query = query.eq('email', clean);
       } else {
@@ -774,11 +804,11 @@ export async function findAlumniByCredential(credential: string) {
           avatarUrl: data.avatar_url,
           batchYear: Number(data.batch_year),
           session: data.session,
-          collegeRoll: data.college_roll,
+          collegeRoll: undefined,
           academicStream: data.academic_stream,
           academicGroup: data.academic_group,
           section: data.section,
-          profession: data.profession,
+          profession: data.position || '',
           position: data.position,
           institution: data.institution,
           city: data.city,
@@ -812,6 +842,7 @@ export async function findAlumniByCredential(credential: string) {
             batchYear: Number((matched.user_metadata as any)?.batch_year) || 25,
             email: clean,
             phone: (matched.user_metadata as any)?.phone || null,
+            allowExistingAuthUser: true,
           });
           return restored;
         }
@@ -926,35 +957,213 @@ export async function deleteAlumniProfile(profileId: number) {
   return true;
 }
 
+const VALID_BLOOD_GROUPS = new Set(['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-']);
+
+const AUTHENTICATED_PUBLIC_SELECT_COLS = [
+  'id',
+  'auth_user_id',
+  'role',
+  'full_name',
+  'avatar_url',
+  'cover_url',
+  'batch_year',
+  'session',
+  'academic_stream',
+  'academic_group',
+  'section',
+  'verification_status',
+  'verification_method',
+  'vouches_count',
+  'vouch_target_count',
+  'verified_at',
+  'verified_by_profile_id',
+  'position',
+  'institution',
+  'cadre',
+  'specialty',
+  'specialty_other',
+  'degree',
+  'city',
+  'country',
+  'latitude',
+  'longitude',
+  'bio',
+  'career_history',
+  'badges',
+  'blood_group',
+  'is_public',
+  'show_contact_to_verified',
+  'posts_count',
+  'last_seen_at',
+  'created_at',
+  'updated_at',
+].join(', ');
+
+/**
+ * Fetches an authenticated user's authoritative alumni_profiles row using their own
+ * Supabase Auth JWT (works even when SUPABASE_SERVICE_ROLE_KEY is not configured).
+ */
+export async function findAlumniProfileByAuthUserWithToken(
+  authUserId: string,
+  accessToken?: string | null,
+  fallbackEmail?: string | null
+): Promise<any | null> {
+  if (!isSupabaseServerConfigured || !authUserId) return null;
+
+  const client = isSupabaseServiceRoleConfigured
+    ? supabaseServer
+    : createUserScopedSupabaseClient(accessToken);
+  if (!client) return null;
+
+  try {
+    const selectCols = isSupabaseServiceRoleConfigured
+      ? `${AUTHENTICATED_PUBLIC_SELECT_COLS}, email, phone, whatsapp, fb_link`
+      : AUTHENTICATED_PUBLIC_SELECT_COLS;
+
+    const { data, error } = await client
+      .from(SUPABASE_TABLES.ALUMNI_PROFILES)
+      .select(selectCols)
+      .eq('auth_user_id', authUserId)
+      .maybeSingle();
+
+    if (error || !data || typeof data !== 'object') return null;
+
+    const row: Record<string, any> = { ...(data as Record<string, any>) };
+    if (!isSupabaseServiceRoleConfigured) {
+      try {
+        const { data: contacts } = await client.rpc('get_alumni_contact_details', {
+          p_profile_id: row.id,
+        });
+        if (Array.isArray(contacts) && contacts[0]) {
+          Object.assign(row, contacts[0]);
+        }
+      } catch {
+        // RPC optional if not deployed
+      }
+    }
+
+    return {
+      id: Number(row.id),
+      fullName: row.full_name,
+      avatarUrl: row.avatar_url,
+      coverUrl: row.cover_url || undefined,
+      batchYear: Number(row.batch_year) || 25,
+      session: row.session || undefined,
+      collegeRoll: row.college_roll || undefined,
+      academicStream: row.academic_stream || 'MBBS',
+      academicGroup: row.academic_group || null,
+      section: row.section || 'MBBS',
+      profession: row.position || '',
+      position: row.position || '',
+      institution: row.institution || '',
+      cadre: row.cadre || undefined,
+      specialty: Array.isArray(row.specialty) ? row.specialty : [],
+      specialtyOther: row.specialty_other || undefined,
+      degree: Array.isArray(row.degree) ? row.degree : ['MBBS'],
+      city: row.city || 'Bogura',
+      country: row.country || 'Bangladesh',
+      bio: row.bio || '',
+      careerHistory: Array.isArray(row.career_history) ? row.career_history : [],
+      badges: Array.isArray(row.badges) ? row.badges : [],
+      phone: row.phone || undefined,
+      whatsapp: row.whatsapp || undefined,
+      fbLink: row.fb_link || undefined,
+      email: row.email || fallbackEmail || undefined,
+      bloodGroup: row.blood_group || undefined,
+      role: row.role || 'member',
+      verificationStatus: row.verification_status || 'unverified',
+      verificationMethod: row.verification_method || undefined,
+      vouchesCount: Number(row.vouches_count) || 0,
+      vouchTargetCount: Number(row.vouch_target_count) || 2,
+      isPublic: Boolean(row.is_public ?? true),
+      showContactToVerified: Boolean(row.show_contact_to_verified ?? true),
+      accountStatus: row.is_public === false ? 'suspended' : 'active',
+      passwordHash: null,
+      authUserId: row.auth_user_id || authUserId,
+      createdAt: row.created_at,
+    };
+  } catch (err) {
+    console.warn('findAlumniProfileByAuthUserWithToken warning:', err);
+    return null;
+  }
+}
+
 export async function updateAlumniProfileRecord(
   profileId: number,
-  updates: Record<string, any>
+  updates: Record<string, any>,
+  options?: { accessToken?: string | null; authUserId?: string | null }
 ) {
-  const dbUpdates: Record<string, any> = {
-    updated_at: new Date().toISOString(),
+  // Never include `updated_at` in user-JWT payloads: Postgres maintains it via BEFORE UPDATE trigger
+  // `trg_alumni_profiles_updated_at`, and `updated_at` is not granted in column-level GRANT UPDATE.
+  const dbUpdates: Record<string, any> = {};
+
+  const nullableText = (val: unknown, maxLen?: number): string | null => {
+    if (val === null || val === undefined) return null;
+    const trimmed = String(val).trim();
+    if (!trimmed) return null;
+    return maxLen ? trimmed.slice(0, maxLen) : trimmed;
   };
-  if (updates.fullName !== undefined) dbUpdates.full_name = updates.fullName;
-  if (updates.avatarUrl !== undefined) dbUpdates.avatar_url = updates.avatarUrl;
-  if (updates.coverUrl !== undefined) dbUpdates.cover_url = updates.coverUrl;
-  if (updates.batchYear !== undefined) dbUpdates.batch_year = Number(updates.batchYear);
-  if (updates.collegeRoll !== undefined) dbUpdates.college_roll = updates.collegeRoll;
-  if (updates.profession !== undefined) dbUpdates.profession = updates.profession;
-  if (updates.position !== undefined) dbUpdates.position = updates.position;
-  if (updates.institution !== undefined) dbUpdates.institution = updates.institution;
-  if (updates.cadre !== undefined) dbUpdates.cadre = updates.cadre;
-  if (updates.city !== undefined) dbUpdates.city = updates.city;
-  if (updates.country !== undefined) dbUpdates.country = updates.country;
-  if (updates.bio !== undefined) dbUpdates.bio = updates.bio;
-  if (updates.whatsapp !== undefined) dbUpdates.whatsapp = updates.whatsapp;
-  if (updates.fbLink !== undefined) dbUpdates.fb_link = updates.fbLink;
-  if (updates.phone !== undefined) dbUpdates.phone = updates.phone;
-  if (updates.email !== undefined) dbUpdates.email = updates.email;
-  if (updates.careerHistory !== undefined) dbUpdates.career_history = updates.careerHistory;
-  if (updates.degree !== undefined) dbUpdates.degree = updates.degree;
-  if (updates.specialty !== undefined) dbUpdates.specialty = updates.specialty;
-  if (updates.specialtyOther !== undefined) dbUpdates.specialty_other = updates.specialtyOther;
-  if (updates.bloodGroup !== undefined) dbUpdates.blood_group = updates.bloodGroup;
-  if (updates.isPublic !== undefined) dbUpdates.is_public = updates.isPublic;
+
+  if (updates.fullName !== undefined) {
+    const trimmedName = String(updates.fullName).trim().slice(0, 150);
+    if (trimmedName.length >= 2) {
+      dbUpdates.full_name = trimmedName;
+    }
+  }
+  if (updates.avatarUrl !== undefined) {
+    const cleanAvatar = String(updates.avatarUrl || '').trim();
+    if (cleanAvatar) dbUpdates.avatar_url = cleanAvatar;
+  }
+  if (updates.coverUrl !== undefined) {
+    dbUpdates.cover_url = nullableText(updates.coverUrl);
+  }
+  if (updates.batchYear !== undefined) {
+    const rawBatch = Number(updates.batchYear);
+    if (Number.isFinite(rawBatch)) {
+      const normalized = rawBatch > 1900 ? rawBatch - 1991 : Math.round(rawBatch);
+      if (normalized >= 1 && normalized <= 35) {
+        dbUpdates.batch_year = normalized;
+      }
+    }
+  }
+  if (updates.position !== undefined) dbUpdates.position = String(updates.position ?? '').trim();
+  if (updates.institution !== undefined) dbUpdates.institution = String(updates.institution ?? '').trim();
+  if (updates.cadre !== undefined) dbUpdates.cadre = nullableText(updates.cadre, 120);
+  if (updates.city !== undefined) dbUpdates.city = String(updates.city ?? '').trim() || 'Bogura';
+  if (updates.country !== undefined) dbUpdates.country = String(updates.country ?? '').trim() || 'Bangladesh';
+  if (updates.bio !== undefined) dbUpdates.bio = nullableText(updates.bio, 2500);
+  if (updates.whatsapp !== undefined) dbUpdates.whatsapp = nullableText(updates.whatsapp, 32);
+  if (updates.fbLink !== undefined) dbUpdates.fb_link = nullableText(updates.fbLink, 500);
+  if (updates.phone !== undefined) dbUpdates.phone = nullableText(updates.phone, 32);
+  if (updates.email !== undefined) {
+    const cleanEmail = nullableText(updates.email, 254);
+    dbUpdates.email = cleanEmail ? cleanEmail.toLowerCase() : null;
+  }
+  if (updates.careerHistory !== undefined) {
+    dbUpdates.career_history = Array.isArray(updates.careerHistory)
+      ? updates.careerHistory.map((item) => String(item).trim()).filter(Boolean)
+      : [];
+  }
+  if (updates.degree !== undefined) {
+    dbUpdates.degree = Array.isArray(updates.degree)
+      ? updates.degree.map((item) => String(item).trim()).filter(Boolean)
+      : [];
+  }
+  if (updates.specialty !== undefined) {
+    dbUpdates.specialty = Array.isArray(updates.specialty)
+      ? updates.specialty.map((item) => String(item).trim()).filter(Boolean)
+      : [];
+  }
+  if (updates.specialtyOther !== undefined) dbUpdates.specialty_other = nullableText(updates.specialtyOther, 200);
+  if (updates.bloodGroup !== undefined) {
+    const bg = nullableText(updates.bloodGroup, 8);
+    if (bg === null) {
+      dbUpdates.blood_group = null;
+    } else if (VALID_BLOOD_GROUPS.has(bg)) {
+      dbUpdates.blood_group = bg;
+    }
+  }
+  if (updates.isPublic !== undefined) dbUpdates.is_public = Boolean(updates.isPublic);
   if (updates.showContactToVerified !== undefined) {
     dbUpdates.show_contact_to_verified = Boolean(updates.showContactToVerified);
   }
@@ -962,36 +1171,153 @@ export async function updateAlumniProfileRecord(
     dbUpdates.user_preferences = updates.userPreferences;
   }
 
-  // 1. Update in Supabase
-  if (isSupabaseServerConfigured && profileId) {
-    try {
-      const { error } = await supabaseServer
+  // Strictly block any privileged column mutation
+  delete dbUpdates.role;
+  delete dbUpdates.verification_status;
+  delete dbUpdates.verification_method;
+  delete dbUpdates.verified_at;
+  delete dbUpdates.verified_by_profile_id;
+  delete dbUpdates.badges;
+  delete dbUpdates.vouches_count;
+  delete dbUpdates.vouch_target_count;
+  delete dbUpdates.phone_ownership_verified;
+  delete dbUpdates.posts_count;
+
+  let persistedId = profileId;
+
+  // 1. Persist to Supabase using service_role OR caller's verified Supabase JWT (never anon!)
+  if (isSupabaseServerConfigured) {
+    if (Object.keys(dbUpdates).length === 0) {
+      return { id: profileId, ...updates };
+    }
+
+    const writeHandle = getSupabaseWriteClient(options?.accessToken);
+    if (!writeHandle) {
+      throw new Error(
+        'Cannot persist profile to Supabase: your session does not have a valid Supabase auth token and server service role key is not configured. Please sign out and sign in again.'
+      );
+    }
+
+    const runUpdate = async (payload: Record<string, any>) => {
+      let query = writeHandle.client
         .from(SUPABASE_TABLES.ALUMNI_PROFILES)
-        .update(dbUpdates)
-        .eq('id', profileId);
-      if (error && dbUpdates.user_preferences !== undefined) {
-        // Fallback cleanly if migration 030 (user_preferences column) has not been applied yet
-        const { user_preferences: _ignored, ...compatUpdates } = dbUpdates;
-        await supabaseServer
-          .from(SUPABASE_TABLES.ALUMNI_PROFILES)
-          .update(compatUpdates)
-          .eq('id', profileId);
+        .update(payload);
+      if (profileId > 0) {
+        query = query.eq('id', profileId);
+      } else if (options?.authUserId) {
+        query = query.eq('auth_user_id', options.authUserId);
+      } else {
+        throw new Error('Could not identify target profile row in Supabase.');
       }
-    } catch (err) {
-      console.warn('Supabase updateAlumniProfileRecord error:', err);
+      return query.select('id');
+    };
+
+    let candidatePayload = { ...dbUpdates };
+    let { data: updatedRows, error } = await runUpdate(candidatePayload);
+
+    // Fallback 1: If matching by `id` returned 0 rows (e.g. stale client id), retry by `auth_user_id`
+    if (!error && (!Array.isArray(updatedRows) || updatedRows.length === 0) && options?.authUserId) {
+      const retryByAuth = await writeHandle.client
+        .from(SUPABASE_TABLES.ALUMNI_PROFILES)
+        .update(candidatePayload)
+        .eq('auth_user_id', options.authUserId)
+        .select('id');
+      updatedRows = retryByAuth.data;
+      error = retryByAuth.error;
+    }
+
+    // Fallback 2: Handle missing/ungranted optional columns (migration drift between master_schema / 003 / 030)
+    const optionalDriftColumns = ['user_preferences', 'career_history', 'specialty_other', 'cadre'];
+    let attempts = 0;
+    while (
+      error &&
+      attempts < optionalDriftColumns.length &&
+      (error.code === '42501' || error.code === 'PGRST204' || error.code === '42703')
+    ) {
+      attempts += 1;
+      const errMsg = String(error.message || '').toLowerCase();
+      let removedCol: string | null = null;
+
+      for (const col of optionalDriftColumns) {
+        if (col in candidatePayload && errMsg.includes(col)) {
+          removedCol = col;
+          break;
+        }
+      }
+      if (!removedCol) {
+        removedCol = optionalDriftColumns.find((col) => col in candidatePayload) || null;
+      }
+      if (!removedCol) break;
+
+      delete candidatePayload[removedCol];
+      if (Object.keys(candidatePayload).length === 0) break;
+
+      const retryRes = await runUpdate(candidatePayload);
+      if (!retryRes.error && (!Array.isArray(retryRes.data) || retryRes.data.length === 0) && options?.authUserId) {
+        const retryAuth = await writeHandle.client
+          .from(SUPABASE_TABLES.ALUMNI_PROFILES)
+          .update(candidatePayload)
+          .eq('auth_user_id', options.authUserId)
+          .select('id');
+        updatedRows = retryAuth.data;
+        error = retryAuth.error;
+      } else {
+        updatedRows = retryRes.data;
+        error = retryRes.error;
+      }
+    }
+
+    if (error) {
+      console.error('Supabase updateAlumniProfileRecord failed:', error);
+      const lower = String(error.message || '').toLowerCase();
+      if (error.code === '23505' || lower.includes('unique')) {
+        if (lower.includes('phone')) {
+          throw new Error('This mobile number is already registered to another alumni account.');
+        }
+        if (lower.includes('email')) {
+          throw new Error('This email address is already registered to another alumni account.');
+        }
+        if (lower.includes('college_roll')) {
+          throw new Error('This college roll number is already registered in your batch.');
+        }
+      }
+      throw new Error(error.message || 'Failed to save profile changes to Supabase.');
+    }
+
+    if (!Array.isArray(updatedRows) || updatedRows.length === 0) {
+      throw new Error('No matching alumni profile row was found in Supabase to update.');
+    }
+
+    persistedId = Number(updatedRows[0].id) || profileId;
+
+    // Best-effort sync of display fields to public.profiles for Messenger
+    if (options?.authUserId && (candidatePayload.full_name || candidatePayload.avatar_url || candidatePayload.batch_year)) {
+      const displayPatch: Record<string, any> = {};
+      if (candidatePayload.full_name) displayPatch.full_name = candidatePayload.full_name;
+      if (candidatePayload.avatar_url) displayPatch.avatar_url = candidatePayload.avatar_url;
+      if (candidatePayload.batch_year) displayPatch.batch = candidatePayload.batch_year;
+      try {
+        await writeHandle.client
+          .from(SUPABASE_TABLES.PROFILES)
+          .update(displayPatch)
+          .eq('user_id', options.authUserId);
+      } catch {
+        // Non-blocking messenger display sync
+      }
     }
   }
 
-  // 2. Update in inMemoryAlumniProfiles
-  const idx = inMemoryAlumniProfiles.findIndex((p) => p.id === profileId);
+  // 2. Sync inMemoryAlumniProfiles cache
+  const idx = inMemoryAlumniProfiles.findIndex((p) => p.id === persistedId || p.id === profileId);
   if (idx !== -1) {
     inMemoryAlumniProfiles[idx] = {
       ...inMemoryAlumniProfiles[idx],
       ...updates,
+      id: persistedId,
     };
     return inMemoryAlumniProfiles[idx];
   }
-  return { id: profileId, ...updates };
+  return { id: persistedId, ...updates };
 }
 
 export async function adminUpdateAlumniGovernance(params: {

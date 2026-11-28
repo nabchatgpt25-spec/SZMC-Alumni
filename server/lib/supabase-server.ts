@@ -99,6 +99,34 @@ export function createUserScopedSupabaseClient(accessToken?: string | null): Sup
 }
 
 /**
+ * Performs a stateless password sign-in against Supabase Auth using a fresh per-call
+ * anon client so the shared service-role client is never mutated.
+ */
+export async function signInStatelessSupabasePassword(
+  email: string,
+  password: string
+): Promise<{ session: any | null; user: any | null; error: any | null }> {
+  if (!isSupabaseServerConfigured) {
+    return { session: null, user: null, error: null };
+  }
+  const authClient = createClient(effectiveUrl, effectiveAnonKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+    },
+  });
+  const { data, error } = await authClient.auth.signInWithPassword({
+    email: email.trim().toLowerCase(),
+    password,
+  });
+  return {
+    session: data?.session || null,
+    user: data?.user || null,
+    error: error || null,
+  };
+}
+
+/**
  * Resolves the highest-privilege authorized Supabase client for server-side writes:
  * 1) Service-role client when SUPABASE_SERVICE_ROLE_KEY is configured.
  * 2) User-scoped client when the request carries a verified Supabase Auth JWT.

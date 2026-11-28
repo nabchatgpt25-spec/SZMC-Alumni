@@ -263,7 +263,7 @@ export const SharedImageAnnotatorModal: React.FC<SharedImageAnnotatorModalProps>
         const txt = new Konva.Text({
           text: obj.text,
           fontSize: fontPx,
-          fontFamily: 'Inter, system-ui, sans-serif',
+          fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
           fontStyle: 'bold',
           fill: obj.color,
           padding: 6,
@@ -401,7 +401,7 @@ export const SharedImageAnnotatorModal: React.FC<SharedImageAnnotatorModalProps>
         new Konva.Text({
           text: cursor.fullName.split(' ')[0] || 'Doctor',
           fontSize: 11,
-          fontFamily: 'Inter, system-ui, sans-serif',
+          fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
           fontStyle: 'bold',
           fill: '#FFFFFF',
           padding: 4,

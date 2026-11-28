@@ -557,7 +557,7 @@ export async function fetchMyNetworkSummary(myUserId: number): Promise<{
     if (peerIds.size > 0) {
       const { data: profiles } = await supabase
         .from('alumni_profiles')
-        .select('id, full_name, avatar_url, batch_year, profession, institution')
+        .select('id, full_name, avatar_url, batch_year, position, institution')
         .in('id', Array.from(peerIds));
       (profiles || []).forEach((p: any) => profileMap.set(Number(p.id), p));
     }
@@ -569,7 +569,7 @@ export async function fetchMyNetworkSummary(myUserId: number): Promise<{
         fullName: p?.full_name || 'SZMC Alumnus',
         avatarUrl: p?.avatar_url || '/assets/aistudio/images__1__2778177d.png',
         batchYear: p?.batch_year ? Number(p.batch_year) : undefined,
-        profession: p?.profession || undefined,
+        profession: p?.position || undefined,
         institution: p?.institution || undefined,
       };
     };

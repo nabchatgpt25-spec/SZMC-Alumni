@@ -78,7 +78,8 @@ export interface PortalFontOption {
 }
 
 export const PORTAL_FONT_OPTIONS: PortalFontOption[] = [
-  { name: 'Hind Siliguri', label: 'Hind Siliguri (Default · EN & বাংলা)', category: 'Sans-Serif', googleFamilyQuery: 'Hind+Siliguri:wght@300;400;500;600;700' },
+  { name: 'Inter', label: 'Inter (Clean Standard)', category: 'Sans-Serif', googleFamilyQuery: 'Inter:wght@400;500;600;700;800' },
+  { name: 'Hind Siliguri', label: 'Hind Siliguri (EN & বাংলা)', category: 'Sans-Serif', googleFamilyQuery: 'Hind+Siliguri:wght@300;400;500;600;700' },
   { name: 'Plus Jakarta Sans', label: 'Plus Jakarta Sans', category: 'Sans-Serif', googleFamilyQuery: 'Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400;1,600' },
   { name: 'DM Sans', label: 'DM Sans', category: 'Sans-Serif', googleFamilyQuery: 'DM+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400;1,600' },
   { name: 'Outfit', label: 'Outfit', category: 'Sans-Serif', googleFamilyQuery: 'Outfit:wght@400;500;600;700;800' },
@@ -92,8 +93,8 @@ export const PORTAL_FONT_OPTIONS: PortalFontOption[] = [
 
 export const DEFAULT_PORTAL_TYPOGRAPHY: PortalTypographyConfig = {
   enabled: false,
-  headingFont: 'Hind Siliguri',
-  bodyFont: 'Hind Siliguri',
+  headingFont: 'Inter',
+  bodyFont: 'Inter',
   headingColorLight: '#0f172a',
   bodyColorLight: '#334155',
   mutedColorLight: '#64748b',
@@ -369,7 +370,7 @@ export const FACTORY_DEFAULT_SITE_CONFIG: SiteConfig = {
   portalTypography: DEFAULT_PORTAL_TYPOGRAPHY,
 };
 
-const loadedGoogleFonts = new Set<string>(['Hind Siliguri']);
+const loadedGoogleFonts = new Set<string>();
 
 export function loadGoogleFontIfNeeded(fontName?: string | null): void {
   if (typeof document === 'undefined' || !fontName) return;

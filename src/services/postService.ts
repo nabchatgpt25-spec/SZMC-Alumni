@@ -16,7 +16,7 @@ import {
 import { isPublicRowProfileCompleted } from '../utils/profileCompletion';
 
 const POST_AUTHOR_PUBLIC_COLS =
-  'id, full_name, avatar_url, batch_year, verification_status, profession, position, institution, cadre, specialty, degree, city, country, bio, career_history';
+  'id, full_name, avatar_url, batch_year, verification_status, position, institution, cadre, specialty, degree, city, country, bio, career_history';
 
 async function fetchAuthorCompletionMap(authorIds: number[]): Promise<Map<number, boolean>> {
   const map = new Map<number, boolean>();
@@ -92,7 +92,7 @@ export async function fetchFeedPosts(limit = 25, offset = 0, currentUserId?: num
           batchYear: row.batch_year ? Number(row.batch_year) : undefined,
           verified: Boolean(row.verified),
           profileCompleted: completionMap.get(uid) ?? false,
-          profession: row.profession || 'Doctor / Medical Professional',
+          profession: row.position || row.profession || 'Doctor / Medical Professional',
           institution: row.institution || undefined,
           content: row.content || '',
           category: row.category || 'General Update',
@@ -295,7 +295,7 @@ export async function fetchFeedPosts(limit = 25, offset = 0, currentUserId?: num
         batchYear: authorBatch,
         verified: author.verification_status === 'verified',
         profileCompleted: isPublicRowProfileCompleted(author),
-        profession: author.profession || 'Doctor / Medical Professional',
+        profession: author.position || author.profession || 'Doctor / Medical Professional',
         institution: author.institution || undefined,
         content: row.content || '',
         category: row.category || 'General Update',
@@ -398,7 +398,7 @@ function formatQuadRpcRow(row: any): PostItem {
     avatarUrl: row.avatar_url || '/assets/aistudio/images__1__2778177d.png',
     batchYear: row.batch_year ? Number(row.batch_year) : undefined,
     verified: Boolean(row.verified),
-    profession: row.profession || 'Doctor / Medical Professional',
+    profession: row.position || row.profession || 'Doctor / Medical Professional',
     institution: row.institution || undefined,
     content: row.content || '',
     category: row.community_category || row.category || 'General Discussion',

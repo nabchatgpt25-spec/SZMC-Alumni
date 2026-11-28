@@ -4319,7 +4319,7 @@ export const AdminHubView: React.FC<AdminHubViewProps> = ({
       {/* FLOATING STICKY SAVE BANNER */}
       {/* =================================================================== */}
       {hasUnsavedChanges && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-slate-900/95 dark:bg-white/95 text-white dark:text-slate-900 backdrop-blur-xl px-5 py-3 rounded-2xl shadow-2xl border border-white/20 dark:border-slate-800 flex items-center gap-4 animate-in fade-in slide-in-from-bottom-5 duration-200">
+        <div className="fixed bottom-20 lg:bottom-6 left-1/2 -translate-x-1/2 z-[9995] max-w-[calc(100vw-2rem)] bg-slate-900/95 dark:bg-white/95 text-white dark:text-slate-900 backdrop-blur-xl px-4 sm:px-5 py-3 rounded-2xl shadow-2xl border border-white/20 dark:border-slate-800 flex items-center gap-3 sm:gap-4 animate-in fade-in slide-in-from-bottom-5 duration-200">
           <div className="flex items-center gap-2">
             <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping" />
             <span className="text-xs font-bold">You have unsaved changes in Admin settings!</span>

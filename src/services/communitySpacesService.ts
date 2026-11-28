@@ -548,7 +548,7 @@ async function hydrateSpacePosts(rows: any[]): Promise<SpacePost[]> {
     authorIds.length > 0
       ? await supabase
           .from('alumni_profiles')
-          .select('id, full_name, avatar_url, batch_year, verification_status, profession, position, institution, cadre, specialty, degree, city, country, bio, career_history')
+          .select('id, full_name, avatar_url, batch_year, verification_status, position, institution, cadre, specialty, degree, city, country, bio, career_history')
           .in('id', authorIds)
       : { data: [] };
 
@@ -579,7 +579,7 @@ async function hydrateSpacePosts(rows: any[]): Promise<SpacePost[]> {
       authorBatch: a.batch_year ? Number(a.batch_year) : undefined,
       verified: a.verification_status === 'verified',
       profileCompleted: isPublicRowProfileCompleted(a),
-      profession: a.profession || 'Doctor / Medical Professional',
+      profession: a.position || 'Doctor / Medical Professional',
       institution: a.institution || undefined,
       content: row.content || '',
       category: row.category || 'General Update',

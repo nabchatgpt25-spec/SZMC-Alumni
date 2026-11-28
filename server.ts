@@ -34,6 +34,7 @@ import {
   isSupabaseServiceRoleConfigured,
   getSupabaseWriteClient,
   findAuthUserByEmailOrPhone,
+  signInStatelessSupabasePassword,
   SUPABASE_TABLES,
 } from './server/lib/supabase-server.ts';
 import { isSafeTargetUrl, safeFetchHtml } from './server/lib/safeFetch.ts';
@@ -59,6 +60,7 @@ import {
   createOrRegisterAlumniProfile,
   createOrUpdateOfficialNotice,
   findAlumniByCredential,
+  findAlumniProfileByAuthUserWithToken,
   generateBulkBatchCohortSample,
   getAcademicStreamGroupsConfig,
   getAdminOverviewMetrics,
@@ -275,8 +277,16 @@ app.post('/api/auth/register', rateLimitGuard(25, 60_000), async (req: Request, 
     if (!phone?.trim() && !email?.trim()) {
       return res.status(400).json({ error: 'Please provide your Mobile Number or Email.' });
     }
+    const cleanEmail = email?.trim()?.toLowerCase() || '';
+    if (cleanEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      return res.status(400).json({ error: 'Please enter a valid email address.' });
+    }
     if (!password || password.length < 6) {
       return res.status(400).json({ error: 'Password must be at least 6 characters long.' });
+    }
+
+    if (isSupabaseServerConfigured && !isSupabaseServiceRoleConfigured) {
+      return res.status(200).json({ useClientSignUp: true });
     }
 
     const hashedPassword = hashPasswordServer(password);
@@ -304,17 +314,32 @@ app.post('/api/auth/register', rateLimitGuard(25, 60_000), async (req: Request, 
       country: country || 'Bangladesh',
       phone: phone?.trim() || null,
       whatsapp: whatsapp?.trim() || null,
-      email: email?.trim() || null,
+      email: cleanEmail || null,
       passwordHash: hashedPassword,
       bloodGroup: bloodGroup || null,
       isRegisteredDonor: Boolean(isRegisteredDonor),
+      allowExistingAuthUser: false,
     });
 
     const formattedProfile = formatAlumniRowToProfile(created);
+
+    // Issue a live Supabase Auth session immediately (account is pre-confirmed on server, no email verification needed)
+    let authSession: any = null;
+    if (cleanEmail && isSupabaseServerConfigured) {
+      try {
+        const signInRes = await signInStatelessSupabasePassword(cleanEmail, password);
+        if (!signInRes.error && signInRes.session) {
+          authSession = signInRes.session;
+        }
+      } catch (signInErr) {
+        console.warn('[Register] Instant Supabase session sign-in notice:', signInErr);
+      }
+    }
+
     const memberToken = signMemberSessionToken({
       email: formattedProfile.email || `member-${formattedProfile.id}@szmcalumni.net`,
       userId: formattedProfile.id,
-      uid: formattedProfile.authUserId || `member:${formattedProfile.id}`,
+      uid: authSession?.user?.id || formattedProfile.authUserId || `member:${formattedProfile.id}`,
       fullName: formattedProfile.fullName,
     });
 
@@ -327,11 +352,15 @@ app.post('/api/auth/register', rateLimitGuard(25, 60_000), async (req: Request, 
     res.status(201).json({
       success: true,
       token: memberToken,
+      session: authSession,
       profile: formattedProfile,
     });
   } catch (error: any) {
-    console.error('Registration failed:', error);
-    res.status(400).json({ error: error.message || 'Registration failed.' });
+    const status = typeof error?.statusCode === 'number' ? error.statusCode : 400;
+    if (status >= 500) {
+      console.error('Registration failed:', error);
+    }
+    res.status(status).json({ error: error.message || 'Registration failed.' });
   }
 });
 
@@ -373,22 +402,31 @@ async function handleUnifiedLoginCore(req: Request, res: Response) {
       const targetEmail = cleanId.toLowerCase().trim();
       let dbProfile: any = null;
 
-      // 1. Primary: Supabase Auth password verification
+      // 1. Primary: Supabase Auth password verification (stateless client so shared server client is untouched)
       if (isSupabaseServerConfigured) {
         try {
-          const { data: sData, error: sErr } = await supabaseServer.auth.signInWithPassword({
-            email: targetEmail,
-            password,
-          });
-          if (!sErr && sData?.session) {
-            authSession = sData.session;
+          const { session: sSession, error: sErr } = await signInStatelessSupabasePassword(
+            targetEmail,
+            password
+          );
+          if (!sErr && sSession) {
+            authSession = sSession;
             authenticated = true;
           }
         } catch {}
       }
 
       // 2. Secondary: Environment-configured ADMIN_PASSWORD or stored DB password hash (no hardcoded password hashes in source)
-      dbProfile = await findAlumniByCredential(targetEmail);
+      if (authSession?.user?.id && authSession?.access_token) {
+        dbProfile = await findAlumniProfileByAuthUserWithToken(
+          authSession.user.id,
+          authSession.access_token,
+          targetEmail
+        );
+      }
+      if (!dbProfile) {
+        dbProfile = await findAlumniByCredential(targetEmail);
+      }
       if (!authenticated) {
         const envAdminPass = process.env.ADMIN_PASSWORD?.trim();
         if (envAdminPass && safeCompareSecret(password, envAdminPass)) {
@@ -461,22 +499,31 @@ async function handleUnifiedLoginCore(req: Request, res: Response) {
       const cleanEmail = cleanId.toLowerCase();
 
       if (isSupabaseServerConfigured) {
-        const { data: signInData, error: signInError } = await supabaseServer.auth.signInWithPassword({
-          email: cleanEmail,
-          password,
-        });
+        const {
+          session: signInSession,
+          user: signInUser,
+          error: signInError,
+        } = await signInStatelessSupabasePassword(cleanEmail, password);
 
-        if (!signInError && signInData?.user && signInData?.session) {
-          let alumnus = await findAlumniByCredential(cleanEmail);
+        if (!signInError && signInUser && signInSession) {
+          // Prefer reading the user's authoritative Supabase row via their freshly issued JWT
+          let alumnus: any = await findAlumniProfileByAuthUserWithToken(
+            signInUser.id,
+            signInSession.access_token,
+            cleanEmail
+          );
+          if (!alumnus) {
+            alumnus = await findAlumniByCredential(cleanEmail);
+          }
           if (!alumnus) {
             alumnus = await createOrRegisterAlumniProfile({
-              userUid: signInData.user.id,
+              userUid: signInUser.id,
               rawPassword: password,
               fullName:
-                (signInData.user.user_metadata as any)?.full_name ||
-                (signInData.user.user_metadata as any)?.name ||
+                (signInUser.user_metadata as any)?.full_name ||
+                (signInUser.user_metadata as any)?.name ||
                 cleanEmail.split('@')[0],
-              batchYear: Number((signInData.user.user_metadata as any)?.batch_year) || 25,
+              batchYear: Number((signInUser.user_metadata as any)?.batch_year) || 25,
               email: cleanEmail,
               passwordHash: hashPasswordServer(password),
             });
@@ -484,14 +531,20 @@ async function handleUnifiedLoginCore(req: Request, res: Response) {
 
           return res.json({
             success: true,
-            session: signInData.session,
-            token: signInData.session.access_token,
+            session: signInSession,
+            token: signInSession.access_token,
             profile: formatAlumniRowToProfile(alumnus),
           });
         }
 
         if (signInError) {
-          const msg = signInError.message.toLowerCase();
+          const msg = (signInError.message || '').toLowerCase();
+          if (msg.includes('email logins are disabled') || msg.includes('email_provider_disabled')) {
+            return res.status(400).json({
+              error:
+                'Email login is disabled in Supabase. Enable Email provider in Supabase Dashboard → Authentication → Providers → Email.',
+            });
+          }
           if (msg.includes('email not confirmed') || msg.includes('not confirmed')) {
             return res.status(403).json({
               error: 'Please confirm your email address using the verification link sent to your inbox before signing in.',
@@ -1529,7 +1582,7 @@ app.post('/api/posts', rateLimitGuard(40, 60_000), requireAuth, async (req: Auth
       try {
         const { data: author } = await supabaseServer
           .from('alumni_profiles')
-          .select('id, full_name, avatar_url, batch_year, verification_status, profession, institution')
+          .select('id, full_name, avatar_url, batch_year, verification_status, position, institution')
           .eq('id', authorId)
           .maybeSingle();
         if (author) authorProfile = author;
@@ -3205,14 +3258,18 @@ app.post('/api/blood/donors', rateLimitGuard(30, 60_000), requireAuth, async (re
         updated_at: new Date().toISOString(),
       };
 
-      const { error: upsertErr } = await supabaseServer.from('blood_donors').upsert(payload);
+      const bloodWriteHandle = getSupabaseWriteClient(req.supabaseAccessToken);
+      const bloodClient = bloodWriteHandle?.client || supabaseServer;
+      const { error: upsertErr } = await bloodClient.from('blood_donors').upsert(payload);
       if (upsertErr) {
         return res.status(500).json({ error: upsertErr.message || 'Failed to persist donor profile.' });
       }
-      await supabaseServer.from('alumni_profiles').update({
-        blood_group: bloodGroup,
-        is_registered_donor: Boolean(isRegisteredDonor),
-      }).eq('id', donorUserId);
+      await bloodClient
+        .from('alumni_profiles')
+        .update({
+          blood_group: bloodGroup,
+        })
+        .eq('id', donorUserId);
     }
 
     const donorObj = {
@@ -3248,7 +3305,7 @@ async function resolveAuthenticatedAlumniSummary(req: AuthRequest) {
   if (isSupabaseServerConfigured) {
     const { data } = await supabaseServer
       .from('alumni_profiles')
-      .select('id, full_name, batch_year, avatar_url, profession, position, institution, email')
+      .select('id, full_name, batch_year, avatar_url, position, institution, email')
       .eq('id', profileId)
       .maybeSingle();
 
@@ -3258,7 +3315,7 @@ async function resolveAuthenticatedAlumniSummary(req: AuthRequest) {
         fullName: data.full_name || req.dbUser?.fullName || 'SZMC Doctor',
         batchYear: data.batch_year ? Number(data.batch_year) : null,
         avatarUrl: data.avatar_url || '/assets/aistudio/images__1__2778177d.png',
-        profession: data.profession || data.position || 'Physician',
+        profession: data.position || 'Physician',
         institution: data.institution || 'SZMC Hospital',
         email: data.email || req.dbUser?.email || null,
       };
@@ -4788,45 +4845,56 @@ app.post(
       const user = req.user as any;
       const isAdminCaller = req.dbUser?.role === 'admin' || req.dbUser?.role === 'super_admin';
       const callerEmail = user?.email || req.dbUser?.email;
+      const callerAuthUserId = req.dbUser?.auth_user_id || req.supabaseUser?.id || undefined;
       let targetProfileId = Number(req.dbUser?.id || 0);
 
       if (isAdminCaller && req.body.id && Number(req.body.id) > 0) {
         targetProfileId = Number(req.body.id);
-      } else if (!targetProfileId && callerEmail) {
-        const found = await findAlumniByCredential(callerEmail);
-        if (found) targetProfileId = found.id;
+      } else {
+        if (!targetProfileId && callerAuthUserId && req.supabaseAccessToken) {
+          const ownProfile = await findAlumniProfileByAuthUserWithToken(
+            callerAuthUserId,
+            req.supabaseAccessToken,
+            callerEmail
+          );
+          if (ownProfile?.id) {
+            targetProfileId = ownProfile.id;
+          }
+        }
+        if (!targetProfileId && callerEmail) {
+          const found = await findAlumniByCredential(callerEmail);
+          if (found) targetProfileId = found.id;
+        }
       }
 
-      if (!targetProfileId) {
+      if (!targetProfileId && !callerAuthUserId) {
         return res.status(400).json({ error: 'Could not identify target profile to update.' });
       }
 
-      if (!isAdminCaller && req.body.id && Number(req.body.id) !== targetProfileId) {
+      if (!isAdminCaller && targetProfileId > 0 && req.body.id && Number(req.body.id) !== targetProfileId) {
         return res.status(403).json({ error: 'Forbidden: You can only update your own profile.' });
       }
 
       const updates: Record<string, any> = {};
-      if (req.body.fullName) updates.fullName = req.body.fullName;
-      if (req.body.avatarUrl) updates.avatarUrl = req.body.avatarUrl;
-      if (req.body.coverUrl) updates.coverUrl = req.body.coverUrl;
-      if (req.body.batchYear) updates.batchYear = Number(req.body.batchYear);
-      if (req.body.collegeRoll) updates.collegeRoll = req.body.collegeRoll;
-      if (req.body.profession) updates.profession = req.body.profession;
-      if (req.body.position) updates.position = req.body.position;
-      if (req.body.institution) updates.institution = req.body.institution;
-      if (req.body.cadre) updates.cadre = req.body.cadre;
-      if (req.body.city) updates.city = req.body.city;
-      if (req.body.country) updates.country = req.body.country;
-      if (req.body.bio) updates.bio = req.body.bio;
-      if (req.body.whatsapp) updates.whatsapp = req.body.whatsapp;
-      if (req.body.fbLink) updates.fbLink = req.body.fbLink;
-      if (req.body.phone) updates.phone = req.body.phone;
-      if (req.body.email) updates.email = req.body.email;
-      if (req.body.careerHistory) updates.careerHistory = req.body.careerHistory;
-      if (req.body.degree) updates.degree = req.body.degree;
-      if (req.body.specialty) updates.specialty = req.body.specialty;
-      if (req.body.specialtyOther) updates.specialtyOther = req.body.specialtyOther;
-      if (req.body.bloodGroup) updates.bloodGroup = req.body.bloodGroup;
+      if (req.body.fullName !== undefined) updates.fullName = req.body.fullName;
+      if (req.body.avatarUrl !== undefined) updates.avatarUrl = req.body.avatarUrl;
+      if (req.body.coverUrl !== undefined) updates.coverUrl = req.body.coverUrl;
+      if (req.body.batchYear !== undefined) updates.batchYear = Number(req.body.batchYear);
+      if (req.body.position !== undefined) updates.position = req.body.position;
+      if (req.body.institution !== undefined) updates.institution = req.body.institution;
+      if (req.body.cadre !== undefined) updates.cadre = req.body.cadre;
+      if (req.body.city !== undefined) updates.city = req.body.city;
+      if (req.body.country !== undefined) updates.country = req.body.country;
+      if (req.body.bio !== undefined) updates.bio = req.body.bio;
+      if (req.body.whatsapp !== undefined) updates.whatsapp = req.body.whatsapp;
+      if (req.body.fbLink !== undefined) updates.fbLink = req.body.fbLink;
+      if (req.body.phone !== undefined) updates.phone = req.body.phone;
+      if (req.body.email !== undefined) updates.email = req.body.email;
+      if (req.body.careerHistory !== undefined) updates.careerHistory = req.body.careerHistory;
+      if (req.body.degree !== undefined) updates.degree = req.body.degree;
+      if (req.body.specialty !== undefined) updates.specialty = req.body.specialty;
+      if (req.body.specialtyOther !== undefined) updates.specialtyOther = req.body.specialtyOther;
+      if (req.body.bloodGroup !== undefined) updates.bloodGroup = req.body.bloodGroup;
       if (req.body.isPublic !== undefined) updates.isPublic = req.body.isPublic;
       if (req.body.showContactToVerified !== undefined) {
         updates.showContactToVerified = Boolean(req.body.showContactToVerified);
@@ -4836,7 +4904,10 @@ app.post(
       }
 
       // Note: role, verificationStatus, badges are strictly ignored to prevent client privilege escalation
-      const updated = await updateAlumniProfileRecord(targetProfileId, updates);
+      const updated = await updateAlumniProfileRecord(targetProfileId, updates, {
+        accessToken: req.supabaseAccessToken,
+        authUserId: isAdminCaller ? (req.body.authUserId || callerAuthUserId) : callerAuthUserId,
+      });
       return res.json({ success: true, profile: updated });
     } catch (error: any) {
       console.error('Failed to update profile on server:', error);

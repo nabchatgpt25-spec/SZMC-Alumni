@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import {
   X,
   ChevronLeft,
@@ -143,10 +144,10 @@ export const PostLightboxModal: React.FC<PostLightboxProps> = ({
 
   const currentImg = images[currentIndex] || images[0];
 
-  return (
+  const lightboxContent = (
     <div
       id="post-media-lightbox"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 backdrop-blur-md select-none transition-opacity duration-300"
+      className="fixed inset-0 z-[9992] flex items-center justify-center bg-black/95 backdrop-blur-md select-none transition-opacity duration-300"
       onClick={(e) => {
         // Close if clicking the outer backdrop directly
         if (e.target === e.currentTarget) {
@@ -377,4 +378,6 @@ export const PostLightboxModal: React.FC<PostLightboxProps> = ({
       </div>
     </div>
   );
+
+  return typeof document !== 'undefined' ? createPortal(lightboxContent, document.body) : lightboxContent;
 };

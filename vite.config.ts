@@ -48,6 +48,23 @@ export default defineConfig(() => {
       alias: {
         '@': path.resolve(__dirname, '.'),
       },
+      dedupe: ['react', 'react-dom'],
+    },
+    optimizeDeps: {
+      include: [
+        'react',
+        'react-dom',
+        'react-dom/client',
+        'react/jsx-runtime',
+        'react/jsx-dev-runtime',
+        '@supabase/supabase-js',
+        'hls.js',
+        'konva',
+        'leaflet',
+        'lucide-react',
+        'motion/react',
+        'recharts',
+      ],
     },
     build: {
       target: 'es2020',

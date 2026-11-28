@@ -41,7 +41,7 @@ export function calculateProfileCompletion(
     profile.careerHistory.map((c) => c.trim()).filter(Boolean).length > 0;
 
   const fields: ProfileFieldCompletionItem[] = [
-    // 12 Registration Form Fields
+    // 11 Registration Form Fields
     {
       key: 'fullName',
       label: 'Full Name',
@@ -52,12 +52,6 @@ export function calculateProfileCompletion(
       key: 'batchYear',
       label: 'SZMC MBBS Batch',
       filled: hasValidBatch,
-      source: 'registration',
-    },
-    {
-      key: 'collegeRoll',
-      label: 'College Roll / Registration ID',
-      filled: Boolean(profile.collegeRoll && profile.collegeRoll.trim().length > 0),
       source: 'registration',
     },
     {
@@ -74,7 +68,7 @@ export function calculateProfileCompletion(
     },
     {
       key: 'position',
-      label: 'Current Profession / Role',
+      label: 'Current Designation / Position',
       filled: Boolean(profile.position && profile.position.trim().length > 0),
       source: 'registration',
     },
@@ -115,23 +109,11 @@ export function calculateProfileCompletion(
       source: 'registration',
     },
 
-    // 5 Additional Edit Profile Full Form Fields
+    // 3 Additional Edit Profile Full Form Fields
     {
       key: 'bio',
       label: 'Biography / About Me',
       filled: Boolean(profile.bio && profile.bio.trim().length > 0),
-      source: 'edit_profile',
-    },
-    {
-      key: 'profession',
-      label: 'Profession Type',
-      filled: Boolean(profile.profession && profile.profession.trim().length > 0),
-      source: 'edit_profile',
-    },
-    {
-      key: 'cadre',
-      label: 'Civil Service / BCS Cadre',
-      filled: Boolean(profile.cadre && profile.cadre.trim().length > 0),
       source: 'edit_profile',
     },
     {
@@ -180,16 +162,14 @@ const PUBLIC_COMPLETION_KEYS = new Set([
   'city',
   'country',
   'bio',
-  'profession',
-  'cadre',
   'careerHistory',
 ]);
 
 /**
  * Returns true when a member has completed all profile information.
- * Uses all 17 fields when full contact/ID details are available on the profile object;
- * for public-only projections (ALUMNI_PUBLIC_COLUMNS, where email/phone/whatsapp/fbLink/collegeRoll
- * are withheld for privacy), verifies all 12 public profile fields are filled.
+ * Uses all 14 fields when full contact details are available on the profile object;
+ * for public-only projections (ALUMNI_PUBLIC_COLUMNS, where email/phone/whatsapp/fbLink
+ * are withheld for privacy), verifies all 10 public profile fields are filled.
  */
 export function isProfileFullyCompleted(
   profile?: Partial<AlumniProfile> | null
@@ -200,8 +180,7 @@ export function isProfileFullyCompleted(
     profile.email !== undefined ||
     profile.phone !== undefined ||
     profile.whatsapp !== undefined ||
-    profile.fbLink !== undefined ||
-    profile.collegeRoll !== undefined;
+    profile.fbLink !== undefined;
 
   if (hasPrivateContactProjection) {
     return result.percentage === 100;
@@ -220,15 +199,12 @@ export function isPublicRowProfileCompleted(row: any): boolean {
   return isProfileFullyCompleted({
     fullName: row.full_name,
     batchYear: row.batch_year !== undefined && row.batch_year !== null ? Number(row.batch_year) : undefined,
-    collegeRoll: row.college_roll ?? undefined,
     phone: row.phone ?? undefined,
     email: row.email ?? undefined,
     whatsapp: row.whatsapp ?? undefined,
     fbLink: row.fb_link ?? undefined,
-    profession: row.profession ?? undefined,
     position: row.position ?? undefined,
     institution: row.institution ?? undefined,
-    cadre: row.cadre ?? undefined,
     specialty: Array.isArray(row.specialty) ? row.specialty : [],
     degree: Array.isArray(row.degree) ? row.degree : [],
     city: row.city ?? undefined,

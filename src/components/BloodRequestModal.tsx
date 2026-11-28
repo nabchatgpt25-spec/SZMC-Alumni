@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { X, Heart, Hospital, Phone, AlertCircle } from 'lucide-react';
 import { BloodGroup, BLOOD_GROUPS_LIST } from '../types/blood';
 import { createBloodRequest } from '../utils/bloodDonationService';
@@ -30,6 +31,18 @@ export const BloodRequestModal: React.FC<BloodRequestModalProps> = ({
   const [description, setDescription] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isOpen || typeof window === 'undefined') return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !isSubmitting) {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, isSubmitting, onClose]);
 
   if (!isOpen) return null;
 
@@ -75,8 +88,13 @@ export const BloodRequestModal: React.FC<BloodRequestModalProps> = ({
     }
   };
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/75 backdrop-blur-md animate-fade-in">
+  const modalContent = (
+    <div
+      className="fixed inset-0 z-[9990] flex items-center justify-center p-4 bg-slate-950/75 backdrop-blur-md animate-fade-in"
+      onClick={(e) => {
+        if (e.target === e.currentTarget && !isSubmitting) onClose();
+      }}
+    >
       <div className="liquid-blood-glass-card backdrop-blur-2xl border-2 border-rose-300/80 dark:border-rose-500/50 rounded-3xl w-full max-w-md overflow-hidden shadow-2xl shadow-rose-950/50">
         {/* Header */}
         <div className="px-5 py-4 border-b border-rose-200/60 dark:border-rose-900/40 flex items-center justify-between bg-gradient-to-r from-rose-500/15 via-red-500/20 to-rose-600/15 backdrop-blur-md">
@@ -234,4 +252,6 @@ export const BloodRequestModal: React.FC<BloodRequestModalProps> = ({
       </div>
     </div>
   );
+
+  return typeof document !== 'undefined' ? createPortal(modalContent, document.body) : modalContent;
 };

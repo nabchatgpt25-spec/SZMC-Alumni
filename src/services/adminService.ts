@@ -1,4 +1,5 @@
-import { supabase, isSupabaseConfigured, ALUMNI_PUBLIC_COLUMNS } from '../lib/supabase';
+import { supabase, isSupabaseConfigured, ALUMNI_PUBLIC_COLUMNS, getClientAuthHeaders } from '../lib/supabase';
+import { invalidateAlumniDirectoryCache } from './supabaseService';
 import {
   AdminOverviewStats,
   AdminDocSubmission,
@@ -1373,32 +1374,95 @@ export async function adminUpdateAlumnusProfile(params: {
   const { targetUserId, patch, reviewerId } = params;
 
   try {
-    // 1. Build valid column payload for alumni_profiles (only columns in 001_core_schema.sql & 003_rls_policies.sql GRANT UPDATE)
+    const nullableText = (val: unknown, maxLen?: number): string | null => {
+      if (val === null || val === undefined) return null;
+      const trimmed = String(val).trim();
+      if (!trimmed) return null;
+      return maxLen ? trimmed.slice(0, maxLen) : trimmed;
+    };
+
+    // 1. Build valid column payload for alumni_profiles
     const dbPayload: Record<string, any> = {};
-    if (patch.fullName !== undefined) dbPayload.full_name = patch.fullName;
-    if (patch.batchYear !== undefined) dbPayload.batch_year = Number(patch.batchYear);
-    if (patch.collegeRoll !== undefined) dbPayload.college_roll = patch.collegeRoll;
+    if (patch.fullName !== undefined) {
+      const cleanName = String(patch.fullName).trim().slice(0, 150);
+      if (cleanName.length >= 2) dbPayload.full_name = cleanName;
+    }
+    if (patch.batchYear !== undefined) {
+      const rawBatch = Number(patch.batchYear);
+      if (Number.isFinite(rawBatch)) {
+        const normalized = rawBatch > 1900 ? rawBatch - 1991 : Math.round(rawBatch);
+        if (normalized >= 1 && normalized <= 35) dbPayload.batch_year = normalized;
+      }
+    }
     if (patch.academicStream !== undefined) {
       dbPayload.academic_stream = normalizeAcademicStreamForDb(patch.academicStream);
     }
-    if (patch.academicGroup !== undefined) dbPayload.academic_group = patch.academicGroup;
-    if (patch.section !== undefined) dbPayload.section = patch.section;
-    if (patch.profession !== undefined) dbPayload.profession = patch.profession;
-    if (patch.position !== undefined) dbPayload.position = patch.position;
-    if (patch.institution !== undefined) dbPayload.institution = patch.institution;
-    if (patch.city !== undefined) dbPayload.city = patch.city;
-    if (patch.country !== undefined) dbPayload.country = patch.country;
-    if (patch.phone !== undefined) dbPayload.phone = patch.phone;
-    if (patch.whatsapp !== undefined) dbPayload.whatsapp = patch.whatsapp;
-    if (patch.email !== undefined) dbPayload.email = patch.email;
-    if (patch.bio !== undefined) dbPayload.bio = patch.bio;
+    if (patch.academicGroup !== undefined) dbPayload.academic_group = nullableText(patch.academicGroup, 32);
+    if (patch.section !== undefined) dbPayload.section = nullableText(patch.section, 32);
+    if (patch.position !== undefined) dbPayload.position = String(patch.position ?? '').trim();
+    if (patch.institution !== undefined) dbPayload.institution = String(patch.institution ?? '').trim();
+    if (patch.cadre !== undefined) dbPayload.cadre = nullableText(patch.cadre, 120);
+    if (patch.city !== undefined) dbPayload.city = String(patch.city ?? '').trim() || 'Bogura';
+    if (patch.country !== undefined) dbPayload.country = String(patch.country ?? '').trim() || 'Bangladesh';
+    if (patch.phone !== undefined) dbPayload.phone = nullableText(patch.phone, 32);
+    if (patch.whatsapp !== undefined) dbPayload.whatsapp = nullableText(patch.whatsapp, 32);
+    if (patch.email !== undefined) {
+      const cleanEmail = nullableText(patch.email, 254);
+      dbPayload.email = cleanEmail ? cleanEmail.toLowerCase() : null;
+    }
+    if (patch.bio !== undefined) dbPayload.bio = nullableText(patch.bio, 2500);
+
+    let dbPersisted = !isSupabaseConfigured || Object.keys(dbPayload).length === 0;
+    let dbErrorMsg: string | null = null;
 
     if (isSupabaseConfigured && Object.keys(dbPayload).length > 0) {
-      await supabase
+      const { data: updatedRows, error: updateErr } = await supabase
         .from('alumni_profiles')
         .update(dbPayload)
-        .eq('id', targetUserId);
+        .eq('id', targetUserId)
+        .select('id');
+
+      if (!updateErr && Array.isArray(updatedRows) && updatedRows.length > 0) {
+        dbPersisted = true;
+      } else {
+        dbErrorMsg = updateErr
+          ? `${updateErr.message} (${updateErr.code || 'DB_ERROR'})`
+          : 'No alumni profile row was updated in Supabase (blocked by RLS or missing admin role in alumni_profiles).';
+
+        // Fallback to authenticated server route (/api/profile/update)
+        try {
+          const headers = await getClientAuthHeaders();
+          const res = await fetch('/api/profile/update', {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+              id: targetUserId,
+              ...patch,
+            }),
+          });
+          const body = await res.json().catch(() => ({}));
+          if (res.ok && body?.success) {
+            dbPersisted = true;
+            dbErrorMsg = null;
+          } else if (body?.error && !dbErrorMsg) {
+            dbErrorMsg = body.error;
+          }
+        } catch (fallbackErr: any) {
+          if (!dbErrorMsg) dbErrorMsg = fallbackErr?.message || 'Server fallback failed.';
+        }
+      }
     }
+
+    if (!dbPersisted) {
+      return {
+        success: false,
+        error:
+          dbErrorMsg ||
+          'Changes were not saved to Supabase. Run migration 034 in Supabase SQL Editor and sign in with an admin account.',
+      };
+    }
+
+    invalidateAlumniDirectoryCache(targetUserId);
 
     // 2. Persist in Supabase site_settings governance state & local storage
     await saveSupabaseGovernanceState((prev) => ({

@@ -30,7 +30,6 @@ import { PostMediaCarousel } from './PostMediaCarousel';
 import { ReactionPickerButton } from './community/ReactionPickerButton';
 import { RichTextWithMentions } from './community/RichTextWithMentions';
 import { InlinePostPollCard } from './community/InlinePostPollCard';
-import { RepostModal } from './community/RepostModal';
 import { ReportContentModal } from './community/SafetyActionModal';
 import { blockUser } from '../services/communitySafetyService';
 import { VerifiedAvatar } from './verification/VerifiedAvatar';
@@ -53,7 +52,6 @@ export const PostCard: React.FC<PostCardProps> = React.memo(({
   currentUserName = 'SZMC Alumnus',
   currentUserAvatar = '/assets/aistudio/images__1__2778177d.png',
   onPostUpdated,
-  onRepostCreated,
   onAuthorBlocked,
   onNavigateToAlbum,
   onViewProfile,
@@ -66,8 +64,6 @@ export const PostCard: React.FC<PostCardProps> = React.memo(({
   const [reactionsSummary, setReactionsSummary] = useState<Partial<Record<ReactionType, number>>>(
     post.reactionsSummary || {}
   );
-  const [repostCount, setRepostCount] = useState(post.repostCount || post.shares || 0);
-  const [repostModalOpen, setRepostModalOpen] = useState(false);
   const [safetyMenuOpen, setSafetyMenuOpen] = useState(false);
   const [reportModalOpen, setReportModalOpen] = useState(false);
   const [isAuthorBlocked, setIsAuthorBlocked] = useState(false);
@@ -559,23 +555,6 @@ export const PostCard: React.FC<PostCardProps> = React.memo(({
             )}
           </button>
 
-          {currentUserId && (
-            <button
-              type="button"
-              onClick={() => setRepostModalOpen(true)}
-              aria-label="Repost"
-              title="Repost to The Quad"
-              className="flex-1 sm:flex-initial min-h-[38px] flex items-center justify-center gap-1.5 py-2 px-2.5 sm:px-3.5 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-400 hover:text-emerald-600 hover:bg-slate-100 dark:hover:bg-slate-800/80 transition-colors cursor-pointer whitespace-nowrap shrink-0"
-            >
-              <Repeat2 className="w-4 h-4 shrink-0" />
-              {repostCount > 0 && (
-                <span className="text-xs font-mono tabular-nums leading-none">
-                  {repostCount}
-                </span>
-              )}
-            </button>
-          )}
-
           <button
             type="button"
             onClick={handleSave}
@@ -724,32 +703,18 @@ export const PostCard: React.FC<PostCardProps> = React.memo(({
         )}
       </div>
 
-      {/* Repost & Report Modals */}
+      {/* Report Modal */}
       {currentUserId && (
-        <>
-          <RepostModal
-            isOpen={repostModalOpen}
-            targetPost={post}
-            authorId={currentUserId}
-            authorName={currentUserName}
-            authorAvatar={currentUserAvatar}
-            onClose={() => setRepostModalOpen(false)}
-            onRepostCreated={(newPost) => {
-              setRepostCount((c) => c + 1);
-              onRepostCreated?.(newPost);
-            }}
-          />
-          <ReportContentModal
-            isOpen={reportModalOpen}
-            reporterId={currentUserId}
-            targetType="post"
-            targetId={post.id}
-            targetAuthorId={post.userId || null}
-            targetLabel={`${post.fullName || post.author || 'this alumnus'}'s post`}
-            onClose={() => setReportModalOpen(false)}
-            onSubmitted={(msg) => setSafetyFeedback(msg)}
-          />
-        </>
+        <ReportContentModal
+          isOpen={reportModalOpen}
+          reporterId={currentUserId}
+          targetType="post"
+          targetId={post.id}
+          targetAuthorId={post.userId || null}
+          targetLabel={`${post.fullName || post.author || 'this alumnus'}'s post`}
+          onClose={() => setReportModalOpen(false)}
+          onSubmitted={(msg) => setSafetyFeedback(msg)}
+        />
       )}
 
       {/* Full Photo Lightbox Modal */}

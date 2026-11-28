@@ -106,7 +106,6 @@ import { buildCommentTree } from '../services/richInteractionsUtils';
 import { ReactionPickerButton } from './community/ReactionPickerButton';
 import { RichTextWithMentions } from './community/RichTextWithMentions';
 import { InlinePostPollCard } from './community/InlinePostPollCard';
-import { RepostModal } from './community/RepostModal';
 import { ReportContentModal } from './community/SafetyActionModal';
 import { blockUser, fetchBlockedUserIds } from '../services/communitySafetyService';
 import { filterBlockedPosts } from '../services/communitySafetyUtils';
@@ -209,7 +208,6 @@ export const FeedView: React.FC<FeedViewProps> = ({
   const [followedPageIds, setFollowedPageIds] = useState<Set<number>>(new Set());
   const [followedUserIds, setFollowedUserIds] = useState<Set<number>>(new Set());
   const [blockedUserIds, setBlockedUserIds] = useState<Set<number>>(new Set());
-  const [repostTarget, setRepostTarget] = useState<PostItem | null>(null);
   const [userToBlock, setUserToBlock] = useState<{
     id: number;
     fullName: string;
@@ -2324,10 +2322,11 @@ export const FeedView: React.FC<FeedViewProps> = ({
                   </div>
                 )}
 
-                {/* Action Buttons: Multi-Reactions, Nested Comments, Repost, Save & Share */}
-                <div className="flex items-center justify-between sm:justify-start gap-1 sm:gap-2 pt-2 mt-1 border-t border-slate-100 dark:border-slate-800/80">
+                {/* Action Buttons: Compact Facebook-Style Bar */}
+                <div className="flex items-center justify-between gap-0.5 py-0.5 mt-0.5">
                   {/* Multi-Reaction Picker */}
                   <ReactionPickerButton
+                    compact
                     likedByMe={post.likedByMe}
                     userReaction={post.userReaction}
                     likesCount={post.likesCount}
@@ -2345,32 +2344,17 @@ export const FeedView: React.FC<FeedViewProps> = ({
                     }
                     aria-label="Comments"
                     title="Comments"
-                    className={`flex-1 sm:flex-initial min-h-[44px] sm:min-h-[38px] flex items-center justify-center gap-1.5 py-2 px-2.5 sm:px-3.5 rounded-xl text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
+                    className={`flex-1 h-8 flex items-center justify-center gap-1.5 py-1 px-2 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 active:scale-95 ${
                       activeCommentPostId === post.id
-                        ? 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/40 ring-1 ring-blue-200 dark:ring-blue-900/50'
+                        ? 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/40'
                         : 'text-slate-600 dark:text-slate-400 hover:text-blue-600 hover:bg-slate-100 dark:hover:bg-slate-800/80'
                     }`}
                   >
                     <MessageCircle className="w-4 h-4 shrink-0" />
+                    <span className="hidden sm:inline">Comment</span>
                     {Math.max(post.commentsCount || 0, post.comments?.length || 0) > 0 && (
                       <span className="text-xs font-mono tabular-nums leading-none">
                         {Math.max(post.commentsCount || 0, post.comments?.length || 0)}
-                      </span>
-                    )}
-                  </button>
-
-                  {/* Repost */}
-                  <button
-                    type="button"
-                    onClick={() => setRepostTarget(post)}
-                    aria-label="Repost"
-                    title="Repost to The Quad"
-                    className="flex-1 sm:flex-initial min-h-[44px] sm:min-h-[38px] flex items-center justify-center gap-1.5 py-2 px-2.5 sm:px-3.5 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-400 hover:text-emerald-600 hover:bg-slate-100 dark:hover:bg-slate-800/80 transition-colors cursor-pointer whitespace-nowrap shrink-0 active:scale-95"
-                  >
-                    <Repeat2 className="w-4 h-4 shrink-0" />
-                    {(post.repostCount || 0) > 0 && (
-                      <span className="text-xs font-mono tabular-nums leading-none">
-                        {post.repostCount}
                       </span>
                     )}
                   </button>
@@ -2381,17 +2365,20 @@ export const FeedView: React.FC<FeedViewProps> = ({
                     onClick={() => handleToggleSave(post)}
                     aria-label={isPostSaved(post.id) || post.isSaved ? 'Remove from saved' : 'Save post'}
                     title={isPostSaved(post.id) || post.isSaved ? 'Saved' : 'Save'}
-                    className={`flex-1 sm:flex-initial min-h-[44px] sm:min-h-[38px] flex items-center justify-center py-2 px-2.5 sm:px-3.5 rounded-xl sm:rounded-full text-xs font-bold transition-all active:scale-90 cursor-pointer ${
+                    className={`flex-1 h-8 flex items-center justify-center gap-1.5 py-1 px-2 rounded-lg text-xs font-semibold transition-colors active:scale-95 cursor-pointer whitespace-nowrap shrink-0 ${
                       isPostSaved(post.id) || post.isSaved
-                        ? 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/40 ring-1 ring-blue-200 dark:ring-blue-900/50 shadow-xs'
+                        ? 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/40'
                         : 'text-slate-600 dark:text-slate-400 hover:text-blue-600 hover:bg-slate-100 dark:hover:bg-slate-800/80'
                     }`}
                   >
                     {isPostSaved(post.id) || post.isSaved ? (
-                      <BookmarkCheck className="w-4.5 h-4.5 sm:w-5 sm:h-5 shrink-0 fill-current text-blue-600 dark:text-blue-400" />
+                      <BookmarkCheck className="w-4 h-4 shrink-0 fill-current text-blue-600 dark:text-blue-400" />
                     ) : (
-                      <Bookmark className="w-4.5 h-4.5 sm:w-5 sm:h-5 shrink-0" />
+                      <Bookmark className="w-4 h-4 shrink-0" />
                     )}
+                    <span className="hidden sm:inline">
+                      {isPostSaved(post.id) || post.isSaved ? 'Saved' : 'Save'}
+                    </span>
                   </button>
 
                   {/* Share */}
@@ -2400,22 +2387,25 @@ export const FeedView: React.FC<FeedViewProps> = ({
                     onClick={() => handleSharePost(post.id)}
                     aria-label="Share post"
                     title={copiedPostId === post.id ? 'Copied link' : 'Share'}
-                    className={`flex-1 sm:flex-initial min-h-[44px] sm:min-h-[38px] flex items-center justify-center py-2 px-2.5 sm:px-3.5 rounded-xl sm:rounded-full text-xs font-bold transition-all active:scale-90 cursor-pointer ${
+                    className={`flex-1 h-8 flex items-center justify-center gap-1.5 py-1 px-2 rounded-lg text-xs font-semibold transition-colors active:scale-95 cursor-pointer whitespace-nowrap shrink-0 ${
                       copiedPostId === post.id
-                        ? 'text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 ring-1 ring-emerald-200 dark:ring-emerald-900/50 shadow-xs'
+                        ? 'text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40'
                         : 'text-slate-600 dark:text-slate-400 hover:text-emerald-600 hover:bg-slate-100 dark:hover:bg-slate-800/80'
                     }`}
                   >
                     {copiedPostId === post.id ? (
-                      <CheckCircle2 className="w-4.5 h-4.5 sm:w-5 sm:h-5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                      <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
                     ) : (
-                      <Share2 className="w-4.5 h-4.5 sm:w-5 sm:h-5 shrink-0" />
+                      <Share2 className="w-4 h-4 shrink-0" />
                     )}
+                    <span className="hidden sm:inline">
+                      {copiedPostId === post.id ? 'Copied' : 'Share'}
+                    </span>
                   </button>
                 </div>
 
                 {/* Comments Thread */}
-                <div className="mt-3.5 space-y-3 pt-3 border-t border-slate-100 dark:border-slate-800/60">
+                <div className="mt-1.5 space-y-2">
                   {Array.isArray(post.comments) && buildCommentTree(post.comments).map((comment) => (
                     <div key={comment.id} className="space-y-2">
                       <div className="flex items-start gap-2.5">
@@ -2506,7 +2496,7 @@ export const FeedView: React.FC<FeedViewProps> = ({
                   ))}
 
                   {/* Add Comment Input */}
-                  <div className="flex items-center gap-2 pt-2">
+                  <div className="flex items-center gap-2 pt-0.5">
                     <VerifiedAvatar
                       src={currentUser.avatarUrl}
                       alt={currentUser.fullName}
@@ -2923,28 +2913,6 @@ export const FeedView: React.FC<FeedViewProps> = ({
           </div>
         </div>
       )}
-
-      {/* PHASE 5: REPOST MODAL */}
-      <RepostModal
-        isOpen={Boolean(repostTarget)}
-        targetPost={repostTarget}
-        authorId={currentUser.id}
-        authorName={currentUser.fullName}
-        authorAvatar={currentUser.avatarUrl}
-        onClose={() => setRepostTarget(null)}
-        onRepostCreated={(newPost, originalPostId) => {
-          setPosts((prev) => [
-            newPost,
-            ...prev.map((p) =>
-              p.id === originalPostId
-                ? { ...p, repostCount: (p.repostCount || 0) + 1 }
-                : p
-            ),
-          ]);
-          playSound('post');
-          showToast('Reposted to The Quad!');
-        }}
-      />
 
       {/* FULL-SCREEN LIGHTBOX MODAL FOR ATTACHED MEDIA */}
       <PostLightboxModal

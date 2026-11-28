@@ -97,7 +97,7 @@ export async function fetchAlumniProfilesFromDb(params?: {
       if (params?.search?.trim()) {
         const s = params.search.trim();
         query = query.or(
-          `full_name.ilike.%${s}%,institution.ilike.%${s}%,profession.ilike.%${s}%,city.ilike.%${s}%`
+          `full_name.ilike.%${s}%,institution.ilike.%${s}%,position.ilike.%${s}%,city.ilike.%${s}%`
         );
       }
       const boundedLimit = Math.min(1000, Math.max(1, params?.limit ?? (params?.search?.trim() || params?.batchYear || params?.academicStream ? 200 : 500)));
@@ -503,7 +503,7 @@ export async function createFeedPostInDb(params: {
 
       const { data: existingProfile } = await supabase
         .from('alumni_profiles')
-        .select('id, full_name, avatar_url, batch_year, verification_status, profession, institution')
+        .select('id, full_name, avatar_url, batch_year, verification_status, position, institution')
         .eq('auth_user_id', authUser.id)
         .maybeSingle();
 
@@ -548,7 +548,7 @@ export async function createFeedPostInDb(params: {
               academic_group: null,
               is_public: true,
             })
-            .select('id, full_name, avatar_url, batch_year, verification_status, profession, institution')
+            .select('id, full_name, avatar_url, batch_year, verification_status, position, institution')
             .maybeSingle();
           if (directProf?.id) {
             profileRow = directProf;
@@ -561,7 +561,7 @@ export async function createFeedPostInDb(params: {
     if (!profileRow?.id && authUser?.id && params.authorId && params.authorId > 0) {
       const { data: profileById } = await supabase
         .from('alumni_profiles')
-        .select('id, full_name, avatar_url, batch_year, verification_status, profession, institution')
+        .select('id, full_name, avatar_url, batch_year, verification_status, position, institution')
         .eq('id', params.authorId)
         .eq('auth_user_id', authUser.id)
         .maybeSingle();
@@ -1141,7 +1141,6 @@ export async function fetchBloodDonorsFromDb(): Promise<BloodDonorProfile[]> {
           batch_year,
           avatar_url,
           verification_status,
-          profession,
           position,
           institution,
           cadre,
@@ -1344,8 +1343,7 @@ export async function fetchVerificationRequestsFromDb(batchYear?: number): Promi
           id,
           full_name,
           avatar_url,
-          batch_year,
-          college_roll
+          batch_year
         ),
         peer_vouches (
           id,

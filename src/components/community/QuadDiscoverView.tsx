@@ -145,7 +145,7 @@ export const QuadDiscoverView: React.FC<QuadDiscoverViewProps> = ({
           supabase
             .from('posts')
             .select(
-              'id, user_id, content, category, audience, image_url, media_urls, likes_count, comments_count, reposts_count, is_pinned, is_official, created_at, author:alumni_profiles!posts_user_id_fkey(id, full_name, avatar_url, batch_year, profession)'
+              'id, user_id, content, category, audience, image_url, media_urls, likes_count, comments_count, reposts_count, is_pinned, is_official, created_at, author:alumni_profiles!posts_user_id_fkey(id, full_name, avatar_url, batch_year, position)'
             )
             .eq('is_deleted', false)
             .in('audience', allowedAudiences)
@@ -153,7 +153,7 @@ export const QuadDiscoverView: React.FC<QuadDiscoverViewProps> = ({
             .limit(80),
           supabase
             .from('alumni_profiles')
-            .select('id, full_name, avatar_url, batch_year, profession, city, country, verification_status, created_at')
+            .select('id, full_name, avatar_url, batch_year, position, city, country, verification_status, created_at')
             .order('created_at', { ascending: false })
             .limit(20),
           supabase
@@ -172,7 +172,7 @@ export const QuadDiscoverView: React.FC<QuadDiscoverViewProps> = ({
           const fallbackRes = await supabase
             .from('posts')
             .select(
-              'id, user_id, content, category, image_url, likes_count, comments_count, created_at, author:alumni_profiles!posts_user_id_fkey(id, full_name, avatar_url, batch_year, profession)'
+              'id, user_id, content, category, image_url, likes_count, comments_count, created_at, author:alumni_profiles!posts_user_id_fkey(id, full_name, avatar_url, batch_year, position)'
             )
             .eq('is_deleted', false)
             .order('created_at', { ascending: false })
@@ -207,7 +207,7 @@ export const QuadDiscoverView: React.FC<QuadDiscoverViewProps> = ({
               authorName: author?.full_name || 'SZMC Alumnus',
               authorAvatar: author?.avatar_url || DEFAULT_AVATAR,
               authorBatchYear: author?.batch_year ? Number(author.batch_year) : null,
-              authorSpecialty: author?.profession || null,
+              authorSpecialty: author?.position || null,
               content: String(row.content || '').trim(),
               category: String(row.category || 'General Discussion'),
               audience: String(row.audience || 'all_alumni'),
@@ -232,7 +232,7 @@ export const QuadDiscoverView: React.FC<QuadDiscoverViewProps> = ({
               fullName: a.full_name || 'SZMC Alumnus',
               avatarUrl: a.avatar_url || DEFAULT_AVATAR,
               batchYear: a.batch_year ? Number(a.batch_year) : null,
-              profession: a.profession || null,
+              profession: a.position || null,
               city: a.city || null,
               country: a.country || null,
               verificationStatus: a.verification_status || null,

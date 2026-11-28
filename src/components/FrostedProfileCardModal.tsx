@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import {
+  ArrowLeft,
   Check,
   ChevronDown,
   Copy,
@@ -260,19 +262,54 @@ export const FrostedProfileCardModal: React.FC<FrostedProfileCardModalProps> = (
     return unsubscribe;
   }, [isOpen, profile?.id, loadSnapshot]);
 
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
   useEffect(() => {
     if (!isOpen) return;
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
+
+    // Push a lightweight history entry so browser / mobile hardware Back closes this card cleanly
+    let pushedHistory = false;
+    try {
+      const currentState =
+        window.history.state && typeof window.history.state === 'object'
+          ? window.history.state
+          : {};
+      if (!currentState.szmcProfileCardOpen) {
+        window.history.pushState({ ...currentState, szmcProfileCardOpen: true }, '');
+        pushedHistory = true;
+      }
+    } catch {
+      // Ignore history API restrictions in sandboxed frames
+    }
+
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') onCloseRef.current();
     };
+    const onPopState = () => {
+      onCloseRef.current();
+    };
+
     window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('popstate', onPopState);
     return () => {
       document.body.style.overflow = prevOverflow;
       window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('popstate', onPopState);
+      if (pushedHistory) {
+        try {
+          if (window.history.state?.szmcProfileCardOpen) {
+            const { szmcProfileCardOpen: _ignored, ...rest } = window.history.state;
+            window.history.replaceState(rest, '');
+          }
+        } catch {
+          // Ignore history cleanup errors
+        }
+      }
     };
-  }, [isOpen, onClose]);
+  }, [isOpen]);
 
   // Auto-dismiss transient confirmation notices after 4.5s
   useEffect(() => {
@@ -574,7 +611,7 @@ export const FrostedProfileCardModal: React.FC<FrostedProfileCardModalProps> = (
     );
   };
 
-  return (
+  const modalContent = (
     <AnimatePresence>
       {isOpen && (
         <motion.div
@@ -583,7 +620,7 @@ export const FrostedProfileCardModal: React.FC<FrostedProfileCardModalProps> = (
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: prefersReducedMotion ? 0.12 : 0.22, ease: 'easeOut' }}
-          className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-[#05070e]/92 backdrop-blur-md overflow-y-auto"
+          className="fixed inset-0 z-[9999] flex items-start sm:items-center justify-center p-3 pt-4 pb-8 sm:p-5 bg-[#05070e]/92 backdrop-blur-md overflow-y-auto"
           onClick={onClose}
           role="dialog"
           aria-modal="true"
@@ -598,12 +635,22 @@ export const FrostedProfileCardModal: React.FC<FrostedProfileCardModalProps> = (
               duration: prefersReducedMotion ? 0.12 : 0.28,
               ease: [0.16, 1, 0.3, 1],
             }}
-            className="w-full max-w-[600px] my-auto flex flex-col items-center gap-3.5"
+            className="w-full max-w-[600px] sm:my-auto flex flex-col items-center gap-3.5"
             onClick={(e) => e.stopPropagation()}
           >
-        {/* Top Card Type Selector + Full Profile Link */}
+        {/* Top Back Button + Card Type Selector + Full Profile Link */}
         <div className="w-full flex flex-col gap-2 px-1">
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Go back"
+              className="inline-flex items-center gap-1.5 min-h-[36px] px-3 py-1.5 rounded-xl bg-white/15 hover:bg-white/25 border border-white/20 text-xs font-bold text-white transition-colors cursor-pointer whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-white/80"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              <span>Back</span>
+            </button>
+
             <div
               role="tablist"
               aria-label="Profile card style"
@@ -634,7 +681,7 @@ export const FrostedProfileCardModal: React.FC<FrostedProfileCardModalProps> = (
                   onClose();
                   onOpenFullProfile(profile.id);
                 }}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-xs font-semibold text-white transition-colors cursor-pointer whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-white/80"
+                className="inline-flex items-center gap-1.5 min-h-[36px] px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-xs font-semibold text-white transition-colors cursor-pointer whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-white/80"
               >
                 <span>Full Profile</span>
                 <ExternalLink className="w-3.5 h-3.5" />
@@ -1303,4 +1350,7 @@ export const FrostedProfileCardModal: React.FC<FrostedProfileCardModalProps> = (
       )}
     </AnimatePresence>
   );
+
+  if (typeof document === 'undefined') return modalContent;
+  return createPortal(modalContent, document.body);
 };
